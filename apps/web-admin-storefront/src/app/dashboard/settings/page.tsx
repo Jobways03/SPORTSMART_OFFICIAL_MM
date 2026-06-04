@@ -224,6 +224,33 @@ const SETTING_GROUPS: SettingGroup[] = [
     ],
   },
   {
+    key: 'finance',
+    label: 'Finance & Risk',
+    items: [
+      {
+        title: 'Tax & GST',
+        description: 'GST reports, TCS filings, e-invoicing, and tax readiness.',
+        href: '/dashboard/tax',
+        icon: 'document',
+        requires: { anyOf: ['tax.reports.read', 'tax.tcs.read'] },
+      },
+      {
+        title: 'Reconciliation',
+        description: 'Settlement, payout, and ledger reconciliation runs.',
+        href: '/dashboard/reconciliation',
+        icon: 'activity',
+        requires: { anyOf: ['recon.read'] },
+      },
+      {
+        title: 'Risk Review',
+        description: 'Risk-scored returns and disputes queued for manual review.',
+        href: '/dashboard/risk-review',
+        icon: 'shield',
+        requires: { anyOf: ['risk.review', 'returns.read'] },
+      },
+    ],
+  },
+  {
     key: 'audit',
     label: 'Audit & Monitoring',
     items: [
@@ -254,6 +281,20 @@ const SETTING_GROUPS: SettingGroup[] = [
         href: '/dashboard/sessions',
         icon: 'sessions',
         requires: { anyOf: ['sessions.read'] },
+      },
+      {
+        title: 'Cron & Queues',
+        description: 'SLA / risk work queues and background-job health.',
+        href: '/dashboard/queues',
+        icon: 'logs',
+        requires: { anyOf: ['audit.read'] },
+      },
+      {
+        title: 'Data Validation',
+        description: 'Cross-table integrity checks and money / ledger drift scans.',
+        href: '/dashboard/system/data-validation',
+        icon: 'clipboard',
+        requires: { anyOf: ['audit.read'] },
       },
     ],
   },

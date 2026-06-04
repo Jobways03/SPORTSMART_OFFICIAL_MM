@@ -1,99 +1,175 @@
-// Reconciliation module — daily/weekly jobs that compare what we
-// expected to settle vs what actually moved (gateway payments, COD
-// remittance, payouts to sellers, refunds disbursed).
+// Phase 13 (PR 13.x) — Finance reconciliation.
+//
+// Stores the result of each reconciliation run + the individual
+// discrepancies found, so finance can triage drift between our
+// records and the source-of-truth state.
 
 enum ReconciliationKind {
-  PAYMENT // gateway captures vs MasterOrder.totalAmount
-  COD // courier-collected COD vs MasterOrder.totalAmount
-  SETTLEMENT // seller settlement record vs commission engine
-  REFUND // gateway refund disbursements vs Return.refundAmount
-  WALLET // sum(WalletTransaction.amountInPaise) per wallet vs Wallet.balanceInPaise
+  PAYMENT
+  COD
+  SETTLEMENT
+  REFUND
+  WALLET
+  // Phase 173 (Recon audit #5) — expanded money-flow coverage.
+  AFFILIATE_PAYOUT
+  COMMISSION
+  TDS
+  TCS
 }
 
 enum ReconciliationStatus {
+  // Phase 173 (#1) — async run model: a run is QUEUED on accept, flips to
+  // RUNNING when the worker picks it up, then COMPLETED / PARTIAL / FAILED.
+  QUEUED
   RUNNING
   COMPLETED
+  // Phase 173 (#14) — some batches succeeded, some failed.
+  PARTIAL
   FAILED
 }
 
 enum DiscrepancyKind {
-  EXPECTED_NOT_FOUND // we expected a record, none from the source
-  UNEXPECTED_RECORD // source has a record we didn't expect
+  EXPECTED_NOT_FOUND
+  UNEXPECTED_RECORD
   AMOUNT_MISMATCH
   STATUS_MISMATCH
+  // Phase 173 (#7) — precise per-runner classification.
+  MISSING_PAYMENT
+  DUPLICATE_PAYMENT
+  MISSING_REFUND
+  DUPLICATE_REFUND
+  MISSING_UTR
+  PROVIDER_REFERENCE_MISSING
+  SETTLEMENT_MISMATCH
+  ORPHAN_LEDGER_ENTRY
 }
 
 enum DiscrepancyStatus {
   OPEN
+  // Phase 173 (#18) — explicit triage state between OPEN and terminal.
+  IN_REVIEW
   RESOLVED
   IGNORED
 }
 
 model ReconciliationRun {
-  id     String               @id @default(uuid())
-  kind   ReconciliationKind
-  status ReconciliationStatus @default(RUNNING)
+  id String @id @default(uuid())
 
-  // Period covered. e.g. 2026-04-29 00:00 → 2026-04-30 00:00
+  // Phase 173 — human-readable identifier (RECON-YYYY-xxxxxxxx).
+  runNumber String? @unique @map("run_number")
+
+  kind   ReconciliationKind
+  status ReconciliationStatus @default(QUEUED)
+
   periodStart DateTime @map("period_start")
   periodEnd   DateTime @map("period_end")
 
-  // Summary counts populated when the run completes.
   totalExpected      Int @default(0) @map("total_expected")
   totalMatched       Int @default(0) @map("total_matched")
   totalDiscrepancies Int @default(0) @map("total_discrepancies")
 
-  // Money totals (paise) — useful even when counts match.
-  // Phase 2 (PR 2.3) — BigInt. A single day's GMV trivially exceeds
-  // INT max (~₹21M) on any non-trivial e-commerce platform, so the
-  // run's `expectedAmountInPaise` aggregate would overflow before the
-  // recon could even complete. The previous code clamped via a helper
-  // and logged a warning; the column widening removes the clamp.
   expectedAmountInPaise BigInt @default(0) @map("expected_amount_in_paise")
   matchedAmountInPaise  BigInt @default(0) @map("matched_amount_in_paise")
 
   failureReason String? @map("failure_reason") @db.Text
 
-  startedByAdminId String?   @map("started_by_admin_id")
-  startedAt        DateTime  @default(now()) @map("started_at")
-  completedAt      DateTime? @map("completed_at")
+  startedByAdminId String? @map("started_by_admin_id")
+  // Phase 173 (#1) — async lifecycle timestamps.
+  queuedAt    DateTime  @default(now()) @map("queued_at")
+  startedAt   DateTime  @default(now()) @map("started_at")
+  completedAt DateTime? @map("completed_at")
 
   discrepancies ReconciliationDiscrepancy[]
 
   @@index([kind, periodStart(sort: Desc)])
   @@index([status])
+  // Phase 173 (#2) — fast "is a run already live for this (kind, period)?" check.
+  @@index([kind, status])
   @@map("reconciliation_runs")
 }
 
 model ReconciliationDiscrepancy {
-  id    String          @id @default(uuid())
-  runId String          @map("run_id")
-  kind  DiscrepancyKind
+  id String @id @default(uuid())
 
+  runId String @map("run_id")
+  run   ReconciliationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+
+  kind DiscrepancyKind
   status DiscrepancyStatus @default(OPEN)
 
-  // Linked context (any may be null).
+  // Phase 173 (#8) — triage priority. 0–100; higher = more urgent.
+  severity Int @default(50)
+
   masterOrderId String? @map("master_order_id")
   orderNumber   String? @map("order_number")
   externalRef   String? @map("external_ref")
 
-  // Phase 2 (PR 2.3) — BigInt. Discrepancy rows carry per-order paise
-  // amounts; a single B2B order can already approach INT max, so the
-  // safety floor matches the run-level aggregates above.
   expectedInPaise BigInt? @map("expected_in_paise")
   actualInPaise   BigInt? @map("actual_in_paise")
-  description     String  @db.Text
+  // Phase 173 (#9) — persisted drift (actual − expected) so finance can
+  // filter/sort by size instead of parsing the description string.
+  differenceInPaise BigInt? @map("difference_in_paise")
 
-  resolutionNotes   String?   @map("resolution_notes") @db.Text
-  resolvedByAdminId String?   @map("resolved_by_admin_id")
-  resolvedAt        DateTime? @map("resolved_at")
+  description String @db.Text
+  // Phase 173 — machine/operator hint for how to resolve this discrepancy.
+  suggestedAction String? @map("suggested_action") @db.Text
 
-  createdAt DateTime @default(now()) @map("created_at")
+  // Phase 174 (Discrepancy Resolution audit #1) — investigation phase tracking.
+  // IN_REVIEW IS the spec's "INVESTIGATING" state (added in #173); these stamp
+  // WHO moved it into investigation and WHEN, so the phase is no longer
+  // invisible. Cleared on reopen.
+  investigatingByAdminId String?   @map("investigating_by_admin_id")
+  investigatingAt        DateTime? @map("investigating_at")
 
-  run ReconciliationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  // Phase 174 (#6) — triage ownership so investigators don't race the same row.
+  assignedToAdminId String?   @map("assigned_to_admin_id")
+  assignedAt        DateTime? @map("assigned_at")
+
+  resolutionNotes    String?   @map("resolution_notes") @db.Text
+  resolvedByAdminId  String?   @map("resolved_by_admin_id")
+  resolvedAt         DateTime? @map("resolved_at")
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  // Phase 174 (#13) — last-modified stamp (note-only edits move this even when
+  // status/resolvedAt don't).
+  updatedAt DateTime  @updatedAt @map("updated_at")
+
+  // Phase 174 (#2) — immutable transition trail.
+  statusHistory DiscrepancyStatusHistory[]
 
   @@index([runId])
   @@index([status, createdAt(sort: Desc)])
   @@index([masterOrderId])
+  // Phase 173 (#8) — severity-ordered triage queue.
+  @@index([status, severity(sort: Desc)])
+  // Phase 174 (#6/#15) — assignee-filtered triage queue.
+  @@index([assignedToAdminId, status])
   @@map("reconciliation_discrepancies")
+}
+
+/// Phase 174 (Discrepancy Resolution audit #2) — append-only status-transition
+/// trail for a discrepancy. The live row carries only the LATEST state; this
+/// table preserves every prior status, actor, and note so finance/compliance
+/// can reconstruct the full investigation timeline (and prior notes are never
+/// lost to an overwrite — closes #14). Written inside the same transaction as
+/// the CAS status flip so the flip and its audit entry are atomic.
+model DiscrepancyStatusHistory {
+  id String @id @default(uuid())
+
+  discrepancyId String                    @map("discrepancy_id")
+  discrepancy   ReconciliationDiscrepancy @relation(fields: [discrepancyId], references: [id], onDelete: Cascade)
+
+  // null fromStatus = the genesis/create entry (not currently emitted on create,
+  // reserved). toStatus is the state the discrepancy moved INTO.
+  fromStatus DiscrepancyStatus? @map("from_status")
+  toStatus   DiscrepancyStatus  @map("to_status")
+
+  actorAdminId String? @map("actor_admin_id")
+  actorRole    String? @map("actor_role")
+  notes        String? @db.Text
+
+  occurredAt DateTime @default(now()) @map("occurred_at")
+
+  @@index([discrepancyId, occurredAt(sort: Desc)])
+  @@map("reconciliation_discrepancy_status_history")
 }

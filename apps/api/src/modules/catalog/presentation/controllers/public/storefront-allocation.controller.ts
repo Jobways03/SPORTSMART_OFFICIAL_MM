@@ -80,6 +80,9 @@ export class StorefrontAllocationController {
           variantId: item.variantId,
           customerPincode: body.customerPincode,
           quantity: item.quantity,
+          // Phase 233 — authenticated customer cart serviceability check, not a
+          // committed checkout decision: keep it out of checkout analytics.
+          eventSource: 'STOREFRONT',
         }),
       ),
     );

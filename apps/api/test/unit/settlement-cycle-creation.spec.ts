@@ -60,6 +60,7 @@ function build(opts: {
     moneyDualWrite as any,
     {} as any, // tcsHook
     {} as any, // tdsHook
+    { applyToCycleOnApprove: jest.fn().mockResolvedValue(undefined) } as any, // commissionInvoice
   );
   (svc as any).logger = { error: jest.fn(), log: jest.fn(), warn: jest.fn() };
   return { svc, prisma, tx, audit };

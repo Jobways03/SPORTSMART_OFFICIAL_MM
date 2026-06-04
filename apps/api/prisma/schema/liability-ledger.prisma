@@ -102,6 +102,33 @@ enum AdminTaskKind {
   RETURN_QC_PENDING
   // Phase 95 (2026-05-23) — Phase 93 deferred sub-order orphan task.
   RETURN_NOTIFICATION_NO_NODE
+  // Phase 168 (COD Mark-Paid audit #11) — opened by the cod-collection-pending
+  // recon cron when a COD order has been DELIVERED for longer than the
+  // configured window but its paymentStatus is still PENDING (cash not yet
+  // marked collected). Unique on (kind, sourceType=MANUAL, sourceId=orderId)
+  // dedups re-enqueues across ticks.
+  COD_COLLECTION_OVERDUE
+  // Phase 169 (Payment Ops audit #2/#18) — opened when a Razorpay dispute
+  // (chargeback) lands in a contestable state; the SLA deadline is the
+  // gateway's respond_by so finance pushes evidence before it expires.
+  // Unique on (kind, sourceType=MANUAL, sourceId=chargebackId).
+  CHARGEBACK_EVIDENCE_DUE
+  // Phase 170 (Refund Queue audit #11) — finance asked the upstream admin
+  // (dispute decider / QC) for clarification on a PENDING_APPROVAL refund.
+  // Dedicated kind so ops can filter "refund clarification requests" instead of
+  // scraping the generic OTHER bucket. Unique on (kind, sourceType, sourceId).
+  REFUND_CLARIFICATION_REQUESTED
+  // Phase 171 (Refund Approve/Reject audit #11) — finance REJECTED the refund
+  // for a decided dispute; the case is routed back to the dispute team for
+  // re-decision. Unique on (kind, sourceType=DISPUTE, sourceId=disputeId).
+  DISPUTE_REFUND_REJECTED_NEEDS_REDECISION
+  // Phase 234 (Allocation Exception Queue audit #234) — a verified order could
+  // not be routed to any fulfillment node and was parked in EXCEPTION_QUEUE
+  // (no pincode / unserviceable / no stock / no node mapped / seller-franchise
+  // rejected with no fallback). Opened so ops triages the stuck order instead
+  // of it sitting silently. Keyed like COD/chargeback (no first-class order
+  // LedgerSourceType): unique on (kind, sourceType=MANUAL, sourceId=masterOrderId).
+  ORDER_ALLOCATION_EXCEPTION
   OTHER
 }
 

@@ -56,14 +56,25 @@ export class RoutingHealthService {
       }),
     ]);
 
+    // Phase 234 (Exception Queue audit) — age from when the order ENTERED the
+    // exception queue (exceptionEnteredAt), not from order placement. Pre-234
+    // this aged from createdAt, so an order that processed normally for days
+    // before failing at verify reported a wildly inflated "time in queue".
+    // Order by exceptionEnteredAt desc-nulls-last so legacy rows (no stamp)
+    // don't masquerade as the oldest; fall back to createdAt only for those.
     const [exceptionQueueOldestAgeMs] = await Promise.all([
       this.prisma.masterOrder
         .findFirst({
           where: { orderStatus: 'EXCEPTION_QUEUE' },
-          orderBy: { createdAt: 'asc' },
-          select: { createdAt: true },
+          orderBy: [
+            { exceptionEnteredAt: { sort: 'asc', nulls: 'last' } },
+            { createdAt: 'asc' },
+          ],
+          select: { createdAt: true, exceptionEnteredAt: true },
         })
-        .then((o) => (o ? now - o.createdAt.getTime() : null)),
+        .then((o) =>
+          o ? now - (o.exceptionEnteredAt ?? o.createdAt).getTime() : null,
+        ),
     ]);
 
     return {

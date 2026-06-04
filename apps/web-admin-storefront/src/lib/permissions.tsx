@@ -51,6 +51,21 @@ export function PermissionsProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     refresh();
+    // Re-resolve permissions on auth-state change so a logout→login as a
+    // DIFFERENT admin (same tab/browser) doesn't render the previous
+    // admin's tiles from a stale cache. Refetch on window focus and when
+    // the admin access token changes in another tab (storage event).
+    if (typeof window === 'undefined') return;
+    const onFocus = () => refresh();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === null || e.key === 'adminAccessToken') refresh();
+    };
+    window.addEventListener('focus', onFocus);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('focus', onFocus);
+      window.removeEventListener('storage', onStorage);
+    };
   }, [refresh]);
 
   const permissions = useMemo(

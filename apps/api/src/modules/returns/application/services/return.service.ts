@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Optional } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { CommissionRecordStatus } from '@prisma/client';
 import { validateImageUpload } from '../../../../core/util/image-magic-bytes';
@@ -16,9 +16,11 @@ import { CaseDuplicateService } from '../../../../core/case-duplicate/case-dupli
 import { EnvService } from '../../../../bootstrap/env/env.service';
 // Phase 93 (2026-05-23) — Gap #5/#24 evidence URL allowlist.
 import { validateEvidenceUrls } from '../../domain/evidence-url-validator';
+import { resolveTrustedMediaHosts } from '../../../../core/util/trusted-media-hosts';
 import { RestockingFeeCalculator } from './restocking-fee.calculator';
 import { CustomerAbuseCounterService } from './customer-abuse-counter.service';
-import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../../integrations/media/media-storage.adapter';
+import { FileService } from '../../../files/application/services/file.service';
 import {
   RETURN_REPOSITORY,
   ReturnRepository,
@@ -92,6 +94,10 @@ export interface ListAllReturnsParams {
   fromDate?: Date;
   toDate?: Date;
   search?: string;
+  // Phase 174 (audit #228) — risk-review dashboard server-side filter.
+  riskScoreMin?: number;
+  riskScoreMax?: number;
+  hasRiskScore?: boolean;
 }
 
 export interface SchedulePickupInput {
@@ -304,7 +310,7 @@ export class ReturnService {
     private readonly stockRestorationService: ReturnStockRestorationService,
     private readonly commissionReversalService: ReturnCommissionReversalService,
     private readonly refundGateway: RefundGatewayService,
-    private readonly cloudinaryAdapter: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
     private readonly eventBus: EventBusService,
     private readonly caseDuplicates: CaseDuplicateService,
     private readonly env: EnvService,
@@ -343,6 +349,13 @@ export class ReturnService {
     // platform absorbs the GST cost and the refund posts via the
     // wallet ledger under dual-approval gating.
     private readonly walletAdjustment: WalletAdjustmentService,
+    // Additive central FileMetadata registration for QC-evidence assets
+    // uploaded straight to media. @Optional so the existing
+    // positional-construction unit specs (which stop at walletAdjustment)
+    // keep working; production wiring injects it via the @Global
+    // FilesModule. Usage is best-effort and optional-chained.
+    @Optional()
+    private readonly fileService?: FileService,
   ) {
     this.logger.setContext('ReturnService');
   }
@@ -475,20 +488,16 @@ export class ReturnService {
 
     // Phase 93 (2026-05-23) — Gap #5/#24 evidence URL allowlist.
     // Format-validates each URL + checks the host against the
-    // Cloudinary allowlist (env-tunable in production). Rejects
+    // media allowlist (env-tunable in production). Rejects
     // localhost/metadata/non-https URLs to close the SSRF/phishing
     // vector.
     if (input.evidenceFileUrls && input.evidenceFileUrls.length > 0) {
-      const allowedHostsEnv =
-        this.env?.getOptional?.('RETURN_EVIDENCE_ALLOWED_HOSTS' as any);
-      const allowedHosts = allowedHostsEnv
-        ? allowedHostsEnv
-            .split(',')
-            .map((h: string) => h.trim())
-            .filter(Boolean)
-        : undefined;
+      const allowedHosts = resolveTrustedMediaHosts(
+        this.env?.getOptional?.('R2_PUBLIC_BASE_URL' as any),
+        this.env?.getOptional?.('RETURN_EVIDENCE_ALLOWED_HOSTS' as any),
+      );
       const bad = validateEvidenceUrls(input.evidenceFileUrls, {
-        allowedHosts: allowedHosts as any,
+        allowedHosts,
       });
       if (bad) {
         throw new BadRequestAppException(
@@ -778,18 +787,22 @@ export class ReturnService {
     customerId: string,
     params: ListCustomerReturnsParams,
   ) {
-    const { returns, total } = await this.returnRepo.findByCustomerId(
+    // Phase 199 (2026-06-02) — Returns Flow PII audit #2 / #21.
+    // findByCustomerIdSafe is a strict-select whitelist; the prior
+    // findByCustomerId used `include`, which (Prisma semantics) returns
+    // every Return scalar — riskScore, qcInternalNotes, liabilityParty,
+    // the raw refundFailureReason, internal actor ids … all leaked into
+    // the customer list. The blacklist projectReturnForCustomer was
+    // leaky-by-default (anything not explicitly stripped slipped
+    // through). The whitelist closes the entire class of leak and keeps
+    // the refund summary (#21) the list renders.
+    const { returns, total } = await this.returnRepo.findByCustomerIdSafe(
       customerId,
       params,
     );
 
     return {
-      // Phase 106 (2026-05-23) — Phase 102 audit Gap #14 closure. The
-      // raw refundFailureReason can leak gateway internals; customer
-      // endpoints must only return the sanitized refundFailureMessageCustomer.
-      // Other admin-only fields (internal notes, audit pointers) are
-      // also redacted here.
-      returns: returns.map((r) => projectReturnForCustomer(r)),
+      returns,
       pagination: {
         page: params.page,
         limit: params.limit,
@@ -802,12 +815,61 @@ export class ReturnService {
   // ── Return detail ──────────────────────────────────────────────────────
 
   async getReturnDetail(returnId: string, customerId: string) {
-    const ret = await this.returnRepo.findByIdWithItems(returnId);
+    // Phase 199 (2026-06-02) — Returns Flow PII audit #1/#3/#4/#20/#23.
+    // findByIdForCustomer is the strict-select customer read (no QC
+    // internals / risk / liability / internal actor ids / version; only
+    // CUSTOMER+ADMIN evidence; refundTransactions without
+    // gatewayRefundId). Replaces findByIdWithItems (the admin/QC full
+    // read) + the leaky blacklist projection.
+    const ret = await this.returnRepo.findByIdForCustomer(returnId);
     if (!ret) {
       throw new NotFoundAppException('Return not found');
     }
     if (ret.customerId !== customerId) {
       throw new ForbiddenAppException('You do not have access to this return');
+    }
+
+    // Phase 199 (#3) — status-history notes can carry internal text the
+    // customer must not see ("Auto-approved: risk score 78 …", seller
+    // contest internals). Keep notes only for CUSTOMER + ADMIN actors
+    // (an admin rejection reason and a customer cancellation note are
+    // legitimately customer-facing); blank SYSTEM / SELLER / FRANCHISE
+    // notes while preserving the visible timeline (status + timestamp).
+    if (Array.isArray(ret.statusHistory)) {
+      ret.statusHistory = ret.statusHistory.map((h: any) => ({
+        ...h,
+        notes:
+          h.changedBy === 'CUSTOMER' || h.changedBy === 'ADMIN'
+            ? h.notes
+            : null,
+      }));
+    }
+
+    // Phase 199 (#24) — side-load the latest dispute for this return so
+    // the UI can surface an "Open dispute" CTA on QC_REJECTED /
+    // REJECTED. Dispute.returnId is a bare scalar FK (no Prisma
+    // relation, by design) so it can't be selected on the Return.
+    // Best-effort: a failure must not block the detail load. Only the
+    // id + number + status ship — no internal dispute fields.
+    let dispute: { id: string; disputeNumber: string; status: string } | null =
+      null;
+    try {
+      const d = await this.prisma.dispute.findFirst({
+        where: { returnId },
+        orderBy: { createdAt: 'desc' },
+        select: { id: true, disputeNumber: true, status: true },
+      });
+      if (d) {
+        dispute = {
+          id: d.id,
+          disputeNumber: d.disputeNumber,
+          status: d.status as string,
+        };
+      }
+    } catch (err) {
+      this.logger.warn(
+        `getReturnDetail: dispute lookup failed for return ${returnId}: ${(err as Error).message}`,
+      );
     }
 
     // Phase 38 — side-load the refund-settlement story so the
@@ -822,15 +884,17 @@ export class ReturnService {
     // Both reads are best-effort: a failure here MUST NOT block the
     // return detail load. CreditNoteService scopes prior CNs by
     // `reason contains returnNumber`; we mirror that.
+    // Phase 199 (#20) — drop the raw DB ids (creditNote.id /
+    // walletCredit.id). They are internal surrogate keys the customer
+    // UI never needs (it renders documentNumber); exposing them widens
+    // the attack surface for nothing.
     let creditNote: {
-      id: string;
       documentNumber: string;
       documentTotalInPaise: string;
       status: string;
       generatedAt: Date | null;
     } | null = null;
     let walletCredit: {
-      id: string;
       kind: string;
       status: string;
       amountInPaise: string;
@@ -846,7 +910,6 @@ export class ReturnService {
         },
         orderBy: { generatedAt: 'desc' },
         select: {
-          id: true,
           documentNumber: true,
           documentTotalInPaise: true,
           status: true,
@@ -855,7 +918,6 @@ export class ReturnService {
       });
       if (cn) {
         creditNote = {
-          id: cn.id,
           documentNumber: cn.documentNumber,
           documentTotalInPaise: cn.documentTotalInPaise.toString(),
           status: cn.status,
@@ -872,7 +934,6 @@ export class ReturnService {
         where: { returnId },
         orderBy: { createdAt: 'desc' },
         select: {
-          id: true,
           kind: true,
           status: true,
           amountInPaise: true,
@@ -882,7 +943,6 @@ export class ReturnService {
       });
       if (adj) {
         walletCredit = {
-          id: adj.id,
           kind: adj.kind,
           status: adj.status,
           amountInPaise: adj.amountInPaise.toString(),
@@ -896,14 +956,15 @@ export class ReturnService {
       );
     }
 
-    // Phase 106 (2026-05-23) — Phase 102 audit Gap #14 closure.
-    // Customer endpoint — project the row down to remove admin-only
-    // fields. creditNote + walletCredit are customer-safe (they
-    // describe the customer's own refund settlement).
+    // Phase 199 — `ret` already came from the customer-safe strict
+    // select (findByIdForCustomer): no blacklist projection needed.
+    // creditNote / walletCredit / dispute describe the customer's own
+    // case and are customer-safe.
     return {
-      ...projectReturnForCustomer(ret),
+      ...ret,
       creditNote,
       walletCredit,
+      dispute,
     };
   }
 
@@ -937,14 +998,26 @@ export class ReturnService {
     const fromStatus = ret.status;
 
     const cancelledAt = new Date();
-    const updated = await this.returnRepo.update(returnId, {
-      status: 'CANCELLED',
-      closedAt: cancelledAt,
-      // Phase 93 — Gap #23 persist cancellation detail.
-      cancelledAt,
-      cancelledBy: customerId,
-      cancelledByRole: 'CUSTOMER',
-      cancellationReason: cancellationReason ?? null,
+    // Phase 199 (2026-06-02) — Returns audit #12. Optimistic-lock CAS
+    // (same helper approveReturn / rejectReturn use) instead of a bare
+    // findById-then-update. Without it, a customer cancel racing an
+    // admin reject (or a duplicate cancel from a retry) is last-write-
+    // wins; the CAS turns the loser into a 409 ConflictAppException so
+    // we never silently stomp a fresh terminal transition.
+    const updated = await applyOptimisticTransition({
+      kind: 'ReturnStatus',
+      toStatus: 'CANCELLED',
+      current: ret,
+      update: (where, statusPatch) =>
+        this.returnRepo.updateWithVersion(returnId, where.version, {
+          ...statusPatch,
+          closedAt: cancelledAt,
+          // Phase 93 — Gap #23 persist cancellation detail.
+          cancelledAt,
+          cancelledBy: customerId,
+          cancelledByRole: 'CUSTOMER',
+          cancellationReason: cancellationReason ?? null,
+        }),
     });
 
     await this.returnRepo.recordStatusChange(
@@ -1578,7 +1651,7 @@ export class ReturnService {
   }
 
   /**
-   * Upload a QC evidence image for a return (saved to Cloudinary).
+   * Upload a QC evidence image for a return (saved to media).
    */
   async uploadQcEvidence(
     returnId: string,
@@ -1597,7 +1670,7 @@ export class ReturnService {
     }
 
     // Phase 97 (2026-05-23) — QC audit Gap #4 closure. Magic-byte sniff
-    // the buffer before forwarding to Cloudinary. Pre-Phase-97 the
+    // the buffer before forwarding to media. Pre-Phase-97 the
     // FileInterceptor accepted any binary up to 5 MB; a hostile client
     // could send Content-Type: image/png with an .exe payload and we
     // would happily upload + persist a fake-evidence row. The hand-
@@ -1611,7 +1684,7 @@ export class ReturnService {
 
     // Phase 97 — Gap #27 dedup via SHA-256 contentHash. Repeated
     // upload of the same image (e.g. admin double-click after preview)
-    // dedups to the existing row instead of leaving two Cloudinary
+    // dedups to the existing row instead of leaving two media
     // assets + two DB rows.
     const contentHash = createHash('sha256').update(fileBuffer).digest('hex');
     const existing = await this.prisma.returnEvidence.findFirst({
@@ -1624,16 +1697,16 @@ export class ReturnService {
       return existing;
     }
 
-    // Upload to Cloudinary
-    const uploadResult = await this.cloudinaryAdapter.upload(fileBuffer, {
+    // Upload to media
+    const uploadResult = await this.media.upload(fileBuffer, {
       folder: `returns/${returnId}/evidence`,
     });
 
     let evidence: any;
     try {
-      // Phase 97 — Gap #10 orphan-leak fix. Cloudinary upload happens
+      // Phase 97 — Gap #10 orphan-leak fix. media upload happens
       // before the DB write; if the DB row insert fails, we need to
-      // clean up the Cloudinary asset. The .delete call is best-effort
+      // clean up the media asset. The .delete call is best-effort
       // — a failure here is logged + caught by the daily orphan-cleanup
       // cron (separate concern).
       evidence = await this.returnRepo.addEvidence({
@@ -1651,23 +1724,40 @@ export class ReturnService {
       } as any);
     } catch (err) {
       this.logger.warn(
-        `[uploadQcEvidence] DB row insert failed for return ${ret.returnNumber}; rolling back Cloudinary asset ${uploadResult.publicId}: ${
+        `[uploadQcEvidence] DB row insert failed for return ${ret.returnNumber}; rolling back media asset ${uploadResult.publicId}: ${
           (err as Error)?.message ?? 'unknown error'
         }`,
       );
       try {
-        if (typeof (this.cloudinaryAdapter as any).delete === 'function') {
-          await (this.cloudinaryAdapter as any).delete(uploadResult.publicId);
+        if (typeof (this.media as any).delete === 'function') {
+          await (this.media as any).delete(uploadResult.publicId);
         }
       } catch (deleteErr) {
         this.logger.error(
-          `[uploadQcEvidence] Cloudinary rollback delete also failed for ${uploadResult.publicId} (orphan asset): ${
+          `[uploadQcEvidence] media rollback delete also failed for ${uploadResult.publicId} (orphan asset): ${
             (deleteErr as Error)?.message ?? 'unknown error'
           }`,
         );
       }
       throw err;
     }
+
+    // Additive, best-effort: register a central FileMetadata row so
+    // integrity/audit/orphan-sweep see this evidence asset. Never affects
+    // the upload/validation/dedup/persistence flow above. Optional-chained
+    // because fileService is @Optional (unit specs omit it).
+    void this.fileService
+      ?.registerExternalAsset({
+        publicId: uploadResult.publicId,
+        url: uploadResult.secureUrl,
+        mimeType: fileMimetype,
+        sizeBytes: (uploadResult as any).bytes ?? fileBuffer.length,
+        purpose: 'QC_EVIDENCE',
+        uploadedBy: actorId,
+        uploadedByType: actorType,
+        buffer: fileBuffer,
+      })
+      .catch(() => undefined);
 
     this.logger.log(
       `QC evidence uploaded for return ${ret.returnNumber} by ${actorType} ${actorId}`,
@@ -2769,6 +2859,8 @@ export class ReturnService {
       orderNumber: masterOrder.orderNumber,
       paymentMethod: masterOrder.paymentMethod,
       amount: Number(ret.refundAmount),
+      // Phase 167 (#5) — precise paise (no Number truncation above ~₹90L).
+      amountInPaise: ret.refundAmountInPaise ?? undefined,
       customerId: ret.customerId,
       returnId: ret.id,
       returnNumber: ret.returnNumber,
@@ -3351,6 +3443,8 @@ export class ReturnService {
       orderNumber: masterOrder.orderNumber,
       paymentMethod: masterOrder.paymentMethod,
       amount: Number(ret.refundAmount),
+      // Phase 167 (#5) — precise paise (no Number truncation above ~₹90L).
+      amountInPaise: ret.refundAmountInPaise ?? undefined,
       customerId: ret.customerId,
       returnId: ret.id,
       returnNumber: ret.returnNumber,
@@ -3850,16 +3944,12 @@ export class ReturnService {
     //             so the column + downstream HTML email never receive
     //             a 100MB blob or script-injection payload.
     if (args.evidenceFileUrls && args.evidenceFileUrls.length > 0) {
-      const allowed =
-        this.env?.getOptional?.('RETURN_EVIDENCE_ALLOWED_HOSTS' as any);
-      const allowedHosts = allowed
-        ? allowed
-            .split(',')
-            .map((h: string) => h.trim())
-            .filter(Boolean)
-        : undefined;
+      const allowedHosts = resolveTrustedMediaHosts(
+        this.env?.getOptional?.('R2_PUBLIC_BASE_URL' as any),
+        this.env?.getOptional?.('RETURN_EVIDENCE_ALLOWED_HOSTS' as any),
+      );
       const bad = validateEvidenceUrls(args.evidenceFileUrls, {
-        allowedHosts: allowedHosts as any,
+        allowedHosts,
       });
       if (bad) {
         throw new BadRequestAppException(
@@ -4538,6 +4628,29 @@ export class ReturnService {
       this.logger.log(
         `Seller-response sweeper expired ${totalExpired} return(s)`,
       );
+      // Phase 214 (#9) — one best-effort SYSTEM summary audit row per sweep,
+      // written OUTSIDE the per-batch transactions above so a logging blip
+      // can never abort (or roll back) the EXPIRED flips. The per-row
+      // status_history breadcrumbs + the durable `returns.seller.response.expired`
+      // events remain the authoritative per-return trail; this row gives the
+      // unified audit query a single "the cron expired N windows at T" entry.
+      this.audit
+        .writeAuditLog({
+          actorType: 'SYSTEM',
+          actorRole: 'SYSTEM',
+          action: 'RETURN_SELLER_RESPONSE_SWEEP',
+          module: 'returns',
+          resource: 'return',
+          resourceId: 'seller-response-sweeper',
+          metadata: { expiredCount: totalExpired, sweptAt: now.toISOString() },
+        })
+        .catch((err) =>
+          this.logger.warn(
+            `[seller-response sweeper] summary audit write failed: ${
+              (err as Error)?.message ?? 'unknown error'
+            }`,
+          ),
+        );
     }
     return { expiredCount: totalExpired };
   }

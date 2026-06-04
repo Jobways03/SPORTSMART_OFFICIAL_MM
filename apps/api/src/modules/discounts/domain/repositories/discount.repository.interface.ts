@@ -29,6 +29,39 @@ export interface DiscountRepository {
 
   delete(id: string): Promise<void>;
 
+  // Phase 243 (#5) — atomic create: the discount row + all product/
+  // collection scope links in a single transaction so a link failure
+  // can't leave a half-built discount. `undefined` scope = no links.
+  createWithRelations(
+    data: any,
+    links: {
+      productIds?: string[];
+      collectionIds?: string[];
+      buyProductIds?: string[];
+      getProductIds?: string[];
+    },
+  ): Promise<any>;
+
+  // Phase 243 (#5) — atomic update: the field update + per-scope link
+  // replace (delete+recreate) in one transaction. A scope key that is
+  // `undefined` is left untouched; an explicit `[]` clears it.
+  updateWithRelations(
+    id: string,
+    data: any,
+    links: {
+      productIds?: string[];
+      collectionIds?: string[];
+      buyProductIds?: string[];
+      getProductIds?: string[];
+    },
+  ): Promise<any>;
+
+  // Phase 243 (#13) — pre-validate FK targets exist so an invalid id
+  // surfaces a clean 400 listing the missing ids instead of a raw P2003.
+  findExistingProductIds(ids: string[]): Promise<string[]>;
+
+  findExistingCollectionIds(ids: string[]): Promise<string[]>;
+
   createProductLinks(
     discountId: string,
     productIds: string[],

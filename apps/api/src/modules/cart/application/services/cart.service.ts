@@ -69,11 +69,24 @@ export class CartService {
     }));
     const resolved = await this.catalog.resolveBatchUnitPrices(resolveInputs);
 
-    let totalAmount = 0;
+    // Phase 196 (#10) — one batched stock aggregate for the whole page
+    // instead of N getAggregatedStock round-trips inside the map.
+    const stockMap = await this.cartRepo.getAggregatedStockBatch(
+      liveItems.map((i) => ({ productId: i.productId, variantId: i.variantId ?? null })),
+    );
+
+    // Phase 196 (#14) — accumulate the subtotal in integer paise (round per
+    // unit, then multiply) so a multi-line cart doesn't drift 1-2 paise vs
+    // the BigInt-paise tax-preview path. totalAmount (rupees) is derived
+    // from the paise sum for back-compat; totalAmountInPaise is the exact
+    // string the client should trust.
+    let totalPaise = 0;
     const shaped = await Promise.all(
       liveItems.map(async (item, idx) => {
         const pricing = resolved[idx]!;
-        const lineTotal = Math.round(pricing.effectiveUnitPrice * item.quantity * 100) / 100;
+        const unitPaise = Math.round(pricing.effectiveUnitPrice * 100);
+        const lineTotalInPaise = unitPaise * item.quantity;
+        const lineTotal = lineTotalInPaise / 100;
 
         // Phase 61 — status flags. `unavailable` short-circuits the
         // subtotal so an archived product doesn't keep counting
@@ -86,17 +99,15 @@ export class CartService {
           : false;
         const unavailable = productUnavailable || variantUnavailable;
 
-        if (!item.savedForLater && !unavailable) totalAmount += lineTotal;
+        if (!item.savedForLater && !unavailable) totalPaise += lineTotalInPaise;
 
         const imageUrl =
           item.variant?.images?.[0]?.url ||
           item.product.images?.[0]?.url ||
           null;
 
-        const availableStock = await this.cartRepo.getAggregatedStock(
-          item.productId,
-          item.variantId,
-        );
+        const availableStock =
+          stockMap.get(`${item.productId}:${item.variantId ?? 'null'}`) ?? 0;
 
         // Phase 44 — persist the tier snapshot on the row so checkout
         // + order placement can read it without recomputing (and so
@@ -170,7 +181,10 @@ export class CartService {
     return {
       items,
       savedItems,
-      totalAmount: Math.round(totalAmount * 100) / 100,
+      // Phase 196 (#14) — rupees derived from the integer-paise sum; the
+      // exact paise total is also exposed as a string (money on the wire).
+      totalAmount: totalPaise / 100,
+      totalAmountInPaise: String(totalPaise),
       itemCount: items
         .filter((i) => !i.unavailable)
         .reduce((sum, i) => sum + i.quantity, 0),
@@ -187,6 +201,7 @@ export class CartService {
     const item = await this.cartRepo.findCartItemById(itemId, cart.id);
     if (!item) throw new NotFoundAppException('Cart item not found');
     await this.cartRepo.setSavedForLater(itemId, true);
+    await this.cartRepo.touchLastActivity(cart.id); // Phase 196 (#11)
   }
 
   /**
@@ -222,6 +237,7 @@ export class CartService {
         `Cannot move to cart — only ${result.availableStock} in stock, item has quantity ${item.quantity}`,
       );
     }
+    await this.cartRepo.touchLastActivity(cart.id); // Phase 196 (#11)
   }
 
   async addItem(
@@ -318,17 +334,23 @@ export class CartService {
       );
     }
 
-    const availableStock = await this.cartRepo.getAggregatedStock(
-      item.productId,
-      item.variantId,
-    );
-    if (availableStock < quantity) {
-      throw new BadRequestAppException(
-        `Insufficient stock. Available: ${availableStock}, Requested: ${quantity}`,
+    // Phase 196 (#16) — the stock floor is now re-checked INSIDE the cart-row
+    // FOR UPDATE lock (was a non-transactional read-then-write here).
+    try {
+      await this.cartRepo.updateCartItemQuantity(
+        itemId,
+        cart.id,
+        item.productId,
+        item.variantId,
+        quantity,
       );
+    } catch (err: any) {
+      if (err?.code === 'INSUFFICIENT_STOCK') {
+        throw new BadRequestAppException(err.message);
+      }
+      throw err;
     }
-
-    await this.cartRepo.updateCartItemQuantity(itemId, quantity);
+    await this.cartRepo.touchLastActivity(cart.id);
   }
 
   async removeItem(customerId: string, itemId: string) {
@@ -339,12 +361,14 @@ export class CartService {
     if (!item) throw new NotFoundAppException('Cart item not found');
 
     await this.cartRepo.deleteCartItem(itemId);
+    await this.cartRepo.touchLastActivity(cart.id); // Phase 196 (#11)
   }
 
   async clearCart(customerId: string) {
     const cart = await this.cartRepo.findCartByCustomerId(customerId);
     if (cart) {
       await this.cartRepo.clearCart(cart.id);
+      await this.cartRepo.touchLastActivity(cart.id); // Phase 196 (#11)
     }
   }
 

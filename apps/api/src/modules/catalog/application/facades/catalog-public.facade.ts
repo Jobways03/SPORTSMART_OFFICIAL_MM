@@ -7,6 +7,7 @@ import {
   AllocationResult,
   StockReservationResult,
   AllocateAndReserveResult,
+  AllocationEventSourceTag,
 } from '../services/seller-allocation.service';
 import {
   PricingResolutionService,
@@ -101,6 +102,11 @@ export class CatalogPublicFacade {
     customerPincode: string;
     quantity: number;
     excludeMappingIds?: string[];
+    // Phase 231/233 — pass-through for COD eligibility filtering + the
+    // allocation_logs provenance tag (LISTING / PREVIEW / STOREFRONT keep admin
+    // browse + cart checks out of real-checkout analytics).
+    paymentMethod?: 'COD' | 'ONLINE';
+    eventSource?: AllocationEventSourceTag;
   }): Promise<AllocationResult> {
     return this.allocationService.allocate(input);
   }

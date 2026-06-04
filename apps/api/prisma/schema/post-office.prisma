@@ -14,12 +14,26 @@ model PostOffice {
   delivery     String // Delivery, Non-Delivery
   district     String
   state        String
+  // Phase 234 (Pincode Lookup audit) — 2-digit GST/CBIC state code (e.g. 27 =
+  // Maharashtra). Populated from the state name during seed via the canonical
+  // IndiaState map so address-save + tax flows can resolve place-of-supply
+  // without a second lookup. Nullable: pre-234 rows + states absent from the
+  // map have no code until backfilled.
+  stateCode    String?  @map("state_code")
   latitude     Decimal? @db.Decimal(12, 7)
   longitude    Decimal? @db.Decimal(12, 7)
   createdAt    DateTime @default(now()) @map("created_at")
+  // Phase 234 — last-refresh stamp so ops can tell which rows are stale vs the
+  // quarterly India-Post directory release.
+  updatedAt    DateTime @updatedAt @map("updated_at")
 
   @@index([pincode])
   @@index([district])
   @@index([state])
+  // Phase 234 — dedupe key. A pincode legitimately maps to many post offices,
+  // but a single (pincode, officeName) pair is unique; the unique index lets the
+  // seed run idempotently (createMany skipDuplicates) instead of doubling the
+  // 165k-row table on every re-run.
+  @@unique([pincode, officeName])
   @@map("post_offices")
 }

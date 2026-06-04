@@ -2,31 +2,152 @@
 // Audit Module - owned tables
 // ============================================
 
+/// Phase 205 (#1/#4) — actor classification for AuditLog. Mirrors
+/// AccessActorType (access-log.prisma) and extends it with the
+/// non-human principals that mutate state through the audit facade:
+/// background CRONs, inbound WEBHOOKs, and external PAYMENT /
+/// LOGISTICS providers acting on our behalf. SYSTEM is the catch-all
+/// for an internal automated action with no clearer label.
+///
+/// The column is nullable during the transition (legacy rows + the 27
+/// un-migrated callers persist `actorType = NULL`); the facade validates
+/// it when supplied. See notes — the full caller backfill is surfaced,
+/// not done in-flight.
+enum AuditActorType {
+  CUSTOMER
+  ADMIN
+  SELLER
+  FRANCHISE
+  AFFILIATE
+  SYSTEM
+  CRON
+  WEBHOOK
+  PAYMENT_PROVIDER
+  LOGISTICS_PROVIDER
+}
+
+/// Phase 204 (#6) — closed taxonomy of chain-verification findings.
+/// Replaces the free-text `reason: string` the verifier used to push,
+/// so the UI can group/filter and ops can alert per type.
+enum AuditChainIssueType {
+  /// Stored `hash` != sha256(prevHash + canonical-payload). Content was
+  /// edited after the row was written.
+  HASH_MISMATCH
+  /// Row's `prevHash` doesn't equal the prior row's `hash`. A row was
+  /// inserted or deleted, breaking the linkage.
+  PREVIOUS_HASH_MISMATCH
+  /// A gap in the monotonic sequenceNumber — a row was deleted.
+  MISSING_SEQUENCE
+  /// Two rows share a sequenceNumber — only possible via direct DB write.
+  DUPLICATE_SEQUENCE
+  /// Rows are not in non-decreasing (createdAt, sequenceNumber) order.
+  OUT_OF_ORDER_ROW
+  /// The genesis row (sequenceNumber lowest in window) has a non-null
+  /// prevHash, or its hash doesn't recompute from a null prev.
+  GENESIS_INVALID
+  /// The latest anchor's expectedHash != the anchored row's stored hash.
+  ANCHOR_MISMATCH
+  /// A row referenced by an anchor / cursor could not be read.
+  ROW_UNREADABLE
+  /// Anything the verifier could not classify.
+  UNKNOWN
+}
+
+/// Phase 204 (#3) — run-type for a persisted verification pass.
+enum AuditChainVerificationRunType {
+  /// Bounded fast walk from the latest anchor (the viewer button + cron).
+  FAST
+  /// Cursor-batched walk over the whole chain (the async job).
+  FULL
+  /// Sampled / range walk (verifyRange / verifyRandomSample).
+  SAMPLE
+}
+
+enum AuditChainVerificationStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
 model AuditLog {
-  id         String   @id @default(uuid())
-  actorId    String?  @map("actor_id")
-  actorRole  String?  @map("actor_role")
+  id         String  @id @default(uuid())
+  /// Phase 203 (#11) — monotonic, gap-free-by-construction ordinal.
+  /// Drives deterministic chain walking + CSV export ordering and makes
+  /// "a row was deleted" detectable (a gap in the sequence). Postgres
+  /// BIGSERIAL under the hood (see migration); never reused.
+  sequenceNumber BigInt @unique @default(autoincrement()) @map("sequence_number")
+
+  actorId   String?         @map("actor_id")
+  actorRole String?         @map("actor_role")
+  /// Phase 203 (#12) / 205 (#4) — classified principal. Nullable during
+  /// the caller-backfill transition.
+  actorType AuditActorType? @map("actor_type")
+
   action     String
   module     String
   resource   String
-  resourceId String?  @map("resource_id")
-  oldValue   Json?    @map("old_value")
-  newValue   Json?    @map("new_value")
+  resourceId String? @map("resource_id")
+  oldValue   Json?   @map("old_value")
+  newValue   Json?   @map("new_value")
   metadata   Json?
-  ipAddress  String?  @map("ip_address")
-  userAgent  String?  @map("user_agent")
+  ipAddress  String? @map("ip_address")
+  userAgent  String? @map("user_agent")
+
+  /// Phase 203 (#13) — request / correlation id for cross-system tracing
+  /// (matches the inbound X-Request-Id). Nullable; indexed.
+  requestId String? @map("request_id")
+
   // Hash chain for tamper evidence. `prevHash` references the hash of
   // the most recent prior row at insert time; `hash` is sha256 of this
-  // row's payload + prevHash. Detect rewrites by re-walking the chain.
-  prevHash   String?  @map("prev_hash")
-  hash       String?
-  createdAt  DateTime @default(now()) @map("created_at")
+  // row's canonical payload + prevHash. Detect rewrites by re-walking
+  // the chain.
+  //
+  // Phase 203 (#1) — the canonical payload hashes over the STORED
+  // `createdAt` (a single timestamp generated in code and written
+  // explicitly), NOT a separate write-time `ts`, so a verifier can
+  // recompute the content hash exactly and HARD-FAIL on mismatch.
+  //
+  // Phase 203 (#3) — `hash` is NOT NULL (migration backfills legacy
+  // rows). `prevHash` is null ONLY for the genesis row (CHECK in
+  // migration: prev_hash IS NULL ⇔ sequence_number is the minimum).
+  prevHash String? @map("prev_hash")
+  hash     String
+
+  /// Phase 203 (#16) / 205 (#16) — hash-payload schema version. Bumped
+  /// when the canonical-payload shape changes so verifiers can pick the
+  /// right recompute recipe for old rows. v1 = legacy ts-based (cannot
+  /// content-verify); v2 = createdAt-based (content-verifiable).
+  schemaVersion Int @default(2) @map("schema_version")
+
+  createdAt DateTime @default(now()) @map("created_at")
 
   @@index([actorId])
   @@index([module, resource])
   @@index([resource, resourceId])
   @@index([createdAt])
+  // Phase 206 (#9) / 204 — deterministic export + chain-walk ordering.
+  @@index([sequenceNumber])
+  @@index([requestId])
   @@map("audit_logs")
+}
+
+/// Phase 203 (#2) — single-row serialization point for the hash chain.
+///
+/// Concurrent writers used to `findFirst(orderBy createdAt desc)` to read
+/// the previous hash WITHOUT a lock, so two transactions could read the
+/// same prevHash and fork the chain. The writer now `SELECT … FOR UPDATE`s
+/// this one row first; the second writer blocks until the first commits,
+/// then reads the just-written hash. Exactly one row (id='singleton').
+model AuditChainTip {
+  id        String   @id @default("singleton")
+  /// Hash of the most recently appended AuditLog row (null before the
+  /// first append).
+  lastHash  String?  @map("last_hash")
+  /// sequenceNumber of that row (for cheap monotonicity checks).
+  lastSequence BigInt? @map("last_sequence")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("audit_chain_tip")
 }
 
 /// Phase 8 (PR 8.1) — periodic anchor of the AuditLog hash chain.
@@ -51,7 +172,7 @@ model AuditChainAnchor {
   upToAuditLogId String @map("up_to_audit_log_id")
   /// Expected `audit_logs.hash` of the row above. Verifier compares
   /// against the row's stored hash — mismatch ⇒ tamper.
-  expectedHash   String @map("expected_hash")
+  expectedHash String @map("expected_hash")
 
   /// Number of audit rows covered between the previous anchor (or the
   /// genesis row, for sequence=1) and this anchor's upToAuditLogId.
@@ -65,6 +186,67 @@ model AuditChainAnchor {
   @@map("audit_chain_anchors")
 }
 
+/// Phase 204 (#3) — durable record of every chain-verification pass
+/// (FAST viewer button, the cron, or the FULL async job). Gives auditors
+/// a "we checked, here's when and what we found" trail and powers the
+/// verification-history UI.
+model AuditChainVerificationRun {
+  id           String                       @id @default(uuid())
+  runType      AuditChainVerificationRunType @map("run_type")
+  status       AuditChainVerificationStatus  @default(RUNNING)
+  /// actorId that triggered the run (null for cron/system runs).
+  startedBy    String?                       @map("started_by")
+  startedAt    DateTime                      @default(now()) @map("started_at")
+  completedAt  DateTime?                     @map("completed_at")
+  rowsChecked  Int                           @default(0) @map("rows_checked")
+  issuesFound  Int                           @default(0) @map("issues_found")
+  /// Free-form summary (anchor sequence, window bounds, counts by type).
+  resultSummary Json?                        @map("result_summary")
+  errorMessage String?                       @map("error_message")
+
+  issues AuditChainVerificationIssue[]
+
+  @@index([startedAt])
+  @@index([status])
+  @@map("audit_chain_verification_runs")
+}
+
+/// Phase 204 (#3/#6) — one row per finding within a verification run.
+model AuditChainVerificationIssue {
+  id                 String              @id @default(uuid())
+  verificationRunId  String              @map("verification_run_id")
+  /// The offending AuditLog row id (when known).
+  auditLogId         String?             @map("audit_log_id")
+  issueType          AuditChainIssueType @map("issue_type")
+  /// HIGH / CRITICAL etc — a chain break is always serious, but a
+  /// content edit (HASH_MISMATCH) ranks above an ordering anomaly.
+  severity           String
+  expectedHash       String?             @map("expected_hash")
+  actualHash         String?             @map("actual_hash")
+  details            String?
+  createdAt          DateTime            @default(now()) @map("created_at")
+
+  run AuditChainVerificationRun @relation(fields: [verificationRunId], references: [id], onDelete: Cascade)
+
+  @@index([verificationRunId])
+  @@index([issueType])
+  @@map("audit_chain_verification_issues")
+}
+
+/// EventLog — append-only catalogue of every domain event published
+/// through the outbox (ADR-008).
+///
+/// Phase 203 (#7) — DELIBERATELY NOT hash-chained. EventLog is written
+/// by a fire-and-forget `@OnEvent('**')` handler that swallows failures
+/// (a dropped event must never roll back the business action that
+/// emitted it), and events arrive concurrently from N replicas with no
+/// global ordering — a strict hash chain would force serialization on
+/// the hottest write path in the system and still have gaps whenever the
+/// handler best-effort-drops a row. The legal tamper-evident record is
+/// AuditLog (which IS chained); EventLog is an operational forensic
+/// catalogue. Integrity here is provided by the outbox's own delivery
+/// ledger (outbox_events) + append-only DB grants, documented rather
+/// than chained. See notes.
 model EventLog {
   id          String   @id @default(uuid())
   eventName   String   @map("event_name")

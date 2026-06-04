@@ -32,6 +32,7 @@ export default function AffiliateTaxReportPage() {
   const canView = hasPermission('affiliates.tax_report.read');
   const canDeposit = hasPermission('affiliates.tax.deposit');
   const canIssue = hasPermission('affiliates.tax.issue_certificate');
+  const canReverse = hasPermission('affiliates.tax.reverse');
 
   const [quarter, setQuarter] = useState(currentQuarter());
   const [report, setReport] = useState<Tds194OReport | null>(null);
@@ -102,6 +103,35 @@ export default function AffiliateTaxReportPage() {
       await load();
     } catch (e: any) {
       setOpsMsg(e?.message ?? 'Failed');
+    } finally {
+      setOpsBusy(false);
+    }
+  };
+
+  // Phase 160 (§194-O affiliate audit #16) — correction flow. Reverse one
+  // ledger row with a reason prompt (gated on affiliates.tax.reverse).
+  const runReverse = async (ledgerId: string) => {
+    setOpsMsg('');
+    const reason = typeof window !== 'undefined'
+      ? window.prompt('Reason for reversing this TDS row (min 6 characters):')
+      : null;
+    if (!reason || reason.trim().length < 6) {
+      if (reason !== null) setOpsMsg('Reversal reason must be at least 6 characters.');
+      return;
+    }
+    setOpsBusy(true);
+    try {
+      const res = await svc.reverseTds(ledgerId, reason.trim());
+      setOpsMsg(
+        res?.success
+          ? res.data?.wasAlreadyReversed
+            ? 'Row was already REVERSED (no-op).'
+            : `Row reversed (was ${res.data?.previousStatus}).`
+          : res?.message ?? 'Reversal failed',
+      );
+      await load();
+    } catch (e: any) {
+      setOpsMsg(e?.message ?? 'Reversal failed');
     } finally {
       setOpsBusy(false);
     }
@@ -250,7 +280,7 @@ export default function AffiliateTaxReportPage() {
         </>
       )}
 
-      {(canDeposit || canIssue) && ledger.length > 0 && (
+      {(canDeposit || canIssue || canReverse) && ledger.length > 0 && (
         <section style={{ marginTop: 28, borderTop: '1px solid #e2e8f0', paddingTop: 16 }}>
           <h2 style={{ fontSize: 16, fontWeight: 700, margin: '0 0 4px' }}>Deposit &amp; certificate operations</h2>
           <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
@@ -282,6 +312,7 @@ export default function AffiliateTaxReportPage() {
                 <th style={{ ...th, textAlign: 'right' }}>TDS</th>
                 <th style={th}>Challan</th>
                 <th style={th}>Cert #</th>
+                {canReverse && <th style={th}>Actions</th>}
               </tr>
             </thead>
             <tbody>
@@ -304,6 +335,19 @@ export default function AffiliateTaxReportPage() {
                   <td style={{ ...td, textAlign: 'right' }}>{rupees(r.tdsInPaise)}</td>
                   <td style={{ ...td, fontSize: 11, color: '#64748b' }}>{r.challanReference ?? '—'}</td>
                   <td style={{ ...td, fontSize: 11, color: '#64748b' }}>{r.certificateNumber ?? '—'}</td>
+                  {canReverse && (
+                    <td style={td}>
+                      {r.status !== 'REVERSED' && (
+                        <button
+                          onClick={() => runReverse(r.id)}
+                          disabled={opsBusy}
+                          style={{ ...btn, padding: '3px 8px', fontSize: 11, color: '#b91c1c', borderColor: '#fecaca' }}
+                        >
+                          Reverse
+                        </button>
+                      )}
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>

@@ -1,7 +1,13 @@
 import { Module } from '@nestjs/common';
 import { EmailModule } from '../../integrations/email/email.module';
 import { WhatsAppModule } from '../../integrations/whatsapp/whatsapp.module';
+// Phase 185 (#1) — real provider-switched SMS integration.
+import { SmsModule } from '../../integrations/sms/sms.module';
+import { AuditModule } from '../audit/module';
 import { IdentityModule } from '../identity/module';
+// Allocation-Exception-Queue audit (#234) — gives the order-exception handler
+// access to the canonical ops AdminTask queue via LiabilityLedgerPublicFacade.
+import { LiabilityLedgerModule } from '../liability-ledger/module';
 import { AdminAuthGuard, UserAuthGuard } from '../../core/guards';
 import { NotificationsPublicFacade } from './application/facades/notifications-public.facade';
 import { NotificationRouter } from './application/services/notification-router.service';
@@ -9,13 +15,24 @@ import { NotificationWorker } from './application/services/notification-worker.s
 import { TemplateRegistry } from './application/services/template-registry.service';
 import { TemplateRenderer } from './application/services/template-renderer.service';
 import { NotificationGateService } from './application/services/notification-gate.service';
+// Phase 187 — admin-dispatch orchestration + shared recipient resolver.
+import { AdminDispatchService } from './application/services/admin-dispatch.service';
+import { RecipientResolverService } from './application/services/recipient-resolver.service';
+// Phase 189 (#14) — email-unsubscribe token service.
+import { EmailUnsubscribeService } from './application/services/email-unsubscribe.service';
 import { OrderNotificationHandler } from './application/event-handlers/order-notification.handler';
+// Allocation-Exception-Queue audit (#234) — customer reassurance + ops AdminTask
+// consumer for the previously-unconsumed `orders.master.exception` event.
+import { OrderExceptionNotificationHandler } from './application/event-handlers/order-exception-notification.handler';
 import { WalletNotificationHandler } from './application/event-handlers/wallet-notification.handler';
 import { TicketNotificationHandler } from './application/event-handlers/ticket-notification.handler';
 import { RefundCompletedNotificationHandler } from './application/event-handlers/refund-completed.handler';
 import { RefundInstructionNotificationHandler } from './application/event-handlers/refund-instruction-notification.handler';
 import { DisputeNotificationHandler } from './application/event-handlers/dispute-notification.handler';
 import { ReconciliationNotificationHandler } from './application/event-handlers/reconciliation-notification.handler';
+// Finding #15 — consumer for the previously-unconsumed
+// `affiliate.coupon_created` event; emails the affiliate their new code.
+import { AffiliateCouponNotificationHandler } from './application/event-handlers/affiliate-coupon-notification.handler';
 import { EmailNotificationProvider } from './infrastructure/providers/email.provider';
 import { SmsNotificationProvider } from './infrastructure/providers/sms.provider';
 import { WhatsAppNotificationProvider } from './infrastructure/providers/whatsapp.provider';
@@ -27,18 +44,37 @@ import { AdminNotificationLogsController } from './presentation/controllers/list
 import { AdminNotificationTemplatesController } from './presentation/controllers/preview-template.controller';
 import { AdminNotificationPreferencesController } from './presentation/controllers/admin-preferences.controller';
 import { AdminNotificationDispatchController } from './presentation/controllers/admin-dispatch.controller';
+// Phase 185 (#12) DLQ ops surface + (#5) carrier delivery-receipt webhook.
+import { AdminNotificationDlqController } from './presentation/controllers/admin-dlq.controller';
+import { NotificationDeliveryReceiptController } from './presentation/controllers/delivery-receipt.controller';
+// Phase 189 (#14) — public unsubscribe landing.
+import { NotificationUnsubscribeController } from './presentation/controllers/unsubscribe.controller';
 import { NOTIFICATION_QUEUE } from './application/ports/notification-queue.port';
 
 @Module({
   // Phase 28 (2026-05-21) — IdentityModule import gives the gate
   // access to ConsentService for the DPDP marketing-consent check.
-  imports: [EmailModule, WhatsAppModule, IdentityModule],
+  // Phase 185 — SmsModule (real SMS provider) + AuditModule (template-edit
+  // audit trail #11).
+  imports: [
+    EmailModule,
+    WhatsAppModule,
+    SmsModule,
+    IdentityModule,
+    AuditModule,
+    // Allocation-Exception-Queue audit (#234) — exports LiabilityLedgerPublicFacade
+    // (admin-task queue). No cycle: liability-ledger doesn't import notifications.
+    LiabilityLedgerModule,
+  ],
   controllers: [
     CustomerNotificationsController,
     AdminNotificationLogsController,
     AdminNotificationTemplatesController,
     AdminNotificationPreferencesController,
     AdminNotificationDispatchController,
+    AdminNotificationDlqController,
+    NotificationDeliveryReceiptController,
+    NotificationUnsubscribeController,
   ],
   providers: [
     UserAuthGuard,
@@ -62,6 +98,13 @@ import { NOTIFICATION_QUEUE } from './application/ports/notification-queue.port'
     TemplateRegistry,
     TemplateRenderer,
 
+    // Phase 187 — admin dispatch orchestration (#3/#4/#7/#10/#12/#15) +
+    // shared recipient resolver (used by the worker too).
+    AdminDispatchService,
+    RecipientResolverService,
+    // Phase 189 (#14) — unsubscribe token signer/verifier.
+    EmailUnsubscribeService,
+
     // Phase 8 (PR 8.2) — preference + suppression gate.
     NotificationGateService,
 
@@ -73,12 +116,16 @@ import { NOTIFICATION_QUEUE } from './application/ports/notification-queue.port'
 
     // Event handlers
     OrderNotificationHandler,
+    // Allocation-Exception-Queue audit (#234) — `orders.master.exception` consumer.
+    OrderExceptionNotificationHandler,
     WalletNotificationHandler,
     TicketNotificationHandler,
     RefundCompletedNotificationHandler,
     RefundInstructionNotificationHandler,
     DisputeNotificationHandler,
     ReconciliationNotificationHandler,
+    // Finding #15 — `affiliate.coupon_created` consumer.
+    AffiliateCouponNotificationHandler,
   ],
   exports: [NotificationsPublicFacade, NotificationGateService],
 })

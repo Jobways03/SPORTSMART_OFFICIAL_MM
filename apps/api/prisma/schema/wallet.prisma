@@ -17,6 +17,39 @@ enum WalletTransactionType {
   CREDIT_ADJUSTMENT // admin manual credit (goodwill, promo)
   DEBIT // user spent at checkout
   DEBIT_ADJUSTMENT // admin manual debit (chargeback, fraud reversal)
+  // Phase 182 (Customer Wallet audit #2) — loyalty/cashback rebate earned on a
+  // completed purchase (the spec's third wallet pillar).
+  LOYALTY_REBATE
+  // Phase 183 (Wallet Credit/Debit audit #5) — distinct types so reporting can
+  // separate an admin's deliberate manual adjustment from system/goodwill/
+  // redemption/reversal entries. (Goodwill is ALSO discriminated by creditType.)
+  MANUAL_CREDIT
+  MANUAL_DEBIT
+  GOODWILL_CREDIT
+  ORDER_REDEMPTION
+  REVERSAL
+}
+
+// Phase 182 (#5) — explicit credit/debit direction. amountInPaise stays SIGNED
+// (the reconciliation cron + goodwill ledger sum it with sign); `direction` is
+// the explicit, queryable indicator derived from that sign.
+enum WalletDirection {
+  CREDIT
+  DEBIT
+}
+
+// Phase 172 (Goodwill Credit audit #8) — finance-reconciliation discriminator
+// on top of the coarse WalletTransactionType. A goodwill credit and a genuine
+// refund are both `type=REFUND` rows today; creditType separates platform-
+// EXPENSE (goodwill) from refund-LIABILITY so reconciliation + reports can split
+// them. Nullable: pre-172 rows + non-credit rows carry null.
+enum WalletCreditType {
+  REFUND_ORIGINAL // money the customer was genuinely owed (return/dispute refund)
+  GOODWILL // apology credit — platform expense, non-recoverable
+  TIME_BARRED // refund past the return window, booked as goodwill-class
+  PROMO // marketing/promo credit
+  MANUAL // admin manual credit, uncategorised
+  LOYALTY // Phase 182 — loyalty/cashback rebate (platform marketing expense)
 }
 
 // Phase 70 (2026-05-22) — Phase 66 audit Gap #8. Minimal saga
@@ -116,6 +149,16 @@ model WalletTransaction {
   // Wallet balance immediately after this row was applied. Lets us
   // render statements + reconcile without re-summing the ledger.
   balanceAfterInPaise BigInt                  @map("balance_after_in_paise")
+  // Phase 182 (#4) — balance immediately BEFORE this row (= balanceAfter −
+  // signed amount). Lets a statement render "from X to Y" per line.
+  balanceBeforeInPaise BigInt                 @default(0) @map("balance_before_in_paise")
+  // Phase 182 (#5) — explicit CREDIT/DEBIT (derived from the sign of amount).
+  direction           WalletDirection?        @map("direction")
+  // Phase 182 (#9) — per-row currency (mirrors Wallet.currency; INR today).
+  currency            String                  @default("INR")
+  // Phase 182 (#8) — human-readable source reference (e.g. "RTN-2026-000045",
+  // "ORD-2026-000123") for customer-facing display; referenceId stays the UUID.
+  referenceNumber     String?                 @map("reference_number")
   // Polymorphic linkage to the upstream record that caused this entry.
   // e.g. ('REFUND', '<refund-id>'), ('TOPUP', '<razorpay-payment-id>'),
   // ('DEBIT', '<order-id>'). Optional for admin-manual adjustments
@@ -124,11 +167,27 @@ model WalletTransaction {
   referenceId         String?                 @map("reference_id")
   // Customer-visible description (rendered in /account/wallet).
   description         String
+  // Phase 183 (#2) — audit-grade internal REASON (why the adjustment was made),
+  // distinct from the customer-facing `description`. Admin-only; stripped from
+  // customer responses alongside internalNotes.
+  reason              String?                 @map("reason")
   // Admin-only notes (rendered in admin wallet view, not surfaced to user).
   internalNotes       String?                 @map("internal_notes")
   // For admin manual entries: which admin actor created it. Null for
   // system-generated entries (refund, top-up).
   createdByAdminId    String?                 @map("created_by_admin_id")
+  // Phase 172 (Goodwill Credit audit #8/#9) — reconciliation discriminator +
+  // optional expiry. creditType separates goodwill (platform expense) from a
+  // genuine refund (liability); expiresAt is set for goodwill (NOW +
+  // GOODWILL_CREDIT_EXPIRY_DAYS) so an expiry sweep can lapse unused credit.
+  creditType          WalletCreditType?       @map("credit_type")
+  expiresAt           DateTime?               @map("expires_at")
+  // Phase 172 (#9) — set on a GOODWILL lot once the expiry sweep has processed
+  // it (whether it lapsed a remainder or the lot was already fully spent). Lets
+  // the sweep's candidate query skip already-handled lots — no re-scan, no
+  // starvation under a batch limit. Does NOT affect balance math (the
+  // computeGoodwillState replay reads the ledger, not this marker).
+  lapsedAt            DateTime?               @map("lapsed_at")
   createdAt           DateTime                @default(now()) @map("created_at")
 
   wallet      Wallet             @relation(fields: [walletId], references: [id], onDelete: Cascade)
@@ -144,7 +203,44 @@ model WalletTransaction {
   @@index([walletId, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
   @@index([referenceType, referenceId])
+  // Phase 182 (audit §8) — "pending topups for this user" + status filters.
+  @@index([userId, status, createdAt(sort: Desc)])
   @@map("wallet_transactions")
+}
+
+// Phase 182 (Customer Wallet audit #2/#3) — loyalty/cashback earn ledger. One
+// row per (sourceType, sourceId) purchase; idempotent. When POSTED it mints a
+// LOYALTY_REBATE wallet credit (back-linked via walletTransactionId) with an
+// expiry. The rebate math is config-driven (env: bps + caps); the model keeps
+// the eligible/awarded amounts + status for audit and re-run safety.
+enum LoyaltyEarnStatus {
+  PENDING
+  POSTED
+  SKIPPED
+}
+
+model LoyaltyEarnEvent {
+  id                   String            @id @default(uuid())
+  userId               String            @map("user_id")
+  sourceType           String            @map("source_type") // e.g. ORDER
+  sourceId             String            @map("source_id")
+  eligibleAmountInPaise BigInt           @map("eligible_amount_in_paise")
+  rebateInPaise        BigInt            @default(0) @map("rebate_in_paise")
+  // Phase 182 (make-it-100%) — how much of the rebate was clawed back when the
+  // order was later refunded (proportional, once per order, clamped to balance).
+  clawedBackInPaise    BigInt            @default(0) @map("clawed_back_in_paise")
+  rateBps              Int               @default(0) @map("rate_bps")
+  status               LoyaltyEarnStatus @default(PENDING)
+  skipReason           String?           @map("skip_reason")
+  expiresAt            DateTime?         @map("expires_at")
+  walletTransactionId  String?           @map("wallet_transaction_id")
+  createdAt            DateTime          @default(now()) @map("created_at")
+  postedAt             DateTime?         @map("posted_at")
+
+  @@unique([sourceType, sourceId])
+  @@index([userId, createdAt])
+  @@index([status])
+  @@map("loyalty_earn_events")
 }
 
 // Phase 13 GST — Wallet adjustments (goodwill + time-barred refunds).
@@ -245,6 +341,16 @@ model WalletAdjustment {
   // flip status to APPROVED. The Phase 13 threshold is env-tunable.
   requiresDualApproval Boolean @default(false) @map("requires_dual_approval")
 
+  // Phase 162 (Wallet Adjustments audit #12) — reversal of a POSTED/APPROVED
+  // adjustment via a compensating inverse ledger entry (status → REVERSED).
+  // Mirrors migration 20260529180000_wallet_adjustment_hardening. (Schema-model
+  // drift: that migration + the service code shipped these columns but the
+  // Prisma model was never updated; restored here in Phase 172 to unblock tsc.)
+  reversedByAdminId      String?   @map("reversed_by_admin_id")
+  reversedAt             DateTime? @map("reversed_at")
+  reverseReason          String?   @map("reverse_reason")
+  reversingTransactionId String?   @map("reversing_transaction_id")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
@@ -260,4 +366,24 @@ model WalletAdjustment {
   @@index([returnId])
   @@index([sourceTaxDocumentId])
   @@map("wallet_adjustments")
+}
+
+// Phase 162 (Wallet Adjustments audit #11) — append-only state-transition trail
+// for a wallet adjustment. Mirrors migration 20260529180000 (table
+// wallet_adjustment_history); restored to the Prisma model in Phase 172.
+model WalletAdjustmentHistory {
+  id            String                  @id @default(uuid())
+  adjustmentId  String                  @map("adjustment_id")
+  customerId    String                  @map("customer_id")
+  action        String
+  fromStatus    WalletAdjustmentStatus? @map("from_status")
+  toStatus      WalletAdjustmentStatus  @map("to_status")
+  actorId       String?                 @map("actor_id")
+  reason        String?
+  amountInPaise BigInt                  @map("amount_in_paise")
+  createdAt     DateTime                @default(now()) @map("created_at")
+
+  @@index([adjustmentId, createdAt])
+  @@index([customerId, createdAt])
+  @@map("wallet_adjustment_history")
 }

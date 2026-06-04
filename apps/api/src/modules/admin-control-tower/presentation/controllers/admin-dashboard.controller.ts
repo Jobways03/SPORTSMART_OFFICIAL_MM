@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
@@ -21,6 +22,10 @@ import {
   BulkActivateMappingsDto,
   BulkSuspendMappingsDto,
 } from '../dtos/seller-mapping-suspension.dto';
+import {
+  AllocationAnalyticsQueryDto,
+  AllocationEventsQueryDto,
+} from '../dtos/allocation-analytics-query.dto';
 
 /**
  * Phase 24 (2026-05-20) — Audit-driven hardening.
@@ -87,11 +92,46 @@ export class AdminDashboardController {
 
   // ── T4: Allocation analytics ────────────────────────────────────────────
 
+  // Phase 233 (audit #233) — was a no-arg, no-counter endpoint. Now
+  // returns the four outcome counters (primary/fallback/unservicable/
+  // reassigned) + exception-queue count + top franchises alongside the
+  // legacy fields, and accepts optional fromDate/toDate/nodeType
+  // filters. Every aggregate excludes preview/listing/storefront noise.
+  // Read-only scan that hits allocation_logs — throttled to keep a hot
+  // dashboard from hammering the GROUP BYs.
   @Get('dashboard/allocation-analytics')
   @Permissions('analytics.read')
-  async getAllocationAnalytics() {
-    const data = await this.dashboardService.getAllocationAnalytics();
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async getAllocationAnalytics(@Query() query: AllocationAnalyticsQueryDto) {
+    const data = await this.dashboardService.getAllocationAnalytics({
+      fromDate: query.fromDate ? new Date(query.fromDate) : undefined,
+      toDate: query.toDate ? new Date(query.toDate) : undefined,
+      nodeType: query.nodeType,
+    });
     return { success: true, message: 'Allocation analytics retrieved', data };
+  }
+
+  // ── T4b: Allocation events drill-down ───────────────────────────────────
+
+  // Phase 233 — paginated raw allocation_logs rows behind the counters.
+  // Lets an operator inspect every decision of a given outcome /
+  // eventSource (including the excluded PREVIEW/LISTING/STOREFRONT rows
+  // when eventSource is pinned). limit is capped at 100 in the DTO and
+  // re-clamped in the service.
+  @Get('dashboard/allocation-events')
+  @Permissions('analytics.read')
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  async getAllocationEvents(@Query() query: AllocationEventsQueryDto) {
+    const data = await this.dashboardService.getAllocationEvents({
+      outcome: query.outcome,
+      eventSource: query.eventSource,
+      fromDate: query.fromDate ? new Date(query.fromDate) : undefined,
+      toDate: query.toDate ? new Date(query.toDate) : undefined,
+      nodeType: query.nodeType,
+      page: query.page,
+      limit: query.limit,
+    });
+    return { success: true, message: 'Allocation events retrieved', data };
   }
 
   // ── T5: Bulk pricing ───────────────────────────────────────────────────

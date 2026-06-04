@@ -3,13 +3,15 @@
 import type { RiskBand } from '@/services/admin-verification.service';
 
 const BAND_STYLE: Record<
-  'GREEN' | 'YELLOW' | 'RED' | 'UNKNOWN',
+  'GREEN' | 'YELLOW' | 'RED' | 'CRITICAL' | 'UNKNOWN',
   { color: string; bg: string; label: string }
 > = {
-  GREEN:   { color: 'var(--color-success)', bg: 'var(--color-success-bg)', label: 'Low risk'    },
-  YELLOW:  { color: 'var(--color-warning)', bg: 'var(--color-warning-bg)', label: 'Review'      },
-  RED:     { color: 'var(--color-error)',   bg: 'var(--color-error-bg)',   label: 'High risk'   },
-  UNKNOWN: { color: 'var(--color-text-secondary)', bg: 'var(--color-bg-page)', label: 'Not scored' },
+  GREEN:    { color: 'var(--color-success)', bg: 'var(--color-success-bg)', label: 'Low risk'    },
+  YELLOW:   { color: 'var(--color-warning)', bg: 'var(--color-warning-bg)', label: 'Review'      },
+  RED:      { color: 'var(--color-error)',   bg: 'var(--color-error-bg)',   label: 'High risk'   },
+  // CRITICAL outranks RED: a solid dark-red fill (white text/dot), not a tint.
+  CRITICAL: { color: '#fff',                 bg: '#7f1d1d',                 label: 'Critical'    },
+  UNKNOWN:  { color: 'var(--color-text-secondary)', bg: 'var(--color-bg-page)', label: 'Not scored' },
 };
 
 export function RiskBadge({

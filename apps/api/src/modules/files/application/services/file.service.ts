@@ -1,4 +1,5 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import type {
   FileMetadata,
   FileAttachment,
@@ -11,13 +12,43 @@ import {
   ForbiddenAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
-import { CloudinaryAdapter } from '../../../../integrations/cloudinary/cloudinary.adapter';
-import { S3Adapter } from '../../../../integrations/s3/adapters/s3.adapter';
+import { MediaStorageAdapter } from '../../../../integrations/media/media-storage.adapter';
+import { R2Adapter } from '../../../../integrations/r2/adapters/r2.adapter';
 import {
   hashBuffer,
   hashesEqual,
   HASH_ALGORITHM,
 } from '../../../../core/file-integrity/file-hash.util';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
+
+/** Phase 252 — who is allowed to view/act per caller. */
+export interface FileCaller {
+  actorId: string;
+  actorType: string | null;
+  isAdmin: boolean;
+}
+
+// Phase 252 (#3) — which polymorphic `resource` values a file of a given
+// purpose may legitimately attach to. Blocks "attach a KYC PDF as a
+// product_image" and rejects junk resource strings. Keys are normalised
+// lower-case resource names; OTHER/admin uploads are unconstrained.
+const PURPOSE_COMPATIBLE_RESOURCES: Partial<Record<FilePurpose, string[]>> = {
+  KYC_DOCUMENT: ['seller_kyc', 'franchise_kyc', 'affiliate_kyc'],
+  BANK_PROOF: ['seller_kyc', 'franchise_kyc', 'affiliate_kyc', 'payout_method'],
+  QC_EVIDENCE: ['return', 'return_item', 'qc_evidence'],
+  DISPUTE_EVIDENCE: ['dispute', 'dispute_evidence', 'return'],
+  INVOICE: ['order', 'sub_order', 'invoice'],
+  PRODUCT_IMAGE: ['product', 'product_variant', 'product_image'],
+  PRODUCT_VIDEO: ['product', 'product_variant'],
+  BANNER: ['banner', 'storefront_slot', 'collection'],
+  AVATAR: ['seller', 'franchise', 'customer', 'affiliate', 'avatar'],
+  TICKET_ATTACHMENT: ['ticket', 'ticket_message', 'support_ticket'],
+  SHIPMENT_EVIDENCE: ['sub_order', 'shipment'],
+};
+
+const ALLOWED_ATTACH_RESOURCES = new Set<string>([
+  ...new Set(Object.values(PURPOSE_COMPATIBLE_RESOURCES).flat()),
+]);
 
 /**
  * Per-purpose validation rules.
@@ -122,7 +153,10 @@ const PURPOSE_RULES: Record<FilePurpose, PurposeRule> = {
   },
   OTHER: {
     maxBytes: 10 * 1024 * 1024,
-    allowedMime: /.*/,
+    // Phase 250 (#4) — was `/.*/` (accept-all), which made OTHER an
+    // arbitrary-file (incl. .exe/.sh/.iso) upload primitive for any
+    // authenticated caller. Restrict to safe document/image/text types.
+    allowedMime: /^(application\/pdf|image\/(jpeg|png|webp)|text\/plain)$/,
     folder: 'other',
     visibility: 'PRIVATE',
     classification: 'PRODUCT_DOCUMENT',
@@ -135,22 +169,100 @@ export class FileService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly cloudinary: CloudinaryAdapter,
-    private readonly s3: S3Adapter,
+    private readonly media: MediaStorageAdapter,
+    private readonly r2: R2Adapter,
+    // Phase 250 — best-effort audit on upload/attach/delete. @Optional so
+    // unit specs that construct the service directly keep working.
+    @Optional() private readonly auditFacade?: AuditPublicFacade,
   ) {}
+
+  /** Phase 250 — best-effort audit write; never throws into the caller. */
+  private writeFileAudit(args: {
+    action: string;
+    actorId: string;
+    actorType?: string | null;
+    resourceId: string;
+    metadata?: Record<string, unknown>;
+  }): void {
+    if (!this.auditFacade) return;
+    void this.auditFacade
+      .writeAuditLog({
+        actorId: args.actorId,
+        actorRole: args.actorType ?? undefined,
+        action: args.action,
+        module: 'files',
+        resource: 'file',
+        resourceId: args.resourceId,
+        newValue: (args.metadata ?? null) as any,
+      })
+      .catch((e) =>
+        this.logger.warn(`File audit (${args.action}) failed: ${(e as Error).message}`),
+      );
+  }
 
   // ── Direct upload (multipart) ────────────────────────────────────
   // Server receives the file, validates per-purpose, uploads to
-  // Cloudinary (configured today), persists READY metadata. This is
+  // media (configured today), persists READY metadata. This is
   // the "works now" path used by ticket / dispute / KYC UIs.
 
   async uploadDirect(args: {
     purpose: FilePurpose;
     file: Express.Multer.File;
     uploadedBy: string;
+    uploadedByType?: string | null;
   }): Promise<FileMetadata> {
+    const { fileMetadata } = await this.performUpload(args);
+    return fileMetadata;
+  }
+
+  /**
+   * Phase 249/250 — the central registration primitive. Does everything
+   * uploadDirect does (per-purpose validation, magic-byte check, EXIF strip,
+   * SHA-256 hash, a FileMetadata row → integrity-verifier + audit +
+   * orphan-sweep coverage) AND returns the provider url / publicId /
+   * dimensions, so the ~27 module-direct uploaders that today call
+   * `media.upload()` raw can switch to this with a one-line change and
+   * keep writing their own per-resource rows (ProductImage.url/publicId etc).
+   */
+  async uploadAndRegister(args: {
+    purpose: FilePurpose;
+    file: Express.Multer.File;
+    uploadedBy: string;
+    uploadedByType?: string | null;
+  }): Promise<{
+    fileId: string;
+    url: string;
+    publicId: string;
+    width: number;
+    height: number;
+    bytes: number;
+    mimeType: string;
+  }> {
+    const { fileMetadata, mediaResult } = await this.performUpload(args);
+    return {
+      fileId: fileMetadata.id,
+      url: mediaResult.secureUrl,
+      publicId: mediaResult.publicId,
+      width: mediaResult.width,
+      height: mediaResult.height,
+      bytes: mediaResult.bytes,
+      mimeType: fileMetadata.mimeType,
+    };
+  }
+
+  private async performUpload(args: {
+    purpose: FilePurpose;
+    file: Express.Multer.File;
+    uploadedBy: string;
+    uploadedByType?: string | null;
+  }): Promise<{ fileMetadata: FileMetadata; mediaResult: import('../../../../integrations/media/media-storage.adapter').MediaUploadResult }> {
     const rule = PURPOSE_RULES[args.purpose];
+    if (!rule) throw new BadRequestAppException('Unknown upload purpose');
     this.validate(rule, args.file);
+    // Phase 250 (#3) — magic-byte check: the declared mimetype is the
+    // spoofable multipart header. Sniff the actual bytes and reject when the
+    // content contradicts the rule (e.g. evil.exe declared as image/jpeg).
+    this.assertContentMatches(rule, args.file.buffer, args.file.mimetype);
 
     // Phase 7 (PR 7.1) — hash the bytes BEFORE handing them to the
     // storage provider. The buffer is in memory anyway; the hash adds
@@ -158,33 +270,114 @@ export class FileService {
     const contentSha256 = hashBuffer(args.file.buffer);
     const hashedAt = new Date();
 
-    const result = await this.cloudinary.upload(args.file.buffer, {
+    const isImage = args.file.mimetype.startsWith('image/');
+    const result = await this.media.upload(args.file.buffer, {
       folder: `sportsmart/${rule.folder}`,
       // Default to 'auto' so PDFs/videos work, not just images.
-      resourceType: args.file.mimetype.startsWith('image/') ? 'image' : 'auto',
+      resourceType: isImage ? 'image' : 'auto',
+      // Phase 250 (#10) — strip EXIF/IPTC/XMP (incl. GPS + device serial)
+      // from images. KYC/evidence/avatar photos otherwise leak the
+      // uploader's physical location.
+      ...(isImage ? { transformation: [{ flags: 'strip_profile' }] } : {}),
     });
 
-    return this.prisma.fileMetadata.create({
+    const created = await this.prisma.fileMetadata.create({
       data: {
-        fileName: args.file.originalname,
+        fileName: this.sanitizeFileName(args.file.originalname),
         mimeType: args.file.mimetype,
         sizeBytes: args.file.size,
         classification: rule.classification,
         purpose: args.purpose,
         status: 'READY',
         storageKey: result.publicId,
-        provider: 'cloudinary',
+        // Persist the storage backend ('r2') so getSecureUrl / softDelete
+        // route to the right provider.
+        provider: this.media.providerTag,
         providerFileId: result.publicId,
         // PUBLIC files store the URL so we can hand it out without
         // a per-request signing call. PRIVATE files force getSecureUrl().
         providerUrl: rule.visibility === 'PUBLIC' ? result.secureUrl : null,
         uploadedBy: args.uploadedBy,
+        uploadedByType: args.uploadedByType ?? null,
         contentSha256,
         hashAlgorithm: HASH_ALGORITHM,
         hashedAt,
         lastVerifiedAt: hashedAt,
       },
     });
+    this.writeFileAudit({
+      action: 'file.uploaded',
+      actorId: args.uploadedBy,
+      actorType: args.uploadedByType,
+      resourceId: created.id,
+      metadata: { purpose: args.purpose, mimeType: args.file.mimetype, sizeBytes: args.file.size },
+    });
+    return { fileMetadata: created, mediaResult: result };
+  }
+
+  /**
+   * Phase 250 (#1) — register an asset that was uploaded to media
+   * OUTSIDE this service (the ~27 module-direct uploaders). Purely additive:
+   * the caller keeps its own upload + per-resource row; this adds the
+   * FileMetadata row so the integrity-verifier, audit, and orphan sweep can
+   * see the asset. Idempotent on storageKey (a retry returns the existing
+   * row). Best-effort callers should `.catch()` — a failed registration must
+   * not fail the upload that already succeeded. Pass `buffer` to hash inline;
+   * otherwise the integrity cron backfills the hash.
+   */
+  async registerExternalAsset(args: {
+    publicId: string;
+    url: string;
+    mimeType: string;
+    sizeBytes: number;
+    purpose: FilePurpose;
+    uploadedBy: string;
+    uploadedByType?: string | null;
+    fileName?: string;
+    buffer?: Buffer;
+  }): Promise<string | null> {
+    const rule = PURPOSE_RULES[args.purpose];
+    const contentSha256 = args.buffer ? hashBuffer(args.buffer) : null;
+    const now = new Date();
+    try {
+      const created = await this.prisma.fileMetadata.create({
+        data: {
+          fileName: this.sanitizeFileName(args.fileName ?? args.publicId),
+          mimeType: args.mimeType,
+          sizeBytes: args.sizeBytes,
+          classification: rule?.classification ?? 'PRODUCT_IMAGE',
+          purpose: args.purpose,
+          status: 'READY',
+          storageKey: args.publicId,
+          provider: this.media.providerTag,
+          providerFileId: args.publicId,
+          providerUrl: (rule?.visibility ?? 'PUBLIC') === 'PUBLIC' ? args.url : null,
+          uploadedBy: args.uploadedBy,
+          uploadedByType: args.uploadedByType ?? null,
+          ...(contentSha256
+            ? { contentSha256, hashAlgorithm: HASH_ALGORITHM, hashedAt: now, lastVerifiedAt: now }
+            : {}),
+        },
+      });
+      this.writeFileAudit({
+        action: 'file.registered',
+        actorId: args.uploadedBy,
+        actorType: args.uploadedByType,
+        resourceId: created.id,
+        metadata: { purpose: args.purpose, publicId: args.publicId },
+      });
+      return created.id;
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const existing = await this.prisma.fileMetadata.findUnique({
+          where: { storageKey: args.publicId },
+          select: { id: true },
+        });
+        return existing?.id ?? null;
+      }
+      this.logger.warn(`registerExternalAsset failed for ${args.publicId}: ${(e as Error).message}`);
+      return null;
+    }
   }
 
   // ── Signed-URL upload-intent (S3 path) ──────────────────────────
@@ -198,6 +391,7 @@ export class FileService {
     mimeType: string;
     sizeBytes: number;
     uploadedBy: string;
+    uploadedByType?: string | null;
   }): Promise<{
     fileId: string;
     uploadUrl: string;
@@ -207,7 +401,7 @@ export class FileService {
     const rule = PURPOSE_RULES[args.purpose];
     this.validateMeta(rule, args.fileName, args.mimeType, args.sizeBytes);
 
-    const presigned = this.s3.createUploadUrl({
+    const presigned = await this.r2.createUploadUrl({
       folder: `sportsmart/${rule.folder}`,
       filename: args.fileName,
       contentType: args.mimeType,
@@ -224,10 +418,11 @@ export class FileService {
         purpose: args.purpose,
         status: 'PENDING',
         storageKey: presigned.key,
-        provider: 's3',
+        provider: 'r2',
         providerFileId: presigned.key,
         providerUrl: rule.visibility === 'PUBLIC' ? presigned.publicUrl : null,
         uploadedBy: args.uploadedBy,
+        uploadedByType: args.uploadedByType ?? null,
         expiresAt,
       },
     });
@@ -283,23 +478,50 @@ export class FileService {
     return file;
   }
 
-  /** Short-lived signed URL for download. PUBLIC files redirect to providerUrl. */
-  async getSecureUrl(id: string): Promise<string> {
+  /**
+   * Phase 252 (#14) — owner-or-admin gate for a PRIVATE file. PUBLIC files
+   * (product images, banners, avatars) are world-readable by intent and
+   * pass freely. For PRIVATE files (KYC, bank proof, dispute/return/QC
+   * evidence, invoices, tickets) the caller must be the uploader or an
+   * admin — otherwise a leaked/guessed fileId is an IDOR into anyone's
+   * private documents. (A richer "can view the attached resource" check —
+   * e.g. the seller party to a dispute — is the surfaced follow-up; this
+   * owner-or-admin gate closes the cross-user PII leak.)
+   */
+  private assertCanView(file: FileMetadata, caller: FileCaller): void {
+    const rule = PURPOSE_RULES[file.purpose];
+    const isPublic = rule?.visibility === 'PUBLIC';
+    if (isPublic) return;
+    if (caller.isAdmin) return;
+    if (file.uploadedBy && file.uploadedBy === caller.actorId) return;
+    throw new ForbiddenAppException('Not allowed to access this file');
+  }
+
+  /** findById + owner/admin ACL — used by the metadata + secure-url reads. */
+  async findByIdForCaller(id: string, caller: FileCaller): Promise<FileMetadata> {
     const file = await this.findById(id);
+    this.assertCanView(file, caller);
+    return file;
+  }
+
+  /** Short-lived signed URL for download. PUBLIC files redirect to providerUrl. */
+  async getSecureUrl(id: string, caller: FileCaller): Promise<string> {
+    const file = await this.findById(id);
+    this.assertCanView(file, caller);
     // If we stored a providerUrl up front, the file is PUBLIC by intent.
     // PRIVATE files have providerUrl=null so we always go to the signing path.
     if (file.providerUrl) {
       return file.providerUrl;
     }
-    if (file.provider === 's3') {
-      return this.s3.createAccessUrl({ key: file.storageKey, expiresInSeconds: 300 });
+    if (file.provider === 'r2') {
+      return this.r2.createAccessUrl({ key: file.storageKey, expiresInSeconds: 300 });
     }
     if (file.provider === 'cloudinary') {
-      // PRIVATE Cloudinary files have providerUrl=null by design (we
+      // PRIVATE media files have providerUrl=null by design (we
       // don't surface the URL except via this authed endpoint). Derive
       // the canonical delivery URL from the stored publicId so the
       // caller — admin returns page, seller orders page — can render
-      // thumbnails. Cloudinary `type: 'upload'` URLs are publicly
+      // thumbnails. media `type: 'upload'` URLs are publicly
       // resolvable once known; the privacy contract is "you must
       // authenticate to learn the URL," not authenticated delivery.
       const publicId = file.providerFileId ?? file.storageKey;
@@ -309,7 +531,7 @@ export class FileService {
         : file.mimeType.startsWith('image/')
           ? 'image'
           : 'raw';
-      return this.cloudinary.urlFor(publicId, { resourceType });
+      return this.media.urlFor(publicId, { resourceType });
     }
     throw new BadRequestAppException(`Unsupported provider: ${file.provider}`);
   }
@@ -322,20 +544,60 @@ export class FileService {
     resourceId: string;
     caption?: string;
     attachedBy: string;
+    attachedByIsAdmin?: boolean;
   }): Promise<FileAttachment> {
     const file = await this.findById(args.fileId);
     if (file.status !== 'READY') {
       throw new BadRequestAppException('File is not READY — confirm upload first');
     }
-    return this.prisma.fileAttachment.create({
-      data: {
-        fileId: args.fileId,
-        resource: args.resource,
-        resourceId: args.resourceId,
-        caption: args.caption ?? null,
-        attachedBy: args.attachedBy,
-      },
-    });
+    const resource = (args.resource ?? '').trim().toLowerCase();
+
+    // Phase 252 (#2) — file-ownership: only the uploader (or an admin) may
+    // attach a file. Stops a caller who learns another user's fileId from
+    // re-using their KYC/evidence as their own product image.
+    if (!args.attachedByIsAdmin && file.uploadedBy !== args.attachedBy) {
+      throw new ForbiddenAppException('Not allowed to attach this file');
+    }
+    // Phase 252 (#4) — resource must be a known polymorphic target.
+    if (!ALLOWED_ATTACH_RESOURCES.has(resource)) {
+      throw new BadRequestAppException(`Unsupported attach resource "${args.resource}"`);
+    }
+    // Phase 252 (#3) — purpose ↔ resource compatibility (a KYC PDF cannot
+    // become a product_image; an INVOICE cannot become dispute evidence).
+    const compatible = PURPOSE_COMPATIBLE_RESOURCES[file.purpose];
+    if (compatible && !compatible.includes(resource)) {
+      throw new BadRequestAppException(
+        `A ${file.purpose} file cannot be attached as "${resource}"`,
+      );
+    }
+    // Phase 252 (#12) — idempotent: the unique (fileId, resource, resourceId)
+    // index turns a double-attach into a return-existing instead of a dup row.
+    try {
+      const row = await this.prisma.fileAttachment.create({
+        data: {
+          fileId: args.fileId,
+          resource,
+          resourceId: args.resourceId,
+          caption: args.caption ?? null,
+          attachedBy: args.attachedBy,
+        },
+      });
+      this.writeFileAudit({
+        action: 'file.attached',
+        actorId: args.attachedBy,
+        resourceId: args.fileId,
+        metadata: { resource, resourceId: args.resourceId, purpose: file.purpose },
+      });
+      return row;
+    } catch (e) {
+      if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === 'P2002') {
+        const existing = await this.prisma.fileAttachment.findFirst({
+          where: { fileId: args.fileId, resource, resourceId: args.resourceId },
+        });
+        if (existing) return existing;
+      }
+      throw e;
+    }
   }
 
   async listByResource(resource: string, resourceId: string) {
@@ -348,7 +610,7 @@ export class FileService {
 
   /**
    * Sync helper to derive a viewable URL for an attached file. Mirrors
-   * the cloudinary branch of getSecureUrl() but is sync (no DB lookup —
+   * the legacy-provider branch of getSecureUrl() but is sync (no DB lookup —
    * caller already has the file row) and so safe to call inside a list
    * enrichment loop. Used by controllers that surface file galleries
    * (shipment evidence, return evidence, ticket attachments) where the
@@ -370,7 +632,7 @@ export class FileService {
         : file.mimeType.startsWith('image/')
           ? 'image'
           : 'raw';
-      return this.cloudinary.urlFor(publicId, { resourceType });
+      return this.media.urlFor(publicId, { resourceType });
     }
     return '';
   }
@@ -454,10 +716,50 @@ export class FileService {
     if (!requesterIsAdmin && file.uploadedBy !== requesterId) {
       throw new ForbiddenAppException('Not allowed to delete this file');
     }
-    return this.prisma.fileMetadata.update({
+    // Phase 253 (#2) — actually remove the bytes from the storage provider.
+    // Previously this only flipped the DB row to DELETED, so a "deleted"
+    // KYC/evidence asset stayed publicly resolvable at its media URL
+    // forever (DPDP §6 right-to-erasure breach). Best-effort: if the
+    // provider delete fails we still soft-delete the row (the orphan-sweep
+    // can retry), but we surface the failure in the audit metadata.
+    const providerKey = file.providerFileId ?? file.storageKey;
+    let providerDeleted: { ok: boolean; reason?: string } = { ok: false };
+    if (file.provider === 'cloudinary' && providerKey) {
+      providerDeleted = await this.media.deleteAsset(providerKey, {
+        resourceType: file.mimeType.startsWith('video/')
+          ? 'video'
+          : file.mimeType.startsWith('image/')
+            ? 'image'
+            : 'raw',
+      });
+    } else if (file.provider === 'r2' && file.storageKey) {
+      // R2 objects are keyed by storageKey (the bucket key).
+      try {
+        await this.r2.deleteFile(file.storageKey);
+        providerDeleted = { ok: true };
+      } catch (e) {
+        providerDeleted = { ok: false, reason: (e as Error).message };
+      }
+    }
+    const updated = await this.prisma.fileMetadata.update({
       where: { id },
       data: { status: 'DELETED', deletedAt: new Date() },
     });
+    // Phase 252 (#13) — drop attachments so listByResource doesn't keep
+    // surfacing a now-deleted file as a broken thumbnail.
+    await this.prisma.fileAttachment.deleteMany({ where: { fileId: id } });
+    this.writeFileAudit({
+      action: 'file.deleted',
+      actorId: requesterId,
+      resourceId: id,
+      metadata: {
+        purpose: file.purpose,
+        adminOverride: requesterIsAdmin && file.uploadedBy !== requesterId,
+        providerDeleted: providerDeleted.ok,
+        providerDeleteError: providerDeleted.reason ?? null,
+      },
+    });
+    return updated;
   }
 
   // ── Validation helpers ──────────────────────────────────────────
@@ -484,5 +786,80 @@ export class FileService {
         `Unsupported file type "${mimeType}" for this kind`,
       );
     }
+  }
+
+  /**
+   * Phase 250 (#3) — content-vs-declared validation via magic bytes. The
+   * multipart Content-Type is client-controlled and trivially spoofable, so
+   * we sniff the actual leading bytes:
+   *  - if we positively detect a type, it must be allowed by the rule
+   *    (a real PNG renamed/declared as a PDF for an INVOICE is rejected;
+   *     an .exe sniffs to no known media signature → rejected);
+   *  - if the signature is unknown, only text/plain (which has no magic
+   *    bytes and is allowed only by OTHER) may pass.
+   */
+  private assertContentMatches(
+    rule: PurposeRule,
+    buffer: Buffer,
+    declaredMime: string,
+  ): void {
+    const detected = this.sniffMime(buffer);
+    if (detected) {
+      if (!rule.allowedMime.test(detected)) {
+        throw new BadRequestAppException(
+          `File content (detected ${detected}) does not match an allowed type for this kind`,
+        );
+      }
+      return;
+    }
+    if (declaredMime === 'text/plain' && rule.allowedMime.test('text/plain')) {
+      return;
+    }
+    throw new BadRequestAppException(
+      `Could not verify that the file content matches "${declaredMime}"`,
+    );
+  }
+
+  /** Detect a canonical mime from leading magic bytes; null if unknown. */
+  private sniffMime(buf: Buffer): string | null {
+    if (!buf || buf.length < 4) return null;
+    const b = buf;
+    // JPEG: FF D8 FF
+    if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return 'image/jpeg';
+    // PNG: 89 50 4E 47 0D 0A 1A 0A
+    if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4e && b[3] === 0x47) return 'image/png';
+    // GIF: 47 49 46 38
+    if (b[0] === 0x47 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x38) return 'image/gif';
+    // PDF: 25 50 44 46 (%PDF)
+    if (b[0] === 0x25 && b[1] === 0x50 && b[2] === 0x44 && b[3] === 0x46) return 'application/pdf';
+    if (b.length >= 12) {
+      // WEBP: RIFF....WEBP
+      if (
+        b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 &&
+        b[8] === 0x57 && b[9] === 0x45 && b[10] === 0x42 && b[11] === 0x50
+      ) {
+        return 'image/webp';
+      }
+      // MP4 / ISO-BMFF: bytes 4-7 = 'ftyp'
+      if (b[4] === 0x66 && b[5] === 0x74 && b[6] === 0x79 && b[7] === 0x70) {
+        return 'video/mp4';
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Phase 250 — strip path separators / control chars from the client-
+   * supplied filename so it can't become a traversal or header-injection
+   * vector in any downstream consumer (Content-Disposition, exports).
+   */
+  private sanitizeFileName(name: string | undefined): string {
+    const base = (name ?? 'file').split(/[\\/]/).pop() ?? 'file';
+    const cleaned = base
+      .replace(/[^A-Za-z0-9._\- ]/g, '_')
+      .replace(/\.{2,}/g, '_')
+      .trim()
+      .slice(0, 200);
+    return cleaned || 'file';
   }
 }

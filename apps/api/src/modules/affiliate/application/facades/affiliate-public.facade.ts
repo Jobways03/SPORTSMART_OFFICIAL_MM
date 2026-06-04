@@ -589,4 +589,36 @@ export class AffiliatePublicFacade {
         });
     }
   }
+
+  /**
+   * Phase 244 (coupon-codes audit #10) — cross-table code-collision
+   * guard for the admin discount-create path. Returns true when an
+   * AffiliateCouponCode already owns this code (case-insensitive, the
+   * same way customer-side resolution canonicalises), so the discount
+   * service can reject a collision that would otherwise render the
+   * affiliate's code unreachable (Discount lookup wins at checkout).
+   */
+  async couponCodeExists(code: string): Promise<boolean> {
+    const trimmed = (code || '').trim();
+    if (!trimmed) return false;
+    const row = await this.prisma.affiliateCouponCode.findFirst({
+      where: { code: { equals: trimmed, mode: 'insensitive' } },
+      select: { id: true },
+    });
+    return !!row;
+  }
+
+  /**
+   * Phase 243 (campaign-creation audit #15) — existence check for the
+   * affiliateId an admin attaches to a Discount, so a pasted garbage id
+   * fails at edit time instead of silently breaking the redemption
+   * attribution pipeline later.
+   */
+  async affiliateExists(affiliateId: string): Promise<boolean> {
+    const row = await this.prisma.affiliate.findUnique({
+      where: { id: affiliateId },
+      select: { id: true },
+    });
+    return !!row;
+  }
 }

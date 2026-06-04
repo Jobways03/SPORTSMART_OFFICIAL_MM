@@ -24,10 +24,18 @@ import { SellerAllocationService } from '../../src/modules/catalog/application/s
 describe('SellerAllocationService — deterministic findMany order', () => {
   const makeService = () => {
     const prisma: any = {
-      postOffice: {
-        findFirst: jest.fn().mockResolvedValue({ latitude: 0, longitude: 0 }),
+      // Phase 64 — allocate() now checks product status before routing.
+      product: {
+        findUnique: jest
+          .fn()
+          .mockResolvedValue({ status: 'ACTIVE', isDeleted: false }),
       },
       sellerProductMapping: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      // Phase 159m — franchise discovery first reads the pincode-to-franchise
+      // territory map.
+      franchisePincodeMapping: {
         findMany: jest.fn().mockResolvedValue([]),
       },
       franchiseCatalogMapping: {
@@ -40,7 +48,19 @@ describe('SellerAllocationService — deterministic findMany order', () => {
     const env: any = {
       getNumber: (_k: string, d: number) => d,
     };
-    const svc = new SellerAllocationService(prisma, env);
+    // Phase 4 — coordinate lookups go through PostOfficeCacheService, not the
+    // raw post_offices table. Phase 52 — reservation path writes to the ledger.
+    const postOfficeCache: any = {
+      lookup: jest.fn().mockResolvedValue({ latitude: 0, longitude: 0 }),
+      lookupMany: jest.fn().mockResolvedValue(new Map()),
+    };
+    const stockLedger: any = { record: jest.fn().mockResolvedValue(undefined) };
+    const svc = new SellerAllocationService(
+      prisma,
+      env,
+      postOfficeCache,
+      stockLedger,
+    );
     return { svc, prisma };
   };
 
@@ -55,7 +75,10 @@ describe('SellerAllocationService — deterministic findMany order', () => {
 
     expect(prisma.sellerProductMapping.findMany).toHaveBeenCalled();
     const callArg = prisma.sellerProductMapping.findMany.mock.calls[0][0];
-    expect(callArg.orderBy).toEqual({ id: 'asc' });
+    // Phase 77 — the seller query gained the same variant-priority primary sort
+    // as the franchise side (variant-specific rows first for dedup precedence),
+    // with id-asc preserved as the deterministic tied-score tiebreak.
+    expect(callArg.orderBy).toEqual([{ variantId: 'desc' }, { id: 'asc' }]);
   });
 
   it('franchise catalog findMany keeps id-asc as the deterministic tiebreak', async () => {

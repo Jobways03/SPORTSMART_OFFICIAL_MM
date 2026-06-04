@@ -25,6 +25,12 @@ const sh = (cmd: string): string =>
 
 const EXCLUDED = new Set<string>([
   // Add file paths here (relative to src/) only with a clear reason.
+  //
+  // Not an HTTP controller in the Swagger surface — this is a Jest spec
+  // that declares throwaway local @Controller('test/...') fixture classes
+  // to exercise the route-authz inventory scanner. Tagging them would be
+  // meaningless (they never mount in the app).
+  'core/authorization/route-authz-inventory.service.spec.ts',
 ]);
 
 describe('Swagger — every @Controller has @ApiTags', () => {

@@ -16,6 +16,7 @@ import {
   AuditReadinessReport,
   BlockerSummary,
   Gstr8Summary,
+  MarketplaceCommissionGstr1Summary,
   TaxMode,
 } from '@/services/admin-tax.service';
 
@@ -39,6 +40,7 @@ type SubPage = {
 
 const SUB_PAGES: SubPage[] = [
   { group: 'queues',  href: '/dashboard/tax/timebar-review',          title: 'Time-bar review',       desc: 'Returns flagged for finance review or beyond the credit-note cutoff.',                  icon: 'clock' },
+  { group: 'queues',  href: '/dashboard/tax/credit-notes',            title: 'Credit notes',          desc: 'Section 34 credit notes issued on QC-approved returns — register + status.',           icon: 'receipt' },
   { group: 'queues',  href: '/dashboard/tax/wallet-adjustments',       title: 'Wallet adjustments',    desc: 'Goodwill credits & time-barred refunds awaiting dual approval.',                        icon: 'wallet' },
   { group: 'queues',  href: '/dashboard/tax/eway-bills',               title: 'E-way bills',           desc: 'CBIC Rule 138 — generate, cancel, or override e-way bills per consignment.',           icon: 'truck' },
   { group: 'queues',  href: '/dashboard/tax/einvoices',                title: 'E-invoices / IRN',      desc: 'NIC IRP IRN lifecycle — generate, cancel, and retry failed e-invoices.',               icon: 'receipt' },
@@ -72,13 +74,29 @@ const GROUP_META: Record<SubPage['group'], { title: string; hint: string }> = {
 
 // Friendlier title for blocker codes (shown next to the raw code).
 const BLOCKER_TITLE: Record<string, string> = {
-  'product.missing_hsn':       'Products without HSN code',
-  'product.missing_rate':      'Taxable products without GST rate',
-  'seller.missing_gstin':      'Active sellers without GSTIN',
-  'einvoice.unresolved':       'E-invoices stuck past retry cap',
-  'pdf.unresolved':            'Invoice PDFs failed past retry cap',
-  'tcs.unfiled':               'TCS rows past the GSTR-8 cutoff',
-  'timebar.requires_review':   'Returns flagged for finance review',
+  'product.missing_hsn':            'Products without HSN code',
+  'product.missing_rate':           'Taxable products without GST rate',
+  // Phase 163 — new blocker classes.
+  'product.missing_uqc':            'Taxable products without UQC',
+  'product.unverified_config':      'Products with un-attested tax config',
+  'seller.missing_gstin':           'Active sellers without verified GSTIN',
+  'seller.gstin_legal_name_mismatch': 'Sellers with GSTIN legal-name mismatch',
+  'platform.gst_profile_missing':   'No default platform GST profile',
+  'invoice.draft_stuck':            'Invoices stuck in DRAFT',
+  'einvoice.unresolved':            'E-invoices stuck past retry cap',
+  'pdf.unresolved':                 'Invoice PDFs failed past retry cap',
+  'ewaybill.unresolved':            'E-way bills stuck / drifted',
+  'tcs.unfiled':                    'TCS rows past the GSTR-8 cutoff',
+  'tds.withheld_undeposited':       '§194-O TDS withheld, not deposited',
+  'timebar.requires_review':        'Returns flagged for finance review',
+};
+
+// Phase 163 (#11) — severity chip styling.
+const SEVERITY_STYLE: Record<string, { label: string; color: string; bg: string }> = {
+  CRITICAL: { label: 'Critical', color: '#b91c1c', bg: '#fee2e2' },
+  HIGH:     { label: 'High',     color: '#b45309', bg: '#fef3c7' },
+  MEDIUM:   { label: 'Medium',   color: '#1d4ed8', bg: '#dbeafe' },
+  LOW:      { label: 'Low',      color: '#525A65', bg: '#F3F4F6' },
 };
 
 // ── Page ──────────────────────────────────────────────────────────
@@ -88,16 +106,29 @@ export default function TaxDashboardPage() {
   const [readiness, setReadiness] = useState<AuditReadinessReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshedAt, setRefreshedAt] = useState<Date | null>(null);
+  // Phase 163 (#17) — surface a failed readiness load instead of silently
+  // rendering an empty "all clear" dashboard.
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
-      const [m, r] = await Promise.all([
-        adminTaxService.getMode().catch(() => null),
-        adminTaxService.getAuditReadiness().catch(() => null),
+      const [mRes, rRes] = await Promise.allSettled([
+        adminTaxService.getMode(),
+        adminTaxService.getAuditReadiness(),
       ]);
-      setMode(m?.data?.mode ?? null);
-      setReadiness(r?.data ?? null);
+      setMode(mRes.status === 'fulfilled' ? mRes.value?.data?.mode ?? null : null);
+      if (rRes.status === 'fulfilled') {
+        setReadiness(rRes.value?.data ?? null);
+      } else {
+        // Don't keep a stale "Ready" on screen — clear it and warn.
+        setReadiness(null);
+        setError(
+          (rRes.reason as { message?: string })?.message ??
+            'Failed to load audit-readiness. Do NOT treat the posture as clear — retry.',
+        );
+      }
       setRefreshedAt(new Date());
     } finally {
       setLoading(false);
@@ -119,12 +150,29 @@ export default function TaxDashboardPage() {
         </p>
       </div>
 
+      {/* ── Error banner (#17) ────────────────────────────── */}
+      {error && (
+        <div style={{
+          marginBottom: 16, padding: '12px 16px', borderRadius: 12,
+          border: '1px solid #fca5a5', background: '#fef2f2', color: '#b91c1c',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap',
+        }}>
+          <span style={{ fontSize: 13, fontWeight: 600 }}>
+            ⚠️ {error}
+          </span>
+          <button onClick={() => void refresh()} style={btnGhost} disabled={loading}>
+            {loading ? 'Retrying…' : 'Retry'}
+          </button>
+        </div>
+      )}
+
       {/* ── KPI strip ─────────────────────────────────────── */}
       <KpiStrip
         mode={mode}
         readiness={readiness}
         loading={loading}
         refreshedAt={refreshedAt}
+        hasError={!!error}
       />
 
       {/* ── Mode control ──────────────────────────────────── */}
@@ -158,14 +206,19 @@ function KpiStrip({
   readiness,
   loading,
   refreshedAt,
+  hasError,
 }: {
   mode: TaxMode | null;
   readiness: AuditReadinessReport | null;
   loading: boolean;
   refreshedAt: Date | null;
+  hasError?: boolean;
 }) {
   const total = readiness?.totalBlockers ?? 0;
   const ready = readiness?.ready ?? false;
+  // Phase 163 (#17) — when the readiness load failed/returned nothing, the
+  // posture is UNKNOWN, not "Ready". Never paint a reassuring green.
+  const unavailable = readiness === null;
   const byCode = (code: string) => readiness?.blockers.find((b) => b.code === code)?.count ?? 0;
 
   const modeTone: KpiTone =
@@ -187,10 +240,16 @@ function KpiStrip({
       />
       <Kpi
         label="Audit blockers"
-        value={ready ? 'Ready' : total.toLocaleString('en-IN')}
-        tone={ready ? 'success' : total > 0 ? 'danger' : 'muted'}
-        hint={ready ? 'Cleared to flip STRICT.' : `${total} item${total === 1 ? '' : 's'} blocking STRICT.`}
-        loading={loading && readiness === null}
+        value={unavailable ? 'Unavailable' : ready ? 'Ready' : total.toLocaleString('en-IN')}
+        tone={unavailable ? 'warning' : ready ? 'success' : total > 0 ? 'danger' : 'muted'}
+        hint={
+          unavailable
+            ? (hasError ? 'Readiness failed to load — retry; do not assume clear.' : 'Loading…')
+            : ready
+              ? 'Cleared to flip STRICT.'
+              : `${total} item${total === 1 ? '' : 's'} blocking STRICT.`
+        }
+        loading={loading && readiness === null && !hasError}
       />
       <Kpi
         label="Sellers missing GSTIN"
@@ -423,23 +482,40 @@ function SubPageCard({ page }: { page: SubPage }) {
 
 // ── Audit readiness ───────────────────────────────────────────────
 
-function blockerFixLink(code: string): { label: string; href: string } | null {
-  switch (code) {
-    case 'einvoice.unresolved':
-    case 'pdf.unresolved':
-      return { label: 'Open e-invoices', href: '/dashboard/tax/einvoices' };
-    case 'timebar.requires_review':
-      return { label: 'Open time-bar queue', href: '/dashboard/tax/timebar-review' };
-    case 'tcs.unfiled':
-      return { label: 'Jump to GSTR-8', href: '#gstr8' };
-    case 'seller.missing_gstin':
-      return { label: 'Open seller GSTINs', href: '/dashboard/tax/seller-gstins' };
-    case 'product.missing_hsn':
-    case 'product.missing_rate':
-      return null;
-    default:
-      return null;
-  }
+// Phase 163 (#14 / #12) — fix-link is data-driven. A per-code override
+// gives the most specific destination; otherwise we fall back to the
+// blocker's resourceType, so a NEW blocker class is navigable the moment
+// the backend emits it — no UI change needed. Product blockers (#14) now
+// have a jump target (previously they returned null).
+function blockerFixLink(blocker: BlockerSummary): { label: string; href: string } | null {
+  const byCode: Record<string, { label: string; href: string }> = {
+    'einvoice.unresolved':            { label: 'Open e-invoices',     href: '/dashboard/tax/einvoices' },
+    'pdf.unresolved':                 { label: 'Open e-invoices',     href: '/dashboard/tax/einvoices' },
+    'timebar.requires_review':        { label: 'Open time-bar queue', href: '/dashboard/tax/timebar-review' },
+    'tcs.unfiled':                    { label: 'Jump to GSTR-8',      href: '#gstr8' },
+    'tds.withheld_undeposited':       { label: 'Open §194-O TDS',     href: '/dashboard/tax/tds194o' },
+    'seller.missing_gstin':           { label: 'Open seller GSTINs',  href: '/dashboard/tax/seller-gstins' },
+    'seller.gstin_legal_name_mismatch': { label: 'Open seller GSTINs', href: '/dashboard/tax/seller-gstins' },
+    'platform.gst_profile_missing':   { label: 'Open platform GST',   href: '/dashboard/tax/platform-gst' },
+    'ewaybill.unresolved':            { label: 'Open e-way bills',    href: '/dashboard/tax/eway-bills' },
+    'product.missing_hsn':            { label: 'Open products',       href: '/dashboard/products?taxStatus=missing_hsn' },
+    'product.missing_rate':           { label: 'Open products',       href: '/dashboard/products?taxStatus=missing_rate' },
+    'product.missing_uqc':            { label: 'Open products',       href: '/dashboard/products?taxStatus=missing_uqc' },
+    'product.unverified_config':      { label: 'Bulk-verify config',  href: '/dashboard/tax/bulk-verify' },
+  };
+  if (byCode[blocker.code]) return byCode[blocker.code];
+
+  const byResource: Partial<Record<BlockerSummary['resourceType'], { label: string; href: string }>> = {
+    product:            { label: 'Open products',      href: '/dashboard/products' },
+    seller:             { label: 'Open seller GSTINs', href: '/dashboard/tax/seller-gstins' },
+    taxDocument:        { label: 'Open e-invoices',    href: '/dashboard/tax/einvoices' },
+    return:             { label: 'Open time-bar queue', href: '/dashboard/tax/timebar-review' },
+    tcsLedger:          { label: 'Jump to GSTR-8',     href: '#gstr8' },
+    tdsLedger:          { label: 'Open §194-O TDS',    href: '/dashboard/tax/tds194o' },
+    ewayBill:           { label: 'Open e-way bills',   href: '/dashboard/tax/eway-bills' },
+    platformGstProfile: { label: 'Open platform GST',  href: '/dashboard/tax/platform-gst' },
+  };
+  return byResource[blocker.resourceType] ?? null;
 }
 
 function ReadinessSection({
@@ -503,9 +579,10 @@ function ReadinessSection({
 }
 
 function BlockerRow({ blocker }: { blocker: BlockerSummary }) {
-  const link = blocker.count > 0 ? blockerFixLink(blocker.code) : null;
+  const link = blocker.count > 0 ? blockerFixLink(blocker) : null;
   const isBlocking = blocker.count > 0;
   const title = BLOCKER_TITLE[blocker.code] ?? blocker.code;
+  const sev = SEVERITY_STYLE[blocker.severity] ?? SEVERITY_STYLE.LOW;
   const samples = blocker.sampleIds.slice(0, 3);
   const extra = Math.max(0, blocker.sampleIds.length - samples.length);
 
@@ -518,7 +595,16 @@ function BlockerRow({ blocker }: { blocker: BlockerSummary }) {
             background: isBlocking ? '#b91c1c' : '#15803d',
           }} />
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#0F1115' }}>{title}</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: '#0F1115' }}>{title}</span>
+              {/* Phase 163 (#11) — severity chip. */}
+              <span style={{
+                fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em',
+                color: sev.color, background: sev.bg, borderRadius: 9999, padding: '1px 7px',
+              }}>
+                {sev.label}
+              </span>
+            </div>
             <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 11, color: '#7A828F', marginTop: 2 }}>
               {blocker.code}
             </div>
@@ -624,14 +710,22 @@ function Gstr8Section() {
   const [pageSize] = useState(DEFAULT_PAGE_SIZE);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [payRef, setPayRef] = useState('');
+  // Phase 160 (audit #11) — optional proof-of-payment file id.
+  const [payProofFileId, setPayProofFileId] = useState('');
   // Phase 159z (audit #6) — captured in the UI alongside the FILED click.
   const [nicArn, setNicArn] = useState('');
+  // Phase 160 (audit B1) — certificate-number prefix for issuance.
+  const [certPrefix, setCertPrefix] = useState('TCS');
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [busy, setBusy] = useState<
-    'load' | 'filed' | 'paid' | 'csv' | 'json' | 'reverse' | null
+    'load' | 'filed' | 'paid' | 'cert' | 'csv' | 'json' | 'reverse' | null
   >(null);
   const [reversingId, setReversingId] = useState<string | null>(null);
   const [reverseReason, setReverseReason] = useState('');
+  // Phase 160 (audit B4 / #4) — stragglers from the last bulk action.
+  const [skipped, setSkipped] = useState<
+    { ledgerId: string; currentStatus: string }[]
+  >([]);
 
   const periodInvalid = !/^\d{4}-\d{2}$/.test(period);
   const periodIsFuture = isFuturePeriod(period);
@@ -649,6 +743,7 @@ function Gstr8Section() {
     }
     setMsg(null);
     setBusy('load');
+    setSkipped([]);
     try {
       const res = await adminTaxService.getGstr8Summary(period, {
         page: nextPage,
@@ -680,8 +775,10 @@ function Gstr8Section() {
       return;
     }
     setBusy('filed');
+    setSkipped([]);
     try {
       const res = await adminTaxService.markFiled([...selected], nicArn.trim());
+      setSkipped(res.data?.skipped ?? []);
       setMsg({
         kind: 'ok',
         text: `Marked FILED — ${res.data?.flipped} of ${res.data?.requested} rows (ARN ${res.data?.nicArn}).`,
@@ -696,13 +793,42 @@ function Gstr8Section() {
   const markPaid = async () => {
     if (selected.size === 0 || !payRef) return;
     setBusy('paid');
+    setSkipped([]);
     try {
-      const res = await adminTaxService.markPaid([...selected], payRef);
+      const res = await adminTaxService.markPaid(
+        [...selected],
+        payRef,
+        payProofFileId.trim() || undefined,
+      );
+      setSkipped(res.data?.skipped ?? []);
       setMsg({ kind: 'ok', text: `Marked PAID_TO_GOVT — ${res.data?.flipped} of ${res.data?.requested} rows.` });
       setPayRef('');
+      setPayProofFileId('');
       await loadSummary(page);
     } catch (err: any) {
       setMsg({ kind: 'err', text: err?.message ?? 'markPaid failed' });
+    } finally { setBusy(null); }
+  };
+
+  // Phase 160 (§52 lifecycle audit B1 / #12) — issue §52(5) certificates
+  // for the selected PAID_TO_GOVT rows. Per-row certificate numbers.
+  const issueCertificates = async () => {
+    if (selected.size === 0) return;
+    setBusy('cert');
+    setSkipped([]);
+    try {
+      const res = await adminTaxService.markCertificatesIssued(
+        [...selected],
+        certPrefix.trim() || undefined,
+      );
+      setSkipped(res.data?.skipped ?? []);
+      setMsg({
+        kind: 'ok',
+        text: `Issued ${res.data?.flipped} of ${res.data?.requested} TCS certificate(s).`,
+      });
+      await loadSummary(page);
+    } catch (err: any) {
+      setMsg({ kind: 'err', text: err?.message ?? 'certificate issuance failed' });
     } finally { setBusy(null); }
   };
 
@@ -806,7 +932,35 @@ function Gstr8Section() {
             <Stat label="Gross taxable"    value={`₹${paiseToRupees(summary.totalGrossInPaise)}`} />
             <Stat label="Net taxable"      value={`₹${paiseToRupees(summary.totalNetTaxableInPaise)}`} />
             <Stat label="Total TCS"        value={`₹${paiseToRupees(summary.totalTcsInPaise)}`} accent />
+            {/* Phase 160 (audit #13) — carry-forward now visible. */}
+            <Stat label="Carry-forward"    value={`₹${paiseToRupees(summary.totalAdjustmentCarriedForwardInPaise ?? '0')}`} />
+            {/* Phase 160 (audit B1) — certificate-workflow counters. */}
+            <Stat label="Paid / Certified" value={`${summary.statusCounts?.PAID_TO_GOVT ?? 0} / ${summary.statusCounts?.CERTIFICATE_ISSUED ?? 0}`} />
           </div>
+
+          {/* Phase 160 (audit #9 / #10) — period-level compute warnings. */}
+          {(summary.warnings?.rateVariance || summary.warnings?.carryForward) && (
+            <div style={{
+              marginTop: 12, padding: '8px 12px', borderRadius: 10, fontSize: 12.5,
+              border: '1px solid #fde68a', background: '#fffbeb', color: '#92400e',
+            }}>
+              {summary.warnings?.rateVariance && (
+                <div>
+                  ⚠️ Rate variance — rows in this period were computed at multiple
+                  TCS rates ({summary.warnings.rateVariance.distinctRatesBps
+                    .map((b) => `${(b / 100).toFixed(2)}%`)
+                    .join(', ')}). Confirm the mid-period rate change is intended.
+                </div>
+              )}
+              {summary.warnings?.carryForward && (
+                <div>
+                  ℹ️ {summary.warnings.carryForward.rowCount} row(s) carry a
+                  negative-net adjustment forward (₹
+                  {paiseToRupees(summary.warnings.carryForward.totalInPaise)}).
+                </div>
+              )}
+            </div>
+          )}
 
           <div style={{ marginTop: 12, overflow: 'hidden', border: '1px solid #E5E7EB', borderRadius: 12 }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
@@ -830,6 +984,7 @@ function Gstr8Section() {
                   <th style={{ ...th, textAlign: 'right' }}>TCS</th>
                   <th style={th}>Status</th>
                   <th style={th}>NIC ARN</th>
+                  <th style={th}>Certificate</th>
                   <th style={th}>Actions</th>
                 </tr>
               </thead>
@@ -844,6 +999,13 @@ function Gstr8Section() {
                     </td>
                     <td style={{ ...td, fontFamily: 'ui-monospace, monospace', fontSize: 12, color: '#0F1115' }}>
                       {r.supplierGstin ?? <span style={{ color: '#7A828F' }}>—</span>}
+                      {/* Phase 160 (audit #9) — per-row compute warning flag. */}
+                      {(r.computeWarningsJson?.length ?? 0) > 0 && (
+                        <span
+                          title={r.computeWarningsJson!.map((w) => w.message).join('\n')}
+                          style={{ marginLeft: 6, cursor: 'help' }}
+                        >⚠️</span>
+                      )}
                     </td>
                     <td style={td}>
                       {r.seller?.sellerShopName || r.seller?.sellerName || (
@@ -865,6 +1027,22 @@ function Gstr8Section() {
                     <td style={{ ...td, fontFamily: 'ui-monospace, monospace', fontSize: 11 }}>
                       {r.nicArn ?? <span style={{ color: '#7A828F' }}>—</span>}
                     </td>
+                    {/* Phase 160 (audit B1) — certificate number + download link. */}
+                    <td style={{ ...td, fontSize: 11 }}>
+                      {r.status === 'CERTIFICATE_ISSUED' && r.certificateNumber ? (
+                        <a
+                          href={adminTaxService.tcsCertificateHtmlUrl(r.id)}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: '#0e7490', fontWeight: 600, textDecoration: 'underline' }}
+                          title="Open the §52(5) TCS certificate (Print → Save as PDF)"
+                        >
+                          {r.certificateNumber}
+                        </a>
+                      ) : (
+                        <span style={{ color: '#7A828F' }}>—</span>
+                      )}
+                    </td>
                     <td style={td}>
                       {r.status !== 'REVERSED' && (
                         <button
@@ -879,7 +1057,7 @@ function Gstr8Section() {
                   </tr>
                 ))}
                 {summary.rows.length === 0 && (
-                  <tr><td colSpan={9} style={{ ...td, textAlign: 'center', color: '#7A828F', padding: 24 }}>
+                  <tr><td colSpan={10} style={{ ...td, textAlign: 'center', color: '#7A828F', padding: 24 }}>
                     No TCS rows for {period} (NIL filing).
                   </td></tr>
                 )}
@@ -933,7 +1111,12 @@ function Gstr8Section() {
               <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                 <input
                   value={payRef} onChange={(e) => setPayRef(e.target.value)}
-                  placeholder="UTR / payment ref" style={{ ...input, width: 180 }}
+                  placeholder="CIN / UTR (≥8, has digit)" style={{ ...input, width: 200 }}
+                />
+                {/* Phase 160 (audit #11) — optional challan proof file id. */}
+                <input
+                  value={payProofFileId} onChange={(e) => setPayProofFileId(e.target.value)}
+                  placeholder="Challan file id (optional)" style={{ ...input, width: 180 }}
                 />
                 <button
                   onClick={markPaid}
@@ -942,6 +1125,48 @@ function Gstr8Section() {
                 >
                   {busy === 'paid' ? 'Marking…' : 'Mark PAID_TO_GOVT'}
                 </button>
+              </div>
+              {/* Phase 160 (audit B1 / #12) — terminal stage: issue §52(5)
+                  certificates for selected PAID_TO_GOVT rows. */}
+              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                <input
+                  value={certPrefix} onChange={(e) => setCertPrefix(e.target.value.replace(/[^A-Za-z0-9]/g, '').toUpperCase())}
+                  placeholder="Cert prefix" style={{ ...input, width: 110 }}
+                  maxLength={12}
+                />
+                <button
+                  onClick={issueCertificates}
+                  style={btnSecondary}
+                  disabled={selected.size === 0 || busy === 'cert'}
+                  title="Furnish the GST §52(5) TCS certificate to the selected suppliers (PAID_TO_GOVT rows only)"
+                >
+                  {busy === 'cert' ? 'Issuing…' : 'Issue certificates'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Phase 160 (audit B4 / #4) — show the exact stragglers a bulk
+              action skipped, with their current status, so month-end runs
+              have an actionable signal instead of a bare count. */}
+          {skipped.length > 0 && (
+            <div style={{
+              marginTop: 12, padding: 12, background: '#fffbeb',
+              border: '1px solid #fde68a', borderRadius: 12,
+            }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: '#92400e', marginBottom: 6 }}>
+                {skipped.length} row(s) were skipped (not in the required state):
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                {skipped.map((s) => (
+                  <span key={s.ledgerId} style={{
+                    fontFamily: 'ui-monospace, monospace', fontSize: 11,
+                    background: '#fff', border: '1px solid #fde68a', borderRadius: 8,
+                    padding: '2px 8px', color: '#92400e',
+                  }}>
+                    {s.ledgerId.slice(0, 8)}… → {s.currentStatus}
+                  </span>
+                ))}
               </div>
             </div>
           )}
@@ -1059,41 +1284,218 @@ function Gstr1Section() {
 }
 
 // ── Marketplace GSTR-1 (own filing) — commission section ─────────
+//
+// Phase 159aa rewrite (Marketplace Commission GSTR-1 audit remediation):
+//   #7   JSON download alongside CSV.
+//   #11  Place-of-supply shown per row.
+//   #12  IRN column (NULL when EINVOICE_PROVIDER=stub).
+//   #15  Tax-split drift warnings surfaced in a yellow banner.
+//   #16  Preview table — B2B / B2C / CDNR section samples + totals.
 
 function MarketplaceCommissionGstrSection() {
   const [period, setPeriod] = useState(defaultFilingPeriod());
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<'load' | 'csv' | 'json' | null>(null);
+  const [summary, setSummary] = useState<MarketplaceCommissionGstr1Summary | null>(null);
   const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
-  const download = async () => {
-    setMsg(null); setBusy(true);
+  const periodInvalid = !/^\d{4}-\d{2}$/.test(period);
+  const periodFuture = !periodInvalid && period > currentIstFilingPeriod();
+  const blocked = periodInvalid || periodFuture;
+
+  const loadSummary = async () => {
+    if (blocked) {
+      setMsg({
+        kind: 'err',
+        text: periodFuture ? 'Filing period is in the future' : 'Period must be YYYY-MM',
+      });
+      return;
+    }
+    setMsg(null); setBusy('load');
+    try {
+      const res = await adminTaxService.marketplaceCommissionGstr1Summary(period);
+      setSummary(res.data ?? null);
+    } catch (err: any) {
+      setMsg({ kind: 'err', text: err?.message ?? 'Failed to load summary' });
+    } finally { setBusy(null); }
+  };
+
+  const downloadCsv = async () => {
+    if (blocked) return;
+    setMsg(null); setBusy('csv');
     try {
       const url = adminTaxService.marketplaceCommissionGstr1CsvUrl(period);
       window.open(url, '_blank', 'noopener,noreferrer');
     } catch (err: any) {
-      setMsg({ kind: 'err', text: err?.message ?? 'Download failed' });
-    } finally { setBusy(false); }
+      setMsg({ kind: 'err', text: err?.message ?? 'CSV download failed' });
+    } finally { setBusy(null); }
+  };
+
+  const downloadJson = async () => {
+    if (blocked) return;
+    setMsg(null); setBusy('json');
+    try { await adminTaxService.marketplaceCommissionGstr1Json(period); }
+    catch (err: any) { setMsg({ kind: 'err', text: err?.message ?? 'JSON download failed' }); }
+    finally { setBusy(null); }
   };
 
   return (
     <section style={card}>
       <h2 style={cardHeading}>Marketplace GSTR-1 — Commission section (SAC 9985)</h2>
       <p style={{ margin: '4px 0 0', fontSize: 13, color: '#525A65', maxWidth: 720 }}>
-        Marketplace's <em>own</em> GSTR-1 filing for commission charged to sellers. Aggregated per
-        (seller GSTIN, state) — CGST/SGST if intra-state with the marketplace, IGST otherwise.
+        Marketplace's <em>own</em> GSTR-1 filing for commission charged to sellers. CBIC §4 B2B per-invoice
+        rows for GSTIN-registered sellers, §7 B2C aggregated for unregistered sellers, §9B credit notes for
+        commission reversals.
       </p>
       <div style={{ marginTop: 14, display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
         <Field label="Filing period">
           <input
-            value={period} onChange={(e) => setPeriod(e.target.value)}
-            placeholder="2026-04" style={input}
+            type="month"
+            value={period}
+            onChange={(e) => setPeriod(e.target.value)}
+            max={currentIstFilingPeriod()}
+            style={input}
           />
         </Field>
-        <button onClick={download} style={btnPrimary} disabled={busy || !period}>
-          <Icon name="download" size={14} /> {busy ? 'Opening…' : 'Download CSV'}
+        <button onClick={loadSummary} style={btnPrimary} disabled={busy === 'load' || blocked}>
+          {busy === 'load' ? 'Loading…' : 'Load preview'}
         </button>
+        <button onClick={downloadCsv} style={btnGhost} disabled={busy === 'csv' || blocked}>
+          <Icon name="download" size={14} /> {busy === 'csv' ? 'Opening…' : 'Download CSV'}
+        </button>
+        <button onClick={downloadJson} style={btnGhost} disabled={busy === 'json' || blocked}>
+          <Icon name="download" size={14} /> {busy === 'json' ? 'Downloading…' : 'Download JSON'}
+        </button>
+        {periodFuture && (
+          <span style={{ fontSize: 12, color: '#b91c1c', fontWeight: 600 }}>
+            Period is in the future — exports disabled.
+          </span>
+        )}
       </div>
       {msg && <Banner msg={msg} />}
+
+      {summary && (
+        <>
+          {summary.warnings.length > 0 && (
+            <div style={{
+              marginTop: 12, padding: 10, borderRadius: 8,
+              background: '#fef3c7', border: '1px solid #fde68a', color: '#92400e',
+              fontSize: 12,
+            }}>
+              <strong>Drift warnings</strong>
+              <ul style={{ margin: '4px 0 0 16px' }}>
+                {summary.warnings.map((w, i) => (<li key={i}>{w}</li>))}
+              </ul>
+            </div>
+          )}
+          <div style={{ marginTop: 16, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
+            <Stat label="§4 B2B invoices"   value={summary.totals.b2bInvoiceCount.toLocaleString('en-IN')} />
+            <Stat label="§7 B2C buckets"    value={summary.totals.b2cBucketCount.toLocaleString('en-IN')} />
+            <Stat label="§9B credit notes"  value={summary.totals.creditNoteCount.toLocaleString('en-IN')} />
+            <Stat label="Taxable value"     value={`₹${paiseToRupees(summary.totals.totalTaxableInPaise)}`} />
+            <Stat label="GST"               value={`₹${paiseToRupees(summary.totals.totalGstInPaise)}`} accent />
+          </div>
+
+          {summary.sample.b2b.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <h3 style={{ margin: '0 0 6px', fontSize: 13, color: '#0F1115' }}>§4 B2B sample (first 25)</h3>
+              <div style={{ overflow: 'auto', border: '1px solid #E5E7EB', borderRadius: 12 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: '#FAFAFA', borderBottom: '1px solid #E5E7EB' }}>
+                      <th style={th}>Invoice</th>
+                      <th style={th}>Date</th>
+                      <th style={th}>Recipient GSTIN</th>
+                      <th style={th}>Recipient</th>
+                      <th style={th}>PoS</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Taxable</th>
+                      <th style={{ ...th, textAlign: 'right' }}>GST</th>
+                      <th style={th}>Split</th>
+                      <th style={th}>IRN</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {summary.sample.b2b.map((r) => (
+                      <tr key={r.invoiceNumber} style={{ borderTop: '1px solid #F3F4F6' }}>
+                        <td style={{ ...td, fontFamily: 'ui-monospace, monospace' }}>{r.invoiceNumber || '—'}</td>
+                        <td style={td}>{r.invoiceDate}</td>
+                        <td style={{ ...td, fontFamily: 'ui-monospace, monospace' }}>{r.recipientGstin}</td>
+                        <td style={td}>{r.recipientLegalName || '—'}</td>
+                        <td style={td}>{r.placeOfSupplyStateCode}</td>
+                        <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>₹{paiseToRupees(r.commissionInPaise)}</td>
+                        <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>₹{paiseToRupees(r.totalGstInPaise)}</td>
+                        <td style={td}>{r.taxSplit}</td>
+                        <td style={{ ...td, fontFamily: 'ui-monospace, monospace', fontSize: 10 }}>{r.irn ?? '—'}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {summary.sample.b2cs.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <h3 style={{ margin: '0 0 6px', fontSize: 13, color: '#0F1115' }}>§7 B2C sample</h3>
+              <div style={{ overflow: 'auto', border: '1px solid #E5E7EB', borderRadius: 12 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: '#FAFAFA', borderBottom: '1px solid #E5E7EB' }}>
+                      <th style={th}>PoS state</th>
+                      <th style={th}>Rate</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Taxable</th>
+                      <th style={{ ...th, textAlign: 'right' }}>GST</th>
+                      <th style={th}>Split</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Settlements</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {summary.sample.b2cs.map((b, i) => (
+                      <tr key={i} style={{ borderTop: '1px solid #F3F4F6' }}>
+                        <td style={td}>{b.placeOfSupplyStateCode}</td>
+                        <td style={td}>{(b.rateBps / 100).toFixed(2)}%</td>
+                        <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>₹{paiseToRupees(b.commissionInPaise)}</td>
+                        <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>₹{paiseToRupees(b.totalGstInPaise)}</td>
+                        <td style={td}>{b.taxSplit}</td>
+                        <td style={{ ...td, textAlign: 'right' }}>{b.settlementCount}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {summary.sample.cdnr.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <h3 style={{ margin: '0 0 6px', fontSize: 13, color: '#0F1115' }}>§9B credit notes sample</h3>
+              <div style={{ overflow: 'auto', border: '1px solid #E5E7EB', borderRadius: 12 }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                  <thead>
+                    <tr style={{ background: '#FAFAFA', borderBottom: '1px solid #E5E7EB' }}>
+                      <th style={th}>Credit Note</th>
+                      <th style={th}>Original Invoice</th>
+                      <th style={th}>Recipient GSTIN</th>
+                      <th style={{ ...th, textAlign: 'right' }}>Taxable</th>
+                      <th style={{ ...th, textAlign: 'right' }}>GST</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {summary.sample.cdnr.map((r) => (
+                      <tr key={r.creditNoteNumber} style={{ borderTop: '1px solid #F3F4F6' }}>
+                        <td style={{ ...td, fontFamily: 'ui-monospace, monospace' }}>{r.creditNoteNumber}</td>
+                        <td style={{ ...td, fontFamily: 'ui-monospace, monospace' }}>{r.originalInvoiceNumber || '—'}</td>
+                        <td style={{ ...td, fontFamily: 'ui-monospace, monospace' }}>{r.recipientGstin}</td>
+                        <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>₹{paiseToRupees(r.commissionInPaise)}</td>
+                        <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>₹{paiseToRupees(r.totalGstInPaise)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
+      )}
     </section>
   );
 }
@@ -1105,6 +1507,7 @@ const STATUS_TONE: Record<string, { color: string; chip: string }> = {
   COLLECTED:      { color: '#1d4ed8', chip: '#dbeafe' },
   FILED:          { color: '#7c3aed', chip: '#ede9fe' },
   PAID_TO_GOVT:   { color: '#15803d', chip: '#dcfce7' },
+  CERTIFICATE_ISSUED: { color: '#0e7490', chip: '#cffafe' },
   REVERSED:       { color: '#7A828F', chip: '#F3F4F6' },
 };
 

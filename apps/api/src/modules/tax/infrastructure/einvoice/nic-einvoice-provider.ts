@@ -17,12 +17,13 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import { EnvService } from '../../../../bootstrap/env/env.service';
-import type {
-  EInvoiceProvider,
-  IrnCancelInput,
-  IrnCancelResult,
-  IrnGenerateInput,
-  IrnGenerateResult,
+import {
+  EInvoiceProviderError,
+  type EInvoiceProvider,
+  type IrnCancelInput,
+  type IrnCancelResult,
+  type IrnGenerateInput,
+  type IrnGenerateResult,
 } from './einvoice-provider';
 
 interface CachedAuthToken {
@@ -181,35 +182,93 @@ export class NicEInvoiceProvider implements EInvoiceProvider {
       body: JSON.stringify(payload),
     });
     const responseJson = (await res.json()) as Record<string, unknown>;
-    // Phase 90 — Gap #26 error classification.
-    if (res.status === 401) {
-      // Token expired — clear cache and bubble so retry cron picks up.
-      this.cachedAuth = null;
-      throw new Error(`NIC IRP auth expired (401); will refresh on retry`);
+    const data = (responseJson as any)?.Data ?? {};
+    const status = (responseJson as any)?.Status;
+
+    // Success.
+    if (res.ok && status === 1 && data.Irn) {
+      return {
+        irn: String(data.Irn),
+        ackNo: String(data.AckNo ?? ''),
+        ackDate: data.AckDt ? parseIstDate(String(data.AckDt)) : new Date(),
+        signedDocumentJson: responseJson,
+        qrCodeUrl:
+          typeof data.SignedQRCode === 'string' && data.SignedQRCode.length > 0
+            ? `data:image/png;base64,${data.SignedQRCode}`
+            : '',
+      };
     }
-    if (res.status === 429) {
-      throw new Error(`NIC IRP rate-limited (429); back off + retry`);
-    }
-    if (!res.ok || (responseJson as any)?.Status !== 1) {
-      const errDetail = (responseJson as any)?.ErrorDetails ?? responseJson;
-      throw new Error(
-        `NIC IRP generate failed (HTTP ${res.status}): ${JSON.stringify(errDetail)}`,
+
+    // Phase 160 (#8) — typed error classification by NIC business code.
+    const nicErrors = parseNicErrors(responseJson);
+    const dup = nicErrors.find((e) => e.code === '2150');
+    if (dup) {
+      // 2150 = invoice already registered. NIC returns the existing IRN in
+      // the duplicate payload — recover it so a retry is IDEMPOTENT (the
+      // audit's expected behaviour) instead of failing.
+      const existingIrn = extractDuplicateIrn(responseJson);
+      if (existingIrn) {
+        return {
+          irn: existingIrn.irn,
+          ackNo: existingIrn.ackNo,
+          ackDate: existingIrn.ackDate,
+          signedDocumentJson: responseJson,
+          qrCodeUrl: existingIrn.qrCodeUrl,
+        };
+      }
+      throw new EInvoiceProviderError(
+        `NIC IRP: invoice already registered (2150): ${dup.message}`,
+        'DUPLICATE',
+        { nicErrorCode: '2150', httpStatus: res.status },
       );
     }
-    const data = (responseJson as any)?.Data ?? {};
-    if (!data.Irn) {
-      throw new Error('NIC IRP response missing IRN field');
+    throw this.classifyNicError(res.status, nicErrors, responseJson);
+  }
+
+  /**
+   * Phase 160 (#8) — map an HTTP status + NIC error codes to a typed,
+   * retry-classified error. Token-expiry clears the auth cache.
+   */
+  private classifyNicError(
+    httpStatus: number,
+    nicErrors: { code: string; message: string }[],
+    raw: unknown,
+  ): EInvoiceProviderError {
+    const code = nicErrors[0]?.code ?? null;
+    const detail =
+      nicErrors.length > 0
+        ? nicErrors.map((e) => `${e.code}:${e.message}`).join('; ')
+        : JSON.stringify((raw as any)?.ErrorDetails ?? raw);
+    // Token expired (HTTP 401 or NIC 2172) → refresh on next call.
+    if (httpStatus === 401 || code === '2172') {
+      this.cachedAuth = null;
+      return new EInvoiceProviderError(
+        `NIC IRP auth expired (${code ?? httpStatus}); will refresh on retry`,
+        'AUTH',
+        { nicErrorCode: code, httpStatus },
+      );
     }
-    return {
-      irn: String(data.Irn),
-      ackNo: String(data.AckNo ?? ''),
-      ackDate: data.AckDt ? parseIstDate(String(data.AckDt)) : new Date(),
-      signedDocumentJson: responseJson,
-      qrCodeUrl:
-        typeof data.SignedQRCode === 'string' && data.SignedQRCode.length > 0
-          ? `data:image/png;base64,${data.SignedQRCode}`
-          : '',
-    };
+    if (httpStatus === 429) {
+      return new EInvoiceProviderError(
+        'NIC IRP rate-limited (429); back off + retry',
+        'RATE_LIMIT',
+        { nicErrorCode: code, httpStatus },
+      );
+    }
+    if (httpStatus >= 500) {
+      return new EInvoiceProviderError(
+        `NIC IRP server error (HTTP ${httpStatus}): ${detail}`,
+        'TRANSIENT',
+        { nicErrorCode: code, httpStatus },
+      );
+    }
+    // 4xx / Status≠1 with a business error code = permanent (bad payload,
+    // e.g. 2253 mandatory field missing). Retrying won't help.
+    return new EInvoiceProviderError(
+      `NIC IRP generate rejected (HTTP ${httpStatus}): ${detail}`,
+      'PERMANENT',
+      { nicErrorCode: code, httpStatus },
+    );
   }
 
   async cancel(input: IrnCancelInput): Promise<IrnCancelResult> {
@@ -229,21 +288,68 @@ export class NicEInvoiceProvider implements EInvoiceProvider {
       }),
     });
     const responseJson = (await res.json()) as Record<string, unknown>;
-    if (res.status === 401) {
-      this.cachedAuth = null;
-      throw new Error('NIC IRP auth expired (401); will refresh on retry');
+    if (res.ok && (responseJson as any)?.Status === 1) {
+      return { cancelledAt: new Date(), signedDocumentJson: responseJson };
     }
-    if (!res.ok || (responseJson as any)?.Status !== 1) {
-      const errDetail = (responseJson as any)?.ErrorDetails ?? responseJson;
-      throw new Error(
-        `NIC IRP cancel failed (HTTP ${res.status}): ${JSON.stringify(errDetail)}`,
-      );
-    }
-    return {
-      cancelledAt: new Date(),
-      signedDocumentJson: responseJson,
-    };
+    // Phase 160 (#8) — typed error classification (mirrors generate()).
+    throw this.classifyNicError(res.status, parseNicErrors(responseJson), responseJson);
   }
+}
+
+/**
+ * Phase 160 (#8) — pull NIC's error codes out of the response. NIC returns
+ * errors either as `ErrorDetails: [{ErrorCode, ErrorMessage}, ...]` or a
+ * pipe-joined `error.message` string ("2150 : Duplicate IRN | ...").
+ */
+function parseNicErrors(raw: unknown): { code: string; message: string }[] {
+  const r = raw as any;
+  const out: { code: string; message: string }[] = [];
+  const details = r?.ErrorDetails;
+  if (Array.isArray(details)) {
+    for (const d of details) {
+      const code = String(d?.ErrorCode ?? d?.errorCode ?? '').trim();
+      if (code) out.push({ code, message: String(d?.ErrorMessage ?? d?.errorMessage ?? '') });
+    }
+  }
+  // Fallback: a flat error string like "2150 : already registered".
+  const flat = typeof r?.error?.message === 'string' ? r.error.message : null;
+  if (out.length === 0 && flat) {
+    for (const part of flat.split('|')) {
+      const m = /^\s*(\d{3,4})\s*[:\-]\s*(.*)$/.exec(part);
+      if (m) out.push({ code: m[1]!, message: m[2]!.trim() });
+    }
+  }
+  return out;
+}
+
+/**
+ * Phase 160 (#8) — NIC's 2150 (duplicate) response carries the
+ * already-registered IRN so a retry can be idempotent. Extract it from the
+ * known locations; return null when NIC didn't include it (caller throws
+ * DUPLICATE then).
+ */
+function extractDuplicateIrn(
+  raw: unknown,
+): { irn: string; ackNo: string; ackDate: Date; qrCodeUrl: string } | null {
+  const r = raw as any;
+  // NIC variants: Data.Irn (rare), or Desc/InfoDtls carrying the Irn.
+  const irn =
+    (typeof r?.Data?.Irn === 'string' && r.Data.Irn) ||
+    (typeof r?.Desc?.Irn === 'string' && r.Desc.Irn) ||
+    (Array.isArray(r?.InfoDtls) &&
+      r.InfoDtls.find((i: any) => typeof i?.Desc?.Irn === 'string')?.Desc?.Irn) ||
+    null;
+  if (!irn) return null;
+  const src = r?.Data ?? r?.Desc ?? {};
+  return {
+    irn: String(irn),
+    ackNo: String(src.AckNo ?? ''),
+    ackDate: src.AckDt ? parseIstDate(String(src.AckDt)) : new Date(),
+    qrCodeUrl:
+      typeof src.SignedQRCode === 'string' && src.SignedQRCode.length > 0
+        ? `data:image/png;base64,${src.SignedQRCode}`
+        : '',
+  };
 }
 
 /** NIC expects dates as `dd/mm/yyyy` IST. */

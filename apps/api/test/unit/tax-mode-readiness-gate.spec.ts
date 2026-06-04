@@ -22,6 +22,8 @@ function build(totalBlockers: number) {
   // unused here.
   const ctrl = new AdminTaxReportsController(
     readiness, mode, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any, {} as any,
+    // Phase 163 — EnvService (12th ctor arg).
+    { getNumber: (_k: string, fb: number) => fb, getBoolean: (_k: string, fb: boolean) => fb } as any,
   );
   return { ctrl, readiness, mode };
 }

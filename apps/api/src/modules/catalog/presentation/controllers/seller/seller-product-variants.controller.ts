@@ -29,7 +29,7 @@ import { ProductOwnershipService } from '../../../application/services/product-o
 import { VariantGeneratorService } from '../../../application/services/variant-generator.service';
 import { ReApprovalService } from '../../../application/services/re-approval.service';
 import { CartPublicFacade } from '../../../../cart/application/facades/cart-public.facade';
-import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../../../integrations/media/media-storage.adapter';
 import { UpdateVariantDto } from '../../dtos/update-variant.dto';
 import { CreateVariantDto } from '../../dtos/create-variant.dto';
 import { BulkUpdateVariantsDto } from '../../dtos/bulk-update-variants.dto';
@@ -60,7 +60,7 @@ export class SellerProductVariantsController {
     private readonly cartFacade: CartPublicFacade,
     private readonly eventBus: EventBusService,
     private readonly stockSyncService: StockSyncService,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
     private readonly prisma: PrismaService,
   ) {
     this.logger.setContext('SellerProductVariantsController');
@@ -83,9 +83,9 @@ export class SellerProductVariantsController {
    *   6. setHasVariants(productId, true, tx)
    *   7. autoCreateVariantMappings(... tx)
    *
-   * Re-approval + Cloudinary cleanup run AFTER commit — they're
+   * Re-approval + media cleanup run AFTER commit — they're
    * either read-then-conditional-write (re-approval) or fire-and-
-   * forget side effects (Cloudinary).
+   * forget side effects (media).
    */
   private async runGenerateAtomically(args: {
     sellerId: string;
@@ -139,11 +139,11 @@ export class SellerProductVariantsController {
    *
    *   1. Refuse if any variant has stock > 0 or active cart items
    *      reference any variant on this product, unless ?confirm=true.
-   *   2. Capture Cloudinary publicIds before clear so we can
+   *   2. Capture media publicIds before clear so we can
    *      fire-and-forget delete them post-commit (Gap #16).
    *
    * Caller passes the productId and the parsed `confirm` boolean.
-   * Returns the publicIds that should be deleted from Cloudinary
+   * Returns the publicIds that should be deleted from media
    * after the new variants land successfully.
    */
   private async destructiveGenerateGuard(
@@ -161,14 +161,14 @@ export class SellerProductVariantsController {
   }
 
   /**
-   * Phase 41 — kick Cloudinary deletes off the request thread. We
+   * Phase 41 — kick media deletes off the request thread. We
    * never block on these — a delete failure is acceptable (the asset
    * stays orphaned for the next sweep job).
    */
-  private async cleanupCloudinaryAssets(publicIds: string[]): Promise<void> {
+  private async cleanupmediaAssets(publicIds: string[]): Promise<void> {
     for (const id of publicIds) {
-      this.cloudinary.delete(id).catch((err) =>
-        this.logger.warn(`Cloudinary delete failed for ${id}: ${(err as Error).message}`),
+      this.media.delete(id).catch((err) =>
+        this.logger.warn(`media delete failed for ${id}: ${(err as Error).message}`),
       );
     }
   }
@@ -274,7 +274,7 @@ export class SellerProductVariantsController {
     });
 
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);
-    this.cleanupCloudinaryAssets(publicIds);
+    this.cleanupmediaAssets(publicIds);
 
     this.logger.log(`Generated ${variants.length} variants (manual options) for product ${productId}`);
     return { success: true, message: `${variants.length} variants generated successfully`, data: variants };
@@ -343,7 +343,7 @@ export class SellerProductVariantsController {
     });
 
     await this.reApprovalService.triggerIfNeeded(productId, sellerId);
-    this.cleanupCloudinaryAssets(publicIds);
+    this.cleanupmediaAssets(publicIds);
 
     this.logger.log(`Generated ${variants.length} variants for product ${productId}`);
     return { success: true, message: `${variants.length} variants generated successfully`, data: variants };

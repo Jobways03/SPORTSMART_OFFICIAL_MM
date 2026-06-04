@@ -13,8 +13,16 @@ import {
 
 function build(prisma: any) {
   // Only `prisma` is exercised before the SourceInvoiceNotFoundError throw;
-  // the other constructor deps are unused on this path.
-  return new CreditNoteService(prisma, {} as any, {} as any, {} as any);
+  // the other constructor deps are unused on this path. Phase 164 added
+  // audit (5th) + taxMode (6th); eventBus (7th) is @Optional.
+  return new CreditNoteService(
+    prisma,
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+    {} as any,
+  );
 }
 
 describe('CreditNoteService.generateForReturn — missing source invoice (Phase 109)', () => {

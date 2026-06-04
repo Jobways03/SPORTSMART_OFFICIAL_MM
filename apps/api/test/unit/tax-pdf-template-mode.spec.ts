@@ -39,6 +39,13 @@ function makeDoc(): TemplateInput['document'] {
     paymentMode: null,
     originalDocumentNumber: null,
     reason: null,
+    // Phase 22 e-invoice metadata — NOT_APPLICABLE for this B2C sample
+    // (never IRP-signed), so the template skips the IRN/QR block.
+    irn: null,
+    ackNo: null,
+    ackDate: null,
+    qrCodeUrl: null,
+    einvoiceStatus: 'NOT_APPLICABLE',
   };
 }
 

@@ -1,6 +1,5 @@
 import { Logger } from '@nestjs/common';
 import { ForbiddenAppException } from '../exceptions';
-import type { EnvService } from '../../bootstrap/env/env.service';
 
 const logger = new Logger('RuntimePermissionCheck');
 
@@ -30,14 +29,15 @@ const logger = new Logger('RuntimePermissionCheck');
 export function requirePermissionOrSoak(args: {
   req: { user?: { permissions?: string[]; id?: string }; adminId?: string };
   permission: string;
-  env: EnvService;
+  /** Resolves effective strict mode (env OR tighten-only runtime override). */
+  authzMode: { isStrict(): boolean };
   /** Short label for the deny log line, e.g. 'dispute.decide.high_value'. */
   context: string;
 }): void {
-  const { req, permission, env, context } = args;
+  const { req, permission, authzMode, context } = args;
   if (req.user?.permissions?.includes(permission)) return;
 
-  const strict = env.getBoolean('PERMISSIONS_GUARD_STRICT', false);
+  const strict = authzMode.isStrict();
   const detail = {
     event: 'authz.deny.runtime',
     strict,

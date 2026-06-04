@@ -439,6 +439,61 @@ const { returnId } = useParams<{ returnId: string }>();
           </div>
         )}
 
+        {/* Phase 199 (#24) — dispute link / "Open dispute" CTA. When a
+            return is rejected at QC or pre-pickup, the customer's only
+            recourse is to escalate. Surface the existing dispute if one
+            is already open, otherwise offer a CTA to raise one. */}
+        {['QC_REJECTED', 'REJECTED'].includes(ret.status) && (
+          <div
+            style={{
+              background: '#fffbeb',
+              border: '1px solid #fde68a',
+              borderRadius: 10,
+              padding: 14,
+              marginBottom: 16,
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 12,
+              flexWrap: 'wrap',
+            }}
+          >
+            <div style={{ fontSize: 13, color: '#92400e' }}>
+              {ret.dispute ? (
+                <>
+                  A dispute (<strong>{ret.dispute.disputeNumber}</strong>) is
+                  open for this return — status{' '}
+                  <strong>{ret.dispute.status.replace(/_/g, ' ')}</strong>.
+                </>
+              ) : (
+                <>
+                  Disagree with this decision? You can open a dispute and our
+                  team will take another look.
+                </>
+              )}
+            </div>
+            <Link
+              href={
+                ret.dispute
+                  ? `/account/disputes/${ret.dispute.id}`
+                  : `/account/support/new?returnId=${returnId}`
+              }
+              style={{
+                padding: '8px 16px',
+                background: '#b45309',
+                color: '#fff',
+                borderRadius: 6,
+                fontSize: 13,
+                fontWeight: 600,
+                textDecoration: 'none',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {ret.dispute ? 'View dispute' : 'Open dispute'}
+            </Link>
+          </div>
+        )}
+
         {/* Inspection proof — shown whenever QC ran (approved, rejected,
             partial, or damaged) so the customer can see exactly what our
             team found during the quality check. Under the forfeit policy,
@@ -798,6 +853,71 @@ const { returnId } = useParams<{ returnId: string }>();
             </div>
           </div>
         )}
+
+        {/* Phase 199 (#23) — refund attempt history. During a retry
+            loop the status badge alone leaves the customer guessing;
+            this shows each gateway attempt + a friendly note on
+            failures. Only the customer-safe message is rendered (the
+            raw gateway reason / gatewayRefundId never reach the
+            client). Hidden unless there is more than one attempt or a
+            failed one, to avoid noise on the happy path. */}
+        {Array.isArray(ret.refundTransactions) &&
+          ret.refundTransactions.length > 0 &&
+          (ret.refundTransactions.length > 1 ||
+            ret.refundTransactions.some((t) => t.status === 'FAILED')) && (
+            <div
+              style={{
+                border: '1px solid #e5e7eb',
+                borderRadius: 10,
+                padding: 16,
+                marginBottom: 16,
+              }}
+            >
+              <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 10 }}>
+                Refund Attempts
+              </h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {ret.refundTransactions.map((t) => {
+                  const failed = t.status === 'FAILED';
+                  const done = t.status === 'PROCESSED';
+                  const color = failed ? '#dc2626' : done ? '#16a34a' : '#d97706';
+                  return (
+                    <div
+                      key={t.id}
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        gap: 10,
+                        fontSize: 12,
+                        paddingTop: 8,
+                        borderTop: '1px solid #f3f4f6',
+                      }}
+                    >
+                      <div>
+                        <span style={{ fontWeight: 600 }}>
+                          Attempt {t.attemptNumber}
+                        </span>
+                        {failed && (
+                          <div style={{ color: '#7f1d1d', marginTop: 2 }}>
+                            {ret.refundFailureMessageCustomer ??
+                              'This attempt did not go through — we are retrying.'}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                        <div style={{ color, fontWeight: 600 }}>
+                          {t.status.replace(/_/g, ' ')}
+                        </div>
+                        <div style={{ color: '#9ca3af', marginTop: 2 }}>
+                          {formatDate(t.createdAt)}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
         {/* Phase 38 — credit-note OR wallet-credit story. Rendered
             when one of the two settlement artefacts exists, so the

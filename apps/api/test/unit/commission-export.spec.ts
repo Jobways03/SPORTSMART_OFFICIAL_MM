@@ -24,6 +24,7 @@ function build(opts: { count?: number; rows?: any[] } = {}) {
     {} as any,
     {} as any,
     audit as any,
+    { wrap: jest.fn((_n: string, fn: () => unknown) => fn()) } as any, // instr (Phase 174 @Cron migration)
   );
   // silence the injected Nest logger
   (svc as any).logger = logger;

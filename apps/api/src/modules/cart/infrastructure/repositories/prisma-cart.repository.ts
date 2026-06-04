@@ -125,10 +125,24 @@ export class PrismaCartRepository implements CartRepository {
   }
 
   async upsertCart(customerId: string): Promise<{ id: string }> {
+    // Phase 196 (#11) — stamp activity on add.
     return this.prisma.cart.upsert({
       where: { customerId },
       create: { customerId },
-      update: {},
+      update: { lastActivityAt: new Date() },
+    });
+  }
+
+  /**
+   * Phase 196 (#11) — refresh the cart's activity timestamp. Called by the
+   * service after non-add mutations (update / remove / clear / park) so the
+   * abandonment sweep sees an accurate last-touched time. Best-effort: a
+   * missing cart row is a no-op (updateMany, not update).
+   */
+  async touchLastActivity(cartId: string): Promise<void> {
+    await this.prisma.cart.updateMany({
+      where: { id: cartId },
+      data: { lastActivityAt: new Date() },
     });
   }
 
@@ -147,10 +161,42 @@ export class PrismaCartRepository implements CartRepository {
   // public write path; the legacy method was dead code that
   // bypassed the FOR UPDATE lock.
 
-  async updateCartItemQuantity(itemId: string, quantity: number): Promise<void> {
-    await this.prisma.cartItem.update({
-      where: { id: itemId },
-      data: { quantity },
+  /**
+   * Phase 196 (#16) — quantity set under the same FOR UPDATE cart-row lock
+   * incrementOrCreateCartItem uses, with the stock floor re-read INSIDE the
+   * lock. Pre-196 this was a bare update after a non-transactional stock
+   * read in the service (read-then-write TOCTOU). PATCH carries an absolute
+   * target quantity (not a delta), so the lock primarily guarantees the
+   * stock check and the write see a consistent snapshot.
+   */
+  async updateCartItemQuantity(
+    itemId: string,
+    cartId: string,
+    productId: string,
+    variantId: string | null,
+    quantity: number,
+  ): Promise<void> {
+    await this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<{ id: string }[]>`
+        SELECT id FROM carts WHERE id = ${cartId} FOR UPDATE
+      `;
+      if (!locked || locked.length === 0) {
+        throw new Error(`Cart ${cartId} not found while acquiring row lock`);
+      }
+      const where: any = { productId, isActive: true, approvalStatus: 'APPROVED' };
+      if (variantId) where.variantId = variantId;
+      const agg = await tx.sellerProductMapping.aggregate({
+        where,
+        _sum: { stockQty: true, reservedQty: true },
+      });
+      const available = Math.max(0, (agg._sum.stockQty ?? 0) - (agg._sum.reservedQty ?? 0));
+      if (available < quantity) {
+        throw Object.assign(
+          new Error(`Insufficient stock. Available: ${available}, Requested: ${quantity}`),
+          { code: 'INSUFFICIENT_STOCK', availableStock: available },
+        );
+      }
+      await tx.cartItem.update({ where: { id: itemId }, data: { quantity } });
     });
   }
 
@@ -189,9 +235,55 @@ export class PrismaCartRepository implements CartRepository {
     return Math.max(0, totalStock - totalReserved);
   }
 
+  /**
+   * Phase 196 (#10) — batched stock aggregate. getCart used to call
+   * getAggregatedStock once per line (N round-trips via Promise.all);
+   * this collapses it to at most two grouped queries (one keyed by
+   * variant for variant lines, one keyed by product for base lines),
+   * preserving the exact per-line semantics of getAggregatedStock.
+   * Returns a map keyed `${productId}:${variantId ?? 'null'}`.
+   */
+  async getAggregatedStockBatch(
+    keys: Array<{ productId: string; variantId: string | null }>,
+  ): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    if (keys.length === 0) return map;
+
+    const variantIds = [...new Set(keys.filter((k) => k.variantId).map((k) => k.variantId as string))];
+    const baseProductIds = [...new Set(keys.filter((k) => !k.variantId).map((k) => k.productId))];
+
+    if (variantIds.length > 0) {
+      const rows = await this.prisma.sellerProductMapping.groupBy({
+        by: ['productId', 'variantId'],
+        where: { isActive: true, approvalStatus: 'APPROVED', variantId: { in: variantIds } },
+        _sum: { stockQty: true, reservedQty: true },
+      });
+      for (const r of rows) {
+        const avail = Math.max(0, (r._sum.stockQty ?? 0) - (r._sum.reservedQty ?? 0));
+        map.set(`${r.productId}:${r.variantId}`, avail);
+      }
+    }
+    if (baseProductIds.length > 0) {
+      const rows = await this.prisma.sellerProductMapping.groupBy({
+        by: ['productId'],
+        where: { isActive: true, approvalStatus: 'APPROVED', productId: { in: baseProductIds } },
+        _sum: { stockQty: true, reservedQty: true },
+      });
+      for (const r of rows) {
+        const avail = Math.max(0, (r._sum.stockQty ?? 0) - (r._sum.reservedQty ?? 0));
+        map.set(`${r.productId}:null`, avail);
+      }
+    }
+    return map;
+  }
+
   async validateProduct(productId: string): Promise<boolean> {
+    // Phase 196 (#3) — a PENDING / REJECTED / NEEDS_REVISION product must
+    // not be addable to a cart even if its UUID leaks (draft URL, stale
+    // tab, prior search-suggest exposure). Mirrors the visibility predicate
+    // the storefront listing / search paths enforce (#192/#194/#195).
     const product = await this.prisma.product.findFirst({
-      where: { id: productId, status: 'ACTIVE', isDeleted: false },
+      where: { id: productId, status: 'ACTIVE', isDeleted: false, moderationStatus: 'APPROVED' },
     });
     return !!product;
   }
@@ -214,16 +306,20 @@ export class PrismaCartRepository implements CartRepository {
   }
 
   async countActiveItemsForVariant(variantId: string): Promise<number> {
+    // Phase 196 (#17) — "active in a cart" means a live line, not a parked
+    // save-for-later one. Without this filter the catalog soft-delete guard
+    // treated a saved-for-later variant as in-use and refused the delete.
     return this.prisma.cartItem.count({
-      where: { variantId },
+      where: { variantId, savedForLater: false },
     });
   }
 
   async countActiveItemsForProduct(productId: string): Promise<number> {
     // Only count base-product line items (where variantId is null) — variant
     // line items are tracked separately by countActiveItemsForVariant.
+    // Phase 196 (#17) — exclude parked (saved-for-later) lines.
     return this.prisma.cartItem.count({
-      where: { productId, variantId: null },
+      where: { productId, variantId: null, savedForLater: false },
     });
   }
 
@@ -352,13 +448,14 @@ export class PrismaCartRepository implements CartRepository {
 
   async deleteAbandonedCartsOlderThan(cutoff: Date): Promise<number> {
     // Phase 61 (2026-05-22) — abandonment cleanup (audit Gap #12).
-    // Deletes carts whose updatedAt is older than the cutoff. The
-    // FK on cart_items is ON DELETE CASCADE, so child rows go with
-    // the parent. Two-pass: read ids first so we can return an
-    // accurate count even when deleteMany returns 0 in a no-op
-    // case.
+    // Deletes carts whose activity is older than the cutoff. The FK on
+    // cart_items is ON DELETE CASCADE, so child rows go with the parent.
+    // Phase 196 (#11) — switched the predicate from updatedAt (which only
+    // bumped on add, via upsertCart) to lastActivityAt (bumped on every
+    // mutation) so a cart actively edited via remove/update isn't wrongly
+    // swept. Two-pass: read ids first for an accurate count.
     const stale = await this.prisma.cart.findMany({
-      where: { updatedAt: { lt: cutoff } },
+      where: { lastActivityAt: { lt: cutoff } },
       select: { id: true },
     });
     if (stale.length === 0) return 0;

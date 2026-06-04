@@ -28,6 +28,7 @@ function toWalletTransactionEntity(t: WalletTransaction): WalletTransactionEntit
     ...t,
     amountInPaise: Number(t.amountInPaise),
     balanceAfterInPaise: Number(t.balanceAfterInPaise),
+    balanceBeforeInPaise: Number(t.balanceBeforeInPaise), // Phase 182 (#4)
   };
 }
 
@@ -94,11 +95,21 @@ export class PrismaWalletRepository implements WalletRepository {
           status: transaction.status ?? 'COMPLETED',
           amountInPaise: BigInt(transaction.amountInPaise),
           balanceAfterInPaise: BigInt(transaction.balanceAfterInPaise),
+          // Phase 182 (#4/#5) — derived statement fields: balanceBefore = after −
+          // signed amount; direction from the amount sign.
+          balanceBeforeInPaise: BigInt(transaction.balanceAfterInPaise) - BigInt(transaction.amountInPaise),
+          direction: transaction.amountInPaise >= 0 ? 'CREDIT' : 'DEBIT',
+          currency: transaction.currency ?? 'INR', // #9
+          referenceNumber: transaction.referenceNumber ?? null, // #8
           referenceType: transaction.referenceType ?? null,
           referenceId: transaction.referenceId ?? null,
           description: transaction.description,
+          reason: transaction.reason ?? null, // Phase 183 (#2)
           internalNotes: transaction.internalNotes ?? null,
           createdByAdminId: transaction.createdByAdminId ?? null,
+          // Phase 172 (#8/#9) — credit discriminator + expiry onto the ledger.
+          creditType: transaction.creditType ?? null,
+          expiresAt: transaction.expiresAt ?? null,
         },
       });
 
@@ -122,11 +133,19 @@ export class PrismaWalletRepository implements WalletRepository {
         status: 'PENDING',
         amountInPaise: BigInt(input.amountInPaise),
         balanceAfterInPaise: BigInt(input.balanceAfterInPaise), // == current balance for PENDING
+        // Phase 182 — statement fields (balanceBefore reconciled on completion).
+        balanceBeforeInPaise: BigInt(input.balanceAfterInPaise) - BigInt(input.amountInPaise),
+        direction: input.amountInPaise >= 0 ? 'CREDIT' : 'DEBIT',
+        currency: input.currency ?? 'INR',
+        referenceNumber: input.referenceNumber ?? null,
         referenceType: input.referenceType ?? null,
         referenceId: input.referenceId ?? null,
         description: input.description,
         internalNotes: input.internalNotes ?? null,
         createdByAdminId: input.createdByAdminId ?? null,
+        // Phase 172 (#8/#9) — propagate the discriminator + expiry.
+        creditType: input.creditType ?? null,
+        expiresAt: input.expiresAt ?? null,
       },
     });
     return toWalletTransactionEntity(row);
@@ -169,6 +188,8 @@ export class PrismaWalletRepository implements WalletRepository {
         data: {
           status: 'COMPLETED',
           balanceAfterInPaise: BigInt(args.newBalanceInPaise),
+          // Phase 182 — reconcile balanceBefore now that the topup applies.
+          balanceBeforeInPaise: BigInt(args.newBalanceInPaise) - existing.amountInPaise,
         },
       });
 
@@ -221,6 +242,57 @@ export class PrismaWalletRepository implements WalletRepository {
       this.prisma.walletTransaction.count({ where: { userId } }),
     ]);
     return { items: items.map(toWalletTransactionEntity), total };
+  }
+
+  // Phase 172 (#9) — every ledger row for a user, oldest-first. Input to the
+  // goodwill-expiry replay (computeGoodwillState). A wallet's ledger is small
+  // (one row per money movement) so reading it whole is cheap.
+  async findAllTransactionsForUser(
+    userId: string,
+  ): Promise<WalletTransactionEntity[]> {
+    const rows = await this.prisma.walletTransaction.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'asc' },
+    });
+    return rows.map(toWalletTransactionEntity);
+  }
+
+  // Phase 172 (#9) — distinct user ids holding ≥1 GOODWILL credit already past
+  // its expiry. The sweep then replays each user's ledger to lapse what's left.
+  async findUserIdsWithExpiredGoodwill(args: {
+    now: Date;
+    limit: number;
+  }): Promise<string[]> {
+    const rows = await this.prisma.walletTransaction.findMany({
+      where: {
+        creditType: 'GOODWILL',
+        expiresAt: { not: null, lte: args.now },
+        lapsedAt: null,
+      },
+      select: { userId: true },
+      distinct: ['userId'],
+      take: args.limit,
+    });
+    return rows.map((r) => r.userId);
+  }
+
+  // Phase 172 (#9) — stamp lapsedAt on every expired, not-yet-lapsed GOODWILL
+  // lot for a user once the sweep has processed them (so they drop out of the
+  // candidate query). Purely a processing marker — balance math is unaffected.
+  async markGoodwillLotsLapsed(args: {
+    userId: string;
+    now: Date;
+  }): Promise<number> {
+    const res = await this.prisma.walletTransaction.updateMany({
+      where: {
+        userId: args.userId,
+        creditType: 'GOODWILL',
+        expiresAt: { not: null, lte: args.now },
+        lapsedAt: null,
+      },
+      data: { lapsedAt: args.now },
+    });
+    return res.count;
   }
 
   async listWallets(filter: ListWalletsFilter): Promise<ListWalletsPage> {

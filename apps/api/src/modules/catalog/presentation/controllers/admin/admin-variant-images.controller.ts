@@ -21,7 +21,8 @@ import { NotFoundAppException } from '../../../../../core/exceptions';
 import { AppException } from '../../../../../core/exceptions/app.exception';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { Permissions } from '../../../../../core/decorators/permissions.decorator';
-import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../../../integrations/media/media-storage.adapter';
+import { FileService } from '../../../../files/application/services/file.service';
 import { ReorderImagesDto } from '../../dtos/reorder-images.dto';
 import { PRODUCT_IMAGE_REPOSITORY, IProductImageRepository } from '../../../domain/repositories/product-image.repository.interface';
 import {
@@ -39,7 +40,8 @@ export class AdminVariantImagesController {
   constructor(
     @Inject(PRODUCT_IMAGE_REPOSITORY) private readonly imageRepo: IProductImageRepository,
     private readonly logger: AppLoggerService,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
+    private readonly fileService: FileService,
   ) {
     this.logger.setContext('AdminVariantImagesController');
   }
@@ -65,11 +67,28 @@ export class AdminVariantImagesController {
 
     let uploadResult;
     try {
-      uploadResult = await this.cloudinary.upload(file.buffer, { folder: `products/${productId}/variants/${variantId}`, transformation: [{ width: 1200, height: 1200, crop: 'limit' }] });
+      uploadResult = await this.media.upload(file.buffer, { folder: `products/${productId}/variants/${variantId}`, transformation: [{ width: 1200, height: 1200, crop: 'limit' }] });
     } catch (error: any) {
-      this.logger.error(`Cloudinary upload failed for variant ${variantId}: ${error?.message}`);
+      this.logger.error(`media upload failed for variant ${variantId}: ${error?.message}`);
       throw new AppException('Image upload failed. Please try again.', 'EXTERNAL_SERVICE_ERROR');
     }
+
+    // Additively register the media asset in the central
+    // FileMetadata table so the integrity-verifier, audit, and orphan
+    // sweep can see it. Best-effort — must never break the upload.
+    void this.fileService
+      .registerExternalAsset({
+        publicId: uploadResult.publicId,
+        url: uploadResult.secureUrl,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+        purpose: 'PRODUCT_IMAGE',
+        uploadedBy: adminId,
+        uploadedByType: 'ADMIN',
+        fileName: file.originalname,
+        buffer: file.buffer,
+      })
+      .catch(() => undefined);
 
     const altText = sanitizeAltText(altTextRaw);
     const siblingVariantIds = await this.imageRepo.findColorSiblingVariantIds(productId, variantId);
@@ -79,7 +98,7 @@ export class AdminVariantImagesController {
     // at the DB layer).
     //
     // Phase 42 (2026-05-21) — Gap #7 (this audit): if any DB write
-    // fails mid color-sibling fan-out the Cloudinary asset is
+    // fails mid color-sibling fan-out the media asset is
     // orphaned. Wrap in try/catch + best-effort delete on throw.
     try {
       for (const vId of siblingVariantIds) {
@@ -95,8 +114,8 @@ export class AdminVariantImagesController {
         createdImages.push(image);
       }
     } catch (err) {
-      this.cloudinary.delete(uploadResult.publicId).catch((e) =>
-        this.logger.error(`Cloudinary cleanup failed for orphaned ${uploadResult.publicId}: ${(e as Error).message}`),
+      this.media.delete(uploadResult.publicId).catch((e) =>
+        this.logger.error(`media cleanup failed for orphaned ${uploadResult.publicId}: ${(e as Error).message}`),
       );
       throw err;
     }
@@ -129,7 +148,7 @@ export class AdminVariantImagesController {
     }
 
     if (image.publicId) {
-      this.cloudinary.delete(image.publicId).catch((err) => this.logger.warn(`Failed to delete Cloudinary asset ${image.publicId}: ${err?.message}`));
+      this.media.delete(image.publicId).catch((err) => this.logger.warn(`Failed to delete media asset ${image.publicId}: ${err?.message}`));
     }
 
     this.logger.log(`Image deleted from variant ${variantId} (and color siblings) of product ${productId} by admin ${adminId}: ${imageId}`);

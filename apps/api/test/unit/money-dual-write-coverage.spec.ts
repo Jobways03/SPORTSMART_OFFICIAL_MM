@@ -78,18 +78,34 @@ const PRISMA_VAR_NAMES = ['prisma', 'tx', 'client', 'this\\.prisma']; // common 
 // new call sites through the helper.
 const PHASE_7_BASELINE: Readonly<Record<string, number>> = {
   // PR 7.8 — final wiring (orders-public.facade.ts subOrder×4).
-  // All 14 registry models are at zero gaps. The dual-write coverage
-  // invariant is mechanically complete; Phase 7's remaining work is
-  // the historical-row backfill cron and the read-shadow flag (ADR-007
-  // steps 3 + 4), which are separate concerns from this spec.
-  return: 0,
+  //
+  // Audit note (post-hardening sweep): six models below carry a non-zero
+  // baseline for sites the 60-line-lookahead scanner flags but which were
+  // each individually verified SAFE — they either write NO Decimal money
+  // column (the lookahead window over-matched a money field name in an
+  // adjacent JSON snapshot / status-only write / quantity write / the next
+  // statement) or DO dual-write but express the paise sibling inline
+  // (`amountInPaise: …` / `totalAmountInPaise: { increment }`) rather than
+  // via the applyPaise/toPaise helper the coverRe greps for. Verified sites:
+  //   masterOrder(3): prisma-checkout.repository.ts:933 (sourceCartSnapshot
+  //     JSON), :973 (sourceCartId only), :1022 (finalizedAt only) — no money.
+  //   return(1): razorpay-refund-webhook.service.ts:157 — status+timestamp.
+  //   orderItem(1): seller-reversal.service.ts:235 — reversedQuantity (count).
+  //   sellerSettlement(1): settlement.service.ts:1245 — status+reason only.
+  //   refundTransaction(1): return.service.ts:3200 — writes amount AND
+  //     amountInPaise (genuine dual-write, helper not used).
+  //   settlementCycle(1): settlement.service.ts:1747 — increments totalAmount
+  //     AND totalAmountInPaise (genuine dual-write via increment).
+  // A NEW uncovered money write on any of these models pushes the count
+  // above the baseline and still trips the assertion.
+  return: 1,
   returnItem: 0,
-  refundTransaction: 0,
-  masterOrder: 0,
+  refundTransaction: 1,
+  masterOrder: 3,
   subOrder: 0,
-  orderItem: 0,
-  settlementCycle: 0,
-  sellerSettlement: 0,
+  orderItem: 1,
+  settlementCycle: 1,
+  sellerSettlement: 1,
   settlementAdjustment: 0,
   commissionSetting: 0,
   commissionRecord: 0,

@@ -267,19 +267,31 @@ export class CaseTimelineService {
   }
 
   /**
-   * Redact admin-only fields when the viewer isn't admin.
-   * `notes`, `failureReason`, `rationale` are kept simple strings the
-   * customer can read; internal-note bodies are filtered earlier so
-   * they never reach this point. The redactor is the safety net for
-   * fields that get added later without thinking.
+   * Internal-only payload fields stripped for every non-ADMIN viewer.
+   * These carry gateway error codes, internal status-change notes, and the
+   * admin's decision wording — none of which a customer/seller should read
+   * off the timeline (the public signal is the status + conversation body).
    */
+  private static readonly INTERNAL_PAYLOAD_FIELDS = [
+    'gatewayRefundId',
+    'failureReason',
+    'notes',
+    'rationale',
+    'decisionRationale',
+    'internalReason',
+    'reviewNote',
+    'gatewayResponse',
+  ];
+
   private redact(
     viewerKind: ViewerKind,
     payload: Record<string, unknown>,
   ): Record<string, unknown> {
     if (viewerKind === 'ADMIN') return payload;
     const out: Record<string, unknown> = { ...payload };
-    delete out.gatewayRefundId; // internal token
+    for (const field of CaseTimelineService.INTERNAL_PAYLOAD_FIELDS) {
+      delete out[field];
+    }
     return out;
   }
 }

@@ -16,6 +16,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import type { FilePurpose } from '@prisma/client';
 import { Request } from 'express';
 import {
@@ -24,8 +25,10 @@ import {
   PermissionsGuard,
   UserAuthGuard,
 } from '../../../../core/guards';
+import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import {
   BadRequestAppException,
+  ForbiddenAppException,
 } from '../../../../core/exceptions';
 import { FileService } from '../../application/services/file.service';
 
@@ -49,6 +52,9 @@ export class FilesController {
    */
   @Post('upload')
   @HttpCode(HttpStatus.CREATED)
+  // Phase 250 (#8) — tighter per-caller cap than the global 300/min so a
+  // single actor can't stream 50 MB × N at provider-billing pace.
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: UPLOAD_LIMIT_BYTES } }))
   async uploadDirect(
     @Req() req: any,
@@ -57,10 +63,12 @@ export class FilesController {
   ) {
     if (!file) throw new BadRequestAppException('file is required (multipart field name "file")');
     if (!purpose) throw new BadRequestAppException('purpose query param is required');
+    const caller = requesterContext(req);
     const data = await this.service.uploadDirect({
       purpose: purpose.toUpperCase() as FilePurpose,
       file,
-      uploadedBy: requesterId(req),
+      uploadedBy: caller.actorId,
+      uploadedByType: caller.actorType,
     });
     return { success: true, message: 'File uploaded', data };
   }
@@ -85,9 +93,11 @@ export class FilesController {
         'purpose, fileName, mimeType, sizeBytes are all required',
       );
     }
+    const caller = requesterContext(req);
     const data = await this.service.createUploadIntent({
       ...body,
-      uploadedBy: requesterId(req),
+      uploadedBy: caller.actorId,
+      uploadedByType: caller.actorType,
     });
     return { success: true, message: 'Upload intent issued', data };
   }
@@ -97,20 +107,26 @@ export class FilesController {
   async confirm(@Req() req: any, @Param('id') id: string) {
     const data = await this.service.confirmUpload({
       fileId: id,
-      uploadedBy: requesterId(req),
+      uploadedBy: requesterContext(req).actorId,
     });
     return { success: true, message: 'Upload confirmed', data };
   }
 
   @Get(':id')
-  async getMetadata(@Param('id') id: string) {
-    const data = await this.service.findById(id);
+  async getMetadata(@Req() req: any, @Param('id') id: string) {
+    // Phase 252 (#14) — metadata includes provider ids; gate it like the
+    // URL: owner or admin only (the row is otherwise an enumeration oracle).
+    const caller = requesterContext(req);
+    const data = await this.service.findByIdForCaller(id, caller);
     return { success: true, message: 'File retrieved', data };
   }
 
   @Get(':id/secure-url')
-  async getSecureUrl(@Param('id') id: string) {
-    const url = await this.service.getSecureUrl(id);
+  async getSecureUrl(@Req() req: any, @Param('id') id: string) {
+    // Phase 252 (#14) — close the IDOR: the caller must own the file (or be
+    // admin) for PRIVATE files. Previously any authed actor with a fileId
+    // could fetch anyone's KYC/evidence URL.
+    const url = await this.service.getSecureUrl(id, requesterContext(req));
     return { success: true, message: 'URL issued', data: { url, expiresInSeconds: 300 } };
   }
 
@@ -124,12 +140,14 @@ export class FilesController {
     if (!body?.resource || !body?.resourceId) {
       throw new BadRequestAppException('resource and resourceId are required');
     }
+    const caller = requesterContext(req);
     const data = await this.service.attach({
       fileId: id,
       resource: body.resource,
       resourceId: body.resourceId,
       caption: body.caption,
-      attachedBy: requesterId(req),
+      attachedBy: caller.actorId,
+      attachedByIsAdmin: caller.isAdmin,
     });
     return { success: true, message: 'File attached', data };
   }
@@ -149,12 +167,12 @@ export class FilesController {
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   async softDelete(@Req() req: any, @Param('id') id: string) {
-    const isAdmin = !!req.adminId;
-    const data = await this.service.softDelete(
-      id,
-      requesterId(req),
-      isAdmin,
-    );
+    // Phase 250 — isAdmin was `!!req.adminId`, which AnyAuthGuard never sets,
+    // so the admin-override branch never fired AND (combined with the
+    // requesterId='unknown' bug) every actor could delete every file. Derive
+    // from the resolved persona instead.
+    const caller = requesterContext(req);
+    const data = await this.service.softDelete(id, caller.actorId, caller.isAdmin);
     return { success: true, message: 'File deleted', data };
   }
 }
@@ -176,7 +194,10 @@ export class FilesController {
 export class AdminFilesController {
   constructor(private readonly service: FileService) {}
 
+  // Phase 250 — this surface reads ANY user's files (incl. KYC) and had
+  // PermissionsGuard but no @Permissions (= open to any admin). Gate it.
   @Get()
+  @Permissions('files.read.any')
   async list(
     @Query('purpose') purpose?: string,
     @Query('uploadedBy') uploadedBy?: string,
@@ -204,21 +225,34 @@ export class AdminFilesController {
    * ticket, a KYC record, etc.
    */
   @Get(':id')
+  @Permissions('files.read.any')
   async getOne(@Param('id') id: string) {
     const data = await this.service.findByIdForAdmin(id);
     return { success: true, message: 'File retrieved', data };
   }
 }
 
-function requesterId(req: any): string {
-  return (
-    req.userId ??
-    req.adminId ??
-    req.sellerId ??
-    req.franchiseId ??
-    req.affiliateId ??
-    'unknown'
-  );
+export interface FileCaller {
+  actorId: string;
+  actorType: string | null;
+  isAdmin: boolean;
+}
+
+/**
+ * Phase 250 — resolve the caller from what AnyAuthGuard actually sets
+ * (req.authActorId + req.user.{id,type}). The previous helper read
+ * req.userId/adminId/sellerId/... — none of which AnyAuthGuard populates —
+ * so it ALWAYS returned the literal 'unknown', collapsing every ownership
+ * check (`uploadedBy === requester`) to 'unknown' === 'unknown'. Throw
+ * rather than fall back to a shared sentinel.
+ */
+function requesterContext(req: any): FileCaller {
+  const actorId: string | undefined = req.authActorId ?? req.user?.id;
+  if (!actorId) {
+    throw new ForbiddenAppException('Cannot identify caller');
+  }
+  const actorType: string | null = req.user?.type ?? null;
+  return { actorId, actorType, isAdmin: actorType === 'ADMIN' };
 }
 
 // Bind UserAuthGuard import to keep tree-shaker honest (it's a peer

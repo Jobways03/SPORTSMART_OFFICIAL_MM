@@ -76,6 +76,7 @@ export function allocateOrderLevel(
     variantId: it.variantId ?? null,
     subOrderId: it.subOrderId,
     sellerId: it.sellerId ?? null,
+    franchiseId: it.franchiseId ?? null,
     discountInPaise: (it.grossInPaise * cappedTotal) / totalGross,
   }));
 
@@ -222,6 +223,7 @@ export function allocateBxgy(input: BxgyDiscountInput): AllocationResult {
       variantId: item.variantId ?? null,
       subOrderId: item.subOrderId,
       sellerId: item.sellerId ?? null,
+      franchiseId: item.franchiseId ?? null,
       discountInPaise: capped,
     });
     total += capped;

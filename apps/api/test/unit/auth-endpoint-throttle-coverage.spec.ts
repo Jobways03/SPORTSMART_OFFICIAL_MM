@@ -73,30 +73,42 @@ function read(rel: string): string {
 }
 
 /**
- * For each `@Post('<route>')` decorator we care about, walk up to 5
- * lines BEFORE and after to find an adjacent `@Throttle(...)`. That
- * decorator-stacking pattern is how NestJS chains decorators on the
- * same method.
+ * Locate the decorator block of the method whose `@Post` matches
+ * `postPattern`, and report whether it carries an `@Throttle` plus that
+ * throttle's `limit`. The block is bounded by the surrounding route
+ * decorators — we expand from the `@Post` line but never cross another
+ * `@Post(` (a route boundary) or the opening of the handler body, so we
+ * only ever see THIS route's decorators. This avoids two brittleness
+ * traps the old ±5-line window had: (1) a `@Throttle` stacked >5 lines
+ * from `@Post` (other decorators in between) was missed; (2) the
+ * separate `refresh` route's deliberately-higher cap leaked into the
+ * limit scan.
  */
-function hasAdjacentThrottle(source: string, postPattern: RegExp): boolean {
+function routeThrottle(
+  source: string,
+  postPattern: RegExp,
+): { exists: boolean; throttled: boolean; limit: number | null } {
   const lines = source.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    if (!postPattern.test(lines[i])) continue;
-    // Look for @Throttle within ±5 lines (typical decorator stack)
-    const start = Math.max(0, i - 5);
-    const end = Math.min(lines.length - 1, i + 5);
-    for (let j = start; j <= end; j++) {
-      if (/@Throttle\s*\(/.test(lines[j])) return true;
-    }
-    return false;
+  const idx = lines.findIndex((l) => postPattern.test(l));
+  if (idx === -1) return { exists: false, throttled: false, limit: null };
+  // Expand up over a contiguous decorator stack above @Post.
+  let up = idx;
+  while (up > 0 && /^\s*[@)]/.test(lines[up - 1]) && !/@Post\(/.test(lines[up - 1])) {
+    up--;
   }
-  // Pattern not found at all — surface as a test failure, but only on
-  // the file-level "endpoint exists" assertion, not here.
-  return false;
-}
-
-function routeExists(source: string, postPattern: RegExp): boolean {
-  return source.split('\n').some((line) => postPattern.test(line));
+  // Expand down through the rest of the stack + handler signature,
+  // stopping at the next route or the opening of the method body.
+  let down = idx;
+  while (down < lines.length - 1) {
+    if (/@Post\(/.test(lines[down + 1])) break; // next route boundary
+    down++;
+    if (/\)\s*[:{].*$/.test(lines[down]) || /\{\s*$/.test(lines[down])) break; // body opened
+    if (down - idx > 16) break; // safety bound
+  }
+  const block = lines.slice(up, down + 1).join('\n');
+  const throttled = /@Throttle\s*\(/.test(block);
+  const m = block.match(/@Throttle\s*\(\s*\{[^}]*limit\s*:\s*(\d+)/);
+  return { exists: true, throttled, limit: m ? parseInt(m[1], 10) : null };
 }
 
 describe('Auth endpoint throttle coverage (PR 3.4)', () => {
@@ -107,30 +119,36 @@ describe('Auth endpoint throttle coverage (PR 3.4)', () => {
       'route %s exists in the controller (sanity check)',
       (patternSource) => {
         const pattern = new RegExp(patternSource);
-        expect(routeExists(source, pattern)).toBe(true);
+        expect(routeThrottle(source, pattern).exists).toBe(true);
       },
     );
 
     it.each(routePatterns.map((p) => p.source))(
-      'route %s has an adjacent @Throttle decorator',
+      'route %s has a @Throttle decorator in its stack',
       (patternSource) => {
         const pattern = new RegExp(patternSource);
-        expect(hasAdjacentThrottle(source, pattern)).toBe(true);
+        expect(routeThrottle(source, pattern).throttled).toBe(true);
       },
     );
   });
 
-  it('the throttle limit is tight: every @Throttle on a login endpoint sets limit <= 10', () => {
-    // Catches a future "loosen the limit to 100 because users
-    // complained" commit. 10 attempts/minute/IP is more than enough
-    // for a user who genuinely forgot their password; it's a tight
-    // ceiling for a credential-spray attacker.
-    const allFiles = AUTH_CONTROLLERS.map((c) => read(c.file));
-    const allThrottleArgs = allFiles
-      .flatMap((source) => [...source.matchAll(/@Throttle\s*\(\s*\{[^}]*limit\s*:\s*(\d+)/g)])
-      .map((m) => parseInt(m[1], 10));
-    expect(allThrottleArgs.length).toBeGreaterThan(0);
-    for (const limit of allThrottleArgs) {
+  it('the throttle limit is tight on every login / OTP route: limit <= 10', () => {
+    // Catches a future "loosen the limit to 100 because users complained"
+    // commit. 10 attempts/minute/IP is plenty for a genuine forgotten
+    // password; a tight ceiling for a credential-spray attacker. Scoped to
+    // the login/OTP routes this spec tracks — NOT every @Throttle in the
+    // file (the `refresh` route deliberately runs a higher cap because it
+    // requires a valid refresh token and is not a credential-spray surface).
+    const limits: number[] = [];
+    for (const { file, routePatterns } of AUTH_CONTROLLERS) {
+      const source = read(file);
+      for (const p of routePatterns) {
+        const { limit } = routeThrottle(source, p);
+        if (limit !== null) limits.push(limit);
+      }
+    }
+    expect(limits.length).toBeGreaterThan(0);
+    for (const limit of limits) {
       expect(limit).toBeLessThanOrEqual(10);
     }
   });

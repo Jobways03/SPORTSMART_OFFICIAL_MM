@@ -58,6 +58,8 @@ function buildService(opts: {
 
   const env = {
     getBoolean: jest.fn().mockReturnValue(opts.enabled ?? true),
+    // Cluster C — cleanup() now reads FRANCHISE_RESERVATION_CLEANUP_BATCH_SIZE.
+    getNumber: jest.fn((_k: string, def: number) => def),
   } as any;
 
   const unreserveStock = jest.fn().mockResolvedValue(undefined);
@@ -84,6 +86,8 @@ function buildService(opts: {
   const instr = {
     wrap: jest.fn(async (_name: string, fn: () => Promise<unknown>) => fn()),
   } as any;
+  // Cluster C — best-effort per-tick audit summary row.
+  const audit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) } as any;
 
   const service = new FranchiseReservationCleanupService(
     prisma,
@@ -92,9 +96,10 @@ function buildService(opts: {
     logger,
     leader,
     instr,
+    audit,
   );
 
-  return { service, prisma, env, inventory, leader, unreserveStock, instr };
+  return { service, prisma, env, inventory, leader, unreserveStock, instr, audit };
 }
 
 describe('FranchiseReservationCleanupService — PR 1.8', () => {
@@ -262,5 +267,40 @@ describe('FranchiseReservationCleanupService — cron-run observability (PR 5.1)
     // tick() must NOT propagate — the outer catch in the impl swallows.
     await expect(service.tick()).resolves.toBeUndefined();
     expect(instr.wrap).toHaveBeenCalledTimes(1);
+  });
+
+  it('writes a best-effort audit summary row when reservations were released (Cluster C)', async () => {
+    const { service, audit } = buildService({
+      enabled: true,
+      expiredReservations: [
+        { id: 'l1', franchiseId: 'f1', productId: 'p1', variantId: null, globalSku: 's1', quantityDelta: -3, referenceId: 'r1' },
+      ],
+    });
+    await service.tick();
+    expect(audit.writeAuditLog).toHaveBeenCalledTimes(1);
+    expect(audit.writeAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'FRANCHISE_RESERVATION_CLEANUP',
+        module: 'franchise',
+        newValue: expect.objectContaining({ released: 1 }),
+      }),
+    );
+  });
+
+  it('does NOT write an audit row when nothing was released or suspended', async () => {
+    const { service, audit } = buildService({ enabled: true, expiredReservations: [] });
+    await service.tick();
+    expect(audit.writeAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('caps the expired-ledger scan with a take batch size (Cluster C)', async () => {
+    const { service, prisma } = buildService({ enabled: true });
+    await service.tick();
+    expect(prisma.franchiseInventoryLedger.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        take: 500,
+        orderBy: { createdAt: 'asc' },
+      }),
+    );
   });
 });

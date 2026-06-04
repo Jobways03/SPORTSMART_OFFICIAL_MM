@@ -9,6 +9,7 @@ import {
   AccessLogEntry,
   KIND_LABEL,
   KIND_COLOR,
+  maskIp,
 } from '@/services/access-history.service';
 
 function timeAgo(iso: string): string {
@@ -127,10 +128,20 @@ export default function AccessHistoryPage() {
                           color: KIND_COLOR[it.kind],
                         }}
                       >
-                        {KIND_LABEL[it.kind]}
+                        {KIND_LABEL[it.kind] ?? it.kind}
                       </span>
-                      {it.reason && (
-                        <p className="mt-1 text-xs text-gray-500">{it.reason}</p>
+                      {/* Phase 201 (#10) — new-device sign-ins are badged on
+                          the success row itself instead of a duplicate
+                          NEW_DEVICE_DETECTED row. */}
+                      {it.newDevice && (
+                        <span className="ml-1.5 inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                          New device
+                        </span>
+                      )}
+                      {!it.succeeded && (
+                        <p className="mt-1 text-xs text-gray-500">
+                          This sign-in attempt did not succeed.
+                        </p>
                       )}
                     </td>
                     <td className="px-4 py-3 text-gray-700">
@@ -142,7 +153,9 @@ export default function AccessHistoryPage() {
                     <td className="px-4 py-3 text-gray-700">
                       <div className="flex items-center gap-1.5">
                         <MapPin className="h-3.5 w-3.5 text-gray-400" />
-                        <code className="text-xs">{it.ipAddress ?? '—'}</code>
+                        {/* Phase 201 (#19) — host octets masked for privacy;
+                            the full IP is retained server-side only. */}
+                        <code className="text-xs">{maskIp(it.ipAddress)}</code>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-gray-500">{timeAgo(it.createdAt)}</td>

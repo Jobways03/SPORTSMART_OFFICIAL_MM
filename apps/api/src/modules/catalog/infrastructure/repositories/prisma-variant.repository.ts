@@ -258,7 +258,7 @@ export class PrismaVariantRepository implements IVariantRepository {
   /**
    * Phase 41 (2026-05-21) — returns the publicIds of every variant
    * image about to be wiped so the controller can fire-and-forget
-   * delete them on Cloudinary after the transaction commits. Closes
+   * delete them on media after the transaction commits. Closes
    * audit gap #16 (asset leak on /generate re-runs).
    */
   async collectVariantImagePublicIds(productId: string): Promise<string[]> {

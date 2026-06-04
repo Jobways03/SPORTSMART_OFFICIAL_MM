@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AffiliateAuthGuard } from '../../core/guards';
-import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../integrations/media/media-storage.adapter';
 import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.adapter';
 import { AffiliatePublicFacade } from './application/facades/affiliate-public.facade';
 import { AffiliateRegistrationService } from './application/services/affiliate-registration.service';
@@ -50,7 +50,7 @@ import { AffiliateSelfController } from './presentation/controllers/affiliate-se
     AffiliatePayoutService,
     AffiliateReturnWindowService,
     AffiliateAuthGuard,
-    CloudinaryAdapter,
+    MediaStorageAdapter,
     EmailOtpAdapter,
     // Event handlers — subscribed via @OnEvent decorators. Just
     // including them in providers is enough for Nest to register

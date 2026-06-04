@@ -28,6 +28,14 @@ enum EWayBillStatus {
   GENERATED
   // Cancelled within 24h of generation.
   CANCELLED
+  // Phase 160 (cancel/override audit B1) — two-phase cancel. The row is
+  // flipped to CANCELLATION_PENDING BEFORE the NIC cancel call so a crash
+  // between the provider call and the final DB write leaves a recoverable
+  // marker (not a silent GENERATED↔NIC-cancelled drift). The reconcile
+  // cron retries the (idempotent) NIC cancel and settles to CANCELLED.
+  CANCELLATION_PENDING
+  // Provider cancel errored; reconcile cron retries. Never ship-eligible.
+  CANCELLATION_FAILED
   // Past validUntil without delivery; AdminTask `EWAY_BILL_EXPIRED` raised.
   EXPIRED
   // All retries exhausted; AdminTask `EWAY_BILL_GENERATION_FAILED` raised.
@@ -93,11 +101,22 @@ model EWayBill {
   cancellationReason String?   @map("cancellation_reason")
   failureReason      String?   @map("failure_reason")
   retryCount         Int       @default(0) @map("retry_count")
+  // Phase 160 (cancel/override audit B1) — two-phase cancel markers,
+  // written BEFORE the provider call so a crash mid-cancel is recoverable.
+  cancelInitiatedAt  DateTime? @map("cancel_initiated_at")
+  cancelInitiatedBy  String?   @map("cancel_initiated_by")
+  // Phase 160 (#7) — NIC's cancellation reference number, hoisted out of
+  // the raw JSON blob into a queryable column for reconciliation reports.
+  providerCancelReference String? @map("provider_cancel_reference")
 
   // Raw provider payloads — dev visibility (stub) + prod support
   // (NIC payload reproducibility).
   rawRequestJson  Json? @map("raw_request_json")
   rawResponseJson Json? @map("raw_response_json")
+  // Phase 160 (#8) — cancel response kept SEPARATE so it no longer
+  // overwrites the original generate response (which the audit trail +
+  // reconciliation still need).
+  rawCancelResponseJson Json? @map("raw_cancel_response_json")
 
   // Admin override — set when ship-allowed despite EWB being
   // REQUIRED/FAILED. Tied to permission `tax.ewayBill.override`.
@@ -110,6 +129,10 @@ model EWayBill {
   // path back. Revoke fields capture who / when / why the override
   // was retracted; the canShip helper rejects when revoke is set.
   overrideReasonCategory  String?    @map("override_reason_category")
+  // Phase 160 (cancel/override audit #2) — the status the row held BEFORE
+  // it was flipped to OVERRIDDEN, so reports can show what was overridden
+  // (REQUIRED vs FAILED vs EXPIRED) and a revoke can restore it accurately.
+  preOverrideStatus       EWayBillStatus? @map("pre_override_status")
   overrideRevokedAt       DateTime?  @map("override_revoked_at")
   overrideRevokedBy       String?    @map("override_revoked_by")
   overrideRevokeReason    String?    @map("override_revoke_reason")
@@ -168,6 +191,9 @@ model EWayBill {
   // composite supports admin filtering by status + expiry tail).
   @@index([validUntil, status])
   @@index([retentionExpiresAt])
+  // Phase 160 (cancel/override audit #schema) — "EWBs cancelled in period X"
+  // reconciliation reports.
+  @@index([cancelledAt])
   @@map("e_way_bills")
 }
 

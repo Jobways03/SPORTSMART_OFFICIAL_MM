@@ -31,6 +31,7 @@ import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { SetTaxModeDto } from '../dtos/set-tax-mode.dto';
 import { MarkTcsFiledDto } from '../dtos/mark-tcs-filed.dto';
 import { MarkTcsPaidDto } from '../dtos/mark-tcs-paid.dto';
+import { MarkTcsCertificatesIssuedDto } from '../dtos/mark-tcs-certificates-issued.dto';
 import { ReverseTcsDto } from '../dtos/reverse-tcs.dto';
 import { Gstr1ReportService } from '../../application/services/gstr1-report.service';
 import { Gstr3bReportService } from '../../application/services/gstr3b-report.service';
@@ -40,7 +41,10 @@ import {
   Gstr8ReportService,
 } from '../../application/services/gstr8-report.service';
 import { PlatformGstProfileService } from '../../application/services/platform-gst-profile.service';
-import { TaxAuditReadinessService } from '../../application/services/tax-audit-readiness.service';
+import {
+  TaxAuditReadinessService,
+  type TaxAuditReadinessReport,
+} from '../../application/services/tax-audit-readiness.service';
 import { TaxModeService } from '../../application/services/tax-mode.service';
 import { TcsService } from '../../application/services/tcs.service';
 import { Tds194OService } from '../../application/services/tds-194o.service';
@@ -52,6 +56,7 @@ import { validateGstin } from '../../domain/gstin-validator';
 // which report for which (seller, period), with IP + UA, so a
 // data-exfiltration investigation has a single-table read path.
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 
 @ApiTags('Admin / Tax')
 @Controller('admin/tax')
@@ -72,6 +77,8 @@ export class AdminTaxReportsController {
     // resolution that admins could spoof.
     private readonly platformGstProfile: PlatformGstProfileService,
     private readonly audit: AuditPublicFacade,
+    // Phase 163 — readiness cache TTL + window knobs.
+    private readonly env: EnvService,
   ) {}
 
   /**
@@ -177,15 +184,193 @@ export class AdminTaxReportsController {
     };
   }
 
+  // Phase 163 (audit #5) — small TTL cache so an admin holding the refresh
+  // button (or several admins on the same minute) doesn't re-run the 14-scan
+  // build against prod on every keystroke. Keyed by scope.
+  private readonly readinessCache = new Map<
+    string,
+    { at: number; report: TaxAuditReadinessReport }
+  >();
+
+  /**
+   * Phase 163 — the audit-readiness dashboard rollup.
+   *   #5  @Throttle + a short TTL cache (the build is 14 scans).
+   *   #6  optional ?sellerId / ?filingPeriod / ?gstProfileId scope.
+   *   #10 every read is audit-logged (it reveals org-wide compliance posture).
+   *   #18 returned directly — the report carries no BigInt fields.
+   *   #20 gated on the dedicated tax.readiness.read (org-wide) permission.
+   */
   @Get('audit-readiness')
-  @Permissions('tax.reports.read')
-  async auditReadiness() {
-    const report = await this.readiness.build();
-    return {
-      success: true,
-      message: 'Audit readiness report built',
-      data: serialiseBigInt(report),
+  @Permissions('tax.readiness.read')
+  @Throttle({ default: { limit: 6, ttl: 60_000 } })
+  async auditReadiness(
+    @Req() req: any,
+    @Query('sellerId') sellerId?: string,
+    @Query('filingPeriod') filingPeriod?: string,
+    @Query('gstProfileId') gstProfileId?: string,
+    @Query('refresh') refresh?: string,
+  ) {
+    const filter = {
+      sellerId: sellerId?.trim() || null,
+      filingPeriod: filingPeriod?.trim() || null,
+      gstProfileId: gstProfileId?.trim() || null,
     };
+    if (filter.filingPeriod && !/^\d{4}-\d{2}$/.test(filter.filingPeriod)) {
+      throw new HttpException(
+        { success: false, code: 'INVALID_REQUEST', message: 'filingPeriod must be YYYY-MM' },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    const report = await this.buildReadinessCached(filter, refresh === 'true');
+    // #10 — audit the read (who looked at the posture, with what scope + result).
+    try {
+      await this.audit.writeAuditLog({
+        actorId: req?.adminId,
+        actorRole: 'ADMIN',
+        action: 'tax.readiness.viewed',
+        module: 'tax',
+        resource: 'tax_audit_readiness',
+        resourceId: `${filter.sellerId ?? 'platform'}:${filter.filingPeriod ?? 'all'}`,
+        metadata: {
+          totalBlockers: report.totalBlockers,
+          criticalBlockers: report.criticalBlockers,
+          ready: report.ready,
+          currentMode: report.currentMode,
+          filter,
+        },
+        ipAddress: req?.ip ?? req?.headers?.['x-forwarded-for'] ?? null,
+        userAgent: req?.headers?.['user-agent'] ?? null,
+      });
+    } catch {
+      // never fail the read on an audit-write blip
+    }
+    return { success: true, message: 'Audit readiness report built', data: report };
+  }
+
+  /**
+   * Phase 163 (audit #16) — readiness trend. Recent snapshots written by
+   * the 6-hourly cron, so finance can answer "are blockers trending down?".
+   */
+  @Get('audit-readiness/history')
+  @Permissions('tax.readiness.read')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  async auditReadinessHistory(@Query('days') days?: string) {
+    const parsedDays = days ? Number.parseInt(days, 10) : 30;
+    const items = await this.readiness.history(
+      Number.isFinite(parsedDays) ? parsedDays : 30,
+    );
+    return { success: true, message: 'Audit readiness history', data: { items } };
+  }
+
+  /** Phase 163 (audit #5) — TTL-cached readiness build, keyed by scope. */
+  private async buildReadinessCached(
+    filter: { sellerId: string | null; filingPeriod: string | null; gstProfileId: string | null },
+    forceRefresh: boolean,
+  ): Promise<TaxAuditReadinessReport> {
+    const ttlSeconds = this.env.getNumber('TAX_READINESS_CACHE_TTL_SECONDS', 30);
+    const key = `${filter.sellerId ?? ''}|${filter.filingPeriod ?? ''}|${filter.gstProfileId ?? ''}`;
+    const now = Date.now();
+    if (!forceRefresh && ttlSeconds > 0) {
+      const hit = this.readinessCache.get(key);
+      if (hit && now - hit.at < ttlSeconds * 1000) return hit.report;
+    }
+    const report = await this.readiness.build(filter);
+    if (ttlSeconds > 0) this.readinessCache.set(key, { at: now, report });
+    return report;
+  }
+
+  /**
+   * Phase 163 (audit #3) — STRICT-mode export readiness gate.
+   *
+   * In OFF / AUDIT mode exports are UNRESTRICTED — a CA needs to pull the
+   * CSV precisely to inspect what's wrong (this is the deliberate design
+   * accepted in the GSTR-3B audit: "exports must work regardless of mode").
+   *
+   * In STRICT mode — the "we assert we are production-compliant" posture —
+   * a file-producing export with unresolved readiness blockers is blocked
+   * with 409 BLOCKERS_PRESENT, UNLESS the caller passes
+   * ?acknowledgeBlockers=true AND holds tax.reports.overrideBlockers. Every
+   * such override is audit-logged with the blocker count, so a later review
+   * can reconstruct "this GSTR was filed while N blockers existed, knowingly,
+   * by admin X". Per-seller exports scope the readiness check to that seller
+   * (plus the platform-wide blockers that gate everyone).
+   */
+  private async assertExportReadiness(
+    req: any,
+    args: {
+      resource: string;
+      sellerId?: string | null;
+      filingPeriod?: string | null;
+      acknowledgeBlockers?: boolean;
+    },
+  ): Promise<void> {
+    const mode = await this.mode.getMode();
+    if (mode !== 'STRICT') return;
+    const report = await this.readiness.build({
+      sellerId: args.sellerId ?? null,
+      filingPeriod: args.filingPeriod ?? null,
+    });
+    if (report.totalBlockers === 0) return;
+
+    if (!args.acknowledgeBlockers) {
+      throw new HttpException(
+        {
+          success: false,
+          code: 'BLOCKERS_PRESENT',
+          message:
+            `Cannot export ${args.resource} in STRICT mode: ${report.totalBlockers} ` +
+            `unresolved tax-readiness blocker(s) (${report.criticalBlockers} critical). ` +
+            `Clear them (see GET /admin/tax/audit-readiness) or re-submit with ` +
+            `acknowledgeBlockers=true to file knowingly (requires ` +
+            `tax.reports.overrideBlockers).`,
+          data: {
+            totalBlockers: report.totalBlockers,
+            criticalBlockers: report.criticalBlockers,
+            blockers: report.blockers.filter((b) => b.count > 0),
+          },
+        },
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const perms: string[] = Array.isArray(req?.user?.permissions)
+      ? req.user.permissions
+      : [];
+    if (!perms.includes('tax.reports.overrideBlockers')) {
+      throw new HttpException(
+        {
+          success: false,
+          code: 'OVERRIDE_NOT_PERMITTED',
+          message:
+            'Acknowledging readiness blockers on a STRICT-mode export requires ' +
+            'the tax.reports.overrideBlockers permission.',
+        },
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    // Audited override — the forensic record that this filing went out with
+    // known gaps, knowingly, by this actor.
+    try {
+      await this.audit.writeAuditLog({
+        actorId: req?.adminId,
+        actorRole: 'ADMIN',
+        action: 'tax.report.exported_with_blockers',
+        module: 'tax',
+        resource: args.resource,
+        resourceId: `${args.sellerId ?? 'platform'}:${args.filingPeriod ?? 'all'}`,
+        metadata: {
+          totalBlockers: report.totalBlockers,
+          criticalBlockers: report.criticalBlockers,
+          sellerId: args.sellerId ?? null,
+          filingPeriod: args.filingPeriod ?? null,
+        },
+        ipAddress: req?.ip ?? req?.headers?.['x-forwarded-for'] ?? null,
+        userAgent: req?.headers?.['user-agent'] ?? null,
+      });
+    } catch {
+      // never fail the (consciously-authorised) export on an audit-write blip
+    }
   }
 
   // ── GSTR-1 ──────────────────────────────────────────────────────
@@ -202,8 +387,16 @@ export class AdminTaxReportsController {
     @Res() res: Response,
     @Query('sellerId') sellerId?: string,
     @Query('filingPeriod') filingPeriod?: string,
+    @Query('acknowledgeBlockers') acknowledgeBlockers?: string,
   ) {
     assertSellerAndPeriod(sellerId, filingPeriod);
+    // Phase 163 (#3) — STRICT-mode readiness gate (scoped to this seller).
+    await this.assertExportReadiness(req, {
+      resource: 'gstr1.b2b',
+      sellerId,
+      filingPeriod,
+      acknowledgeBlockers: acknowledgeBlockers === 'true',
+    });
     const csv = await this.gstr1.generateB2bCsv({
       sellerId: sellerId!,
       filingPeriod: filingPeriod!,
@@ -252,8 +445,15 @@ export class AdminTaxReportsController {
     @Param('section') section: string,
     @Query('sellerId') sellerId?: string,
     @Query('filingPeriod') filingPeriod?: string,
+    @Query('acknowledgeBlockers') acknowledgeBlockers?: string,
   ) {
     assertSellerAndPeriod(sellerId, filingPeriod);
+    await this.assertExportReadiness(req, {
+      resource: `gstr1.${section}`,
+      sellerId,
+      filingPeriod,
+      acknowledgeBlockers: acknowledgeBlockers === 'true',
+    });
     const args = { sellerId: sellerId!, filingPeriod: filingPeriod! };
     let csv: string;
     switch (section) {
@@ -314,8 +514,15 @@ export class AdminTaxReportsController {
     @Res() res: Response,
     @Query('sellerId') sellerId?: string,
     @Query('filingPeriod') filingPeriod?: string,
+    @Query('acknowledgeBlockers') acknowledgeBlockers?: string,
   ) {
     assertSellerAndPeriod(sellerId, filingPeriod);
+    await this.assertExportReadiness(req, {
+      resource: 'gstr3b',
+      sellerId,
+      filingPeriod,
+      acknowledgeBlockers: acknowledgeBlockers === 'true',
+    });
     const csv = await this.gstr3b.generateCsv({
       sellerId: sellerId!,
       filingPeriod: filingPeriod!,
@@ -373,10 +580,17 @@ export class AdminTaxReportsController {
     @Res() res: Response,
     @Query('filingPeriod') filingPeriod?: string,
     @Query('schemaVersion') schemaVersion?: string,
+    @Query('acknowledgeBlockers') acknowledgeBlockers?: string,
   ) {
     assertPeriod(filingPeriod);
     assertNotFuturePeriod(filingPeriod!);
     const sv = assertSchemaVersion(schemaVersion);
+    // Phase 163 (#3) — platform-wide STRICT-mode readiness gate.
+    await this.assertExportReadiness(req, {
+      resource: 'gstr8',
+      filingPeriod,
+      acknowledgeBlockers: acknowledgeBlockers === 'true',
+    });
     setCsvDownloadHeaders(res, `gstr8-${filingPeriod}.csv`);
     // Phase 159z (audit #8 + #15) — stream the CSV row-by-row and write
     // the audit log BEFORE we close the response. We capture bytes/rows
@@ -402,10 +616,16 @@ export class AdminTaxReportsController {
     @Req() req: any,
     @Query('filingPeriod') filingPeriod?: string,
     @Query('schemaVersion') schemaVersion?: string,
+    @Query('acknowledgeBlockers') acknowledgeBlockers?: string,
   ) {
     assertPeriod(filingPeriod);
     assertNotFuturePeriod(filingPeriod!);
     const sv = assertSchemaVersion(schemaVersion);
+    await this.assertExportReadiness(req, {
+      resource: 'gstr8',
+      filingPeriod,
+      acknowledgeBlockers: acknowledgeBlockers === 'true',
+    });
     // Phase 159z (audit B3 + #11) — operator GSTIN is sourced from the
     // verified PlatformGstProfile, not from a user-supplied query
     // string. Any operatorGstin query param is ignored.
@@ -478,6 +698,7 @@ export class AdminTaxReportsController {
     @Req() req: any,
     @Res() res: Response,
     @Query('filingPeriod') filingPeriod?: string,
+    @Query('acknowledgeBlockers') acknowledgeBlockers?: string,
   ) {
     if (!filingPeriod) {
       throw new HttpException(
@@ -489,6 +710,13 @@ export class AdminTaxReportsController {
         HttpStatus.BAD_REQUEST,
       );
     }
+    // Phase 163 (#3) — platform-wide readiness gate. filingPeriod here is a
+    // quarter (YYYY-Qn), not the monthly scope the scan filters on, so the
+    // check is unscoped-by-period (TDS-withheld + platform blockers still apply).
+    await this.assertExportReadiness(req, {
+      resource: 'form26q',
+      acknowledgeBlockers: acknowledgeBlockers === 'true',
+    });
     const csv = await this.form26q.generateCsv(filingPeriod);
     setCsvDownloadHeaders(res, `form26q-${filingPeriod}.csv`);
     await this.logReportDownload(req, {
@@ -508,6 +736,35 @@ export class AdminTaxReportsController {
   // per-seller GSTR-1 the platform also generates ON BEHALF of
   // sellers (the §4 B2B / §7 B2C product-sale sections).
 
+  /**
+   * Phase 159aa (audit B3 + #6 + #11) — server-side supplier GSTIN
+   * resolution shared by CSV + JSON + summary so a single
+   * PlatformGstProfile entry feeds every download.
+   */
+  private async resolveMarketplaceCommissionContext(): Promise<{
+    supplierGstin: string;
+  }> {
+    const profile = await this.platformGstProfile.requireDefault();
+    const v = validateGstin(profile.gstin);
+    if (!v.isValid) {
+      throw new HttpException(
+        {
+          success: false,
+          code: 'PLATFORM_GSTIN_INVALID',
+          message:
+            `Platform default GSTIN "${profile.gstin}" is not a valid GSTIN ` +
+            `(${v.errors.join('; ')}). Fix the Platform GST profile before ` +
+            'exporting the marketplace commission GSTR-1.',
+        },
+        HttpStatus.CONFLICT,
+      );
+    }
+    return { supplierGstin: v.normalized! };
+  }
+
+  // Phase 159aa (audit #13) — bound the export flood rate. Filing-day
+  // is bursty; 30/min comfortably covers manual re-pulls.
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Get('reports/marketplace-commission-gstr1.csv')
   @Permissions('tax.reports.export')
   @Header('Content-Type', 'text/csv; charset=utf-8')
@@ -515,21 +772,111 @@ export class AdminTaxReportsController {
     @Req() req: any,
     @Res() res: Response,
     @Query('filingPeriod') filingPeriod?: string,
+    @Query('schemaVersion') schemaVersion?: string,
+    @Query('acknowledgeBlockers') acknowledgeBlockers?: string,
   ) {
     assertPeriod(filingPeriod);
-    const csv = await this.marketplaceCommissionGstr.generateCsv(filingPeriod!);
+    assertNotFuturePeriod(filingPeriod!);
+    const sv = schemaVersion ?? '2024-Q3';
+    // Phase 163 (#3) — platform-wide STRICT-mode readiness gate.
+    await this.assertExportReadiness(req, {
+      resource: 'marketplace.commission.gstr1',
+      filingPeriod,
+      acknowledgeBlockers: acknowledgeBlockers === 'true',
+    });
+    const { supplierGstin } = await this.resolveMarketplaceCommissionContext();
     setCsvDownloadHeaders(
       res,
       `marketplace-commission-gstr1-${filingPeriod}.csv`,
     );
+    // Phase 159aa (audit #14) — streaming variant. Audit log written
+    // BEFORE res.end() inside streamCsv via the caller-pre-stream
+    // accounting; we still log the post-stream byte count for completeness.
+    const stream = await this.marketplaceCommissionGstr.streamCsv(res, {
+      filingPeriod: filingPeriod!,
+      supplierGstin,
+      schemaVersion: sv,
+    });
     await this.logReportDownload(req, {
       resource: 'marketplace.commission.gstr1',
       sellerId: null,
       filingPeriod: filingPeriod!,
       format: 'csv',
-      bytes: Buffer.byteLength(csv, 'utf8'),
+      bytes: stream.bytesWritten,
+      extra: { schemaVersion: sv, rowsEmitted: stream.rowsEmitted },
     });
-    res.send(csv);
+  }
+
+  // Phase 159aa (audit #7) — JSON export mirroring NIC §4 B2B / §7
+  // B2C / §9B field names. Operator GSTIN is server-resolved (audit B3).
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Get('reports/marketplace-commission-gstr1.json')
+  @Permissions('tax.reports.export')
+  async marketplaceCommissionGstr1Json(
+    @Req() req: any,
+    @Query('filingPeriod') filingPeriod?: string,
+    @Query('schemaVersion') schemaVersion?: string,
+    @Query('acknowledgeBlockers') acknowledgeBlockers?: string,
+  ) {
+    assertPeriod(filingPeriod);
+    assertNotFuturePeriod(filingPeriod!);
+    const sv = schemaVersion ?? '2024-Q3';
+    await this.assertExportReadiness(req, {
+      resource: 'marketplace.commission.gstr1',
+      filingPeriod,
+      acknowledgeBlockers: acknowledgeBlockers === 'true',
+    });
+    const { supplierGstin } = await this.resolveMarketplaceCommissionContext();
+    const payload = await this.marketplaceCommissionGstr.generateJsonPayload({
+      filingPeriod: filingPeriod!,
+      supplierGstin,
+      schemaVersion: sv,
+    });
+    const serialised = JSON.stringify(payload);
+    await this.logReportDownload(req, {
+      resource: 'marketplace.commission.gstr1',
+      sellerId: null,
+      filingPeriod: filingPeriod!,
+      format: 'json',
+      bytes: Buffer.byteLength(serialised, 'utf8'),
+      extra: { schemaVersion: sv, supplierGstin },
+    });
+    return {
+      success: true,
+      message: 'Marketplace commission GSTR-1 JSON payload built',
+      data: payload,
+    };
+  }
+
+  // Phase 159aa (audit #16) — summary endpoint backing the admin UI
+  // preview: counts + headline totals + drift warnings (#15).
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  @Get('reports/marketplace-commission-gstr1/summary')
+  @Permissions('tax.reports.read')
+  async marketplaceCommissionGstr1Summary(
+    @Req() req: any,
+    @Query('filingPeriod') filingPeriod?: string,
+  ) {
+    assertPeriod(filingPeriod);
+    assertNotFuturePeriod(filingPeriod!);
+    const { supplierGstin } = await this.resolveMarketplaceCommissionContext();
+    const summary = await this.marketplaceCommissionGstr.summarise({
+      filingPeriod: filingPeriod!,
+      supplierGstin,
+    });
+    const serialised = serialiseBigInt(summary);
+    await this.logReportDownload(req, {
+      resource: 'marketplace.commission.gstr1.summary',
+      sellerId: null,
+      filingPeriod: filingPeriod!,
+      format: 'summary',
+      bytes: Buffer.byteLength(JSON.stringify(serialised), 'utf8'),
+    });
+    return {
+      success: true,
+      message: 'Marketplace commission GSTR-1 summary built',
+      data: serialised,
+    };
   }
 
   @Get('reports/form16a/:ledgerId.html')
@@ -604,15 +951,22 @@ export class AdminTaxReportsController {
       ledgerIds: result.flippedIds,
       action: 'tax.tcs.filed',
       requested: body.ledgerIds.length,
-      extra: { nicArn: body.nicArn },
+      extra: { nicArn: body.nicArn, skippedCount: result.skipped.length },
     });
     return {
       success: true,
-      message: `${result.flippedCount} TCS row(s) marked FILED`,
+      message:
+        `${result.flippedCount} TCS row(s) marked FILED` +
+        (result.skipped.length
+          ? ` — ${result.skipped.length} skipped (not in COLLECTED state)`
+          : ''),
       data: {
         flipped: result.flippedCount,
         requested: body.ledgerIds.length,
         nicArn: body.nicArn,
+        // Phase 160 (§52 lifecycle audit B4 / #4) — the exact stragglers
+        // so the UI can show which rows weren't flipped + why.
+        skipped: result.skipped,
       },
     };
   }
@@ -628,21 +982,123 @@ export class AdminTaxReportsController {
       ledgerIds: body.ledgerIds,
       paidBy: req.adminId ?? 'unknown-admin',
       paymentReference: body.paymentReference,
+      paymentProofFileId: body.paymentProofFileId ?? null,
     });
     await this.writeLifecycleAuditLogs(req, {
       ledgerIds: result.flippedIds,
       action: 'tax.tcs.paidToGovt',
       requested: body.ledgerIds.length,
-      extra: { paymentReference: body.paymentReference },
+      extra: {
+        paymentReference: body.paymentReference,
+        paymentProofFileId: body.paymentProofFileId ?? null,
+        skippedCount: result.skipped.length,
+      },
     });
     return {
       success: true,
-      message: `${result.flippedCount} TCS row(s) marked PAID_TO_GOVT`,
+      message:
+        `${result.flippedCount} TCS row(s) marked PAID_TO_GOVT` +
+        (result.skipped.length
+          ? ` — ${result.skipped.length} skipped (not in FILED state)`
+          : ''),
       data: {
         flipped: result.flippedCount,
         requested: body.ledgerIds.length,
+        skipped: result.skipped,
       },
     };
+  }
+
+  /**
+   * Phase 160 (§52 lifecycle audit B1 / #12) — terminal stage: furnish
+   * the §52(5) TCS certificate to suppliers. Bulk-marks PAID_TO_GOVT rows
+   * CERTIFICATE_ISSUED with a per-row certificate number. Audited per
+   * flipped row; returns the per-row certificate numbers + the skipped
+   * stragglers (B4 / #4).
+   */
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Post('tcs/mark-certificates-issued')
+  @Permissions('tax.tcs.markCertificateIssued')
+  async markCertificatesIssued(
+    @Req() req: any,
+    @Body() body: MarkTcsCertificatesIssuedDto,
+  ) {
+    const result = await this.tcs.markCertificatesIssued({
+      ledgerIds: body.ledgerIds,
+      issuedBy: req.adminId ?? 'unknown-admin',
+      certificateNumberPrefix: body.certificateNumberPrefix,
+    });
+    // One audit_logs row per flipped ledger, carrying the certificate
+    // number so a forensic search returns "who issued cert X, when".
+    const ip = req?.ip ?? req?.headers?.['x-forwarded-for'] ?? null;
+    const ua = req?.headers?.['user-agent'] ?? null;
+    for (const ledgerId of result.flippedIds) {
+      try {
+        await this.audit.writeAuditLog({
+          actorId: req?.adminId,
+          actorRole: 'ADMIN',
+          action: 'tax.tcs.certificateIssued',
+          module: 'tax',
+          resource: 'gst_tcs_settlement_ledger',
+          resourceId: ledgerId,
+          newValue: { status: 'CERTIFICATE_ISSUED' },
+          metadata: {
+            requestedCount: body.ledgerIds.length,
+            certificateNumber: result.certificateNumbers[ledgerId] ?? null,
+            skippedCount: result.skipped.length,
+          },
+          ipAddress: ip,
+          userAgent: ua,
+        });
+      } catch {
+        // never fail the transition on an audit-write blip
+      }
+    }
+    return {
+      success: true,
+      message:
+        `${result.flippedCount} TCS certificate(s) issued` +
+        (result.skipped.length
+          ? ` — ${result.skipped.length} skipped (not in PAID_TO_GOVT state)`
+          : ''),
+      data: {
+        flipped: result.flippedCount,
+        requested: body.ledgerIds.length,
+        certificateNumbers: result.certificateNumbers,
+        skipped: result.skipped,
+      },
+    };
+  }
+
+  /**
+   * Phase 160 (§52 lifecycle audit B1) — render the §52(5) TCS
+   * certificate as HTML (admin preview / save-as-PDF). 404 when the
+   * ledger row doesn't exist. Audit-logged like the Form 16A endpoint.
+   */
+  @Get('tcs/certificate/:ledgerId.html')
+  @Permissions('tax.tcs.export')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  async tcsCertificateHtml(
+    @Req() req: any,
+    @Res() res: Response,
+    @Param('ledgerId') ledgerId: string,
+  ) {
+    const html = await this.tcs.renderCertificateHtml(ledgerId);
+    if (!html) {
+      throw new HttpException(
+        { success: false, message: 'TCS ledger row not found', code: 'NOT_FOUND' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    await this.logReportDownload(req, {
+      resource: 'tcs.certificate',
+      sellerId: null,
+      filingPeriod: '',
+      format: 'summary',
+      bytes: Buffer.byteLength(html, 'utf8'),
+      extra: { ledgerId },
+    });
+    res.send(html);
   }
 
   /**

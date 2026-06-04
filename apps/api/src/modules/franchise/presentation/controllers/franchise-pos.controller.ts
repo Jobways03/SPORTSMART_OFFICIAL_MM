@@ -22,6 +22,7 @@ import { PosRecordSaleDto } from '../dtos/pos-record-sale.dto';
 import { PosVoidSaleDto } from '../dtos/pos-void-sale.dto';
 import { PosReturnSaleDto } from '../dtos/pos-return-sale.dto';
 import { PosReportQueryDto } from '../dtos/pos-report-query.dto';
+import { PosSubmitReconciliationDto } from '../dtos/pos-submit-reconciliation.dto';
 
 @ApiTags('Franchise POS')
 @Controller('franchise/pos')
@@ -42,6 +43,9 @@ export class FranchisePosController {
   // tax invoice and a second receipt number. voidSale already had this; the
   // most important endpoint did not.
   @Idempotent()
+  // Phase 238 — recordSale was the one POS mutator without a throttle (void/
+  // return both have it); bound the burst rate.
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
   async recordSale(@Req() req: Request, @Body() dto: PosRecordSaleDto) {
     const franchiseId = (req as any).franchiseId;
     // Org-level actor for the inventory ledger (attributed FRANCHISE_OWNER).
@@ -160,6 +164,43 @@ export class FranchisePosController {
     return {
       success: true,
       message: 'Daily POS reconciliation fetched successfully',
+      data,
+    };
+  }
+
+  /**
+   * Phase 242 (POS Reconciliation audit) — submit the day's counted cash + bank
+   * deposit. The server recomputes expected cash AUTHORITATIVELY (never trusts a
+   * client-sent expected/variance) and flags MATCHED/VARIANCE. @Idempotent +
+   * the (franchise, businessDate) unique key make a double-submit a safe upsert.
+   * Owner/manager-scoped via the report-read staff permission. The admin
+   * approve/reject/resolve workflow + deposit-proof upload are the surfaced
+   * follow-on.
+   */
+  @Post('reconciliation')
+  @StaffPermissions('report.read')
+  @HttpCode(HttpStatus.OK)
+  @Idempotent()
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  async submitReconciliation(
+    @Req() req: Request,
+    @Body() dto: PosSubmitReconciliationDto,
+  ) {
+    const franchiseId = (req as any).franchiseId;
+    const staffId = (req as any).staffId ?? (req as any).franchiseUserId ?? null;
+
+    const data = await this.posService.submitReconciliation(franchiseId, {
+      businessDate: dto.businessDate,
+      actualCashInPaise: dto.actualCashInPaise,
+      bankDepositInPaise: dto.bankDepositInPaise,
+      bankDepositReference: dto.bankDepositReference ?? null,
+      notes: dto.notes ?? null,
+      staffId,
+    });
+
+    return {
+      success: true,
+      message: 'POS cash reconciliation submitted successfully',
       data,
     };
   }

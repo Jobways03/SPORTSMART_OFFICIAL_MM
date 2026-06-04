@@ -90,6 +90,17 @@ enum AuthorizationDecisionEffect {
   DENY
 }
 
+/// Triage state for a logged authorization denial during the soak→strict
+/// rollout. Operators mark each deny so the feed converges toward
+/// "strict-mode safe to enable" instead of re-surfacing the same noise.
+enum AuthzReviewStatus {
+  UNREVIEWED
+  FALSE_POSITIVE
+  EXPECTED_DENY
+  FIXED
+  IGNORED
+}
+
 model AuthorizationAudit {
   id String @id @default(uuid())
 
@@ -126,9 +137,36 @@ model AuthorizationAudit {
   reason    String?
   createdAt DateTime @default(now()) @map("created_at")
 
+  // ── False-positive review FSM (strict-mode rollout triage) ───
+  reviewStatus      AuthzReviewStatus @default(UNREVIEWED) @map("review_status")
+  reviewedByAdminId String?           @map("reviewed_by_admin_id")
+  reviewedAt        DateTime?         @map("reviewed_at")
+  reviewNote        String?           @map("review_note")
+
   @@index([adminId, createdAt])
   @@index([decision, createdAt])
   @@index([routeLabel, createdAt])
   @@index([resourceType, action, createdAt])
+  @@index([reviewStatus, decision, createdAt])
   @@map("authorization_audits")
+}
+
+/// Admin-editable runtime config that doesn't belong in a domain table.
+/// Today: authz-mode overrides (strict / abac / audit). `value` is a JSON
+/// blob, e.g. { "strictMode": true }.
+///
+/// SECURITY: AuthzModeService applies these with OR-semantics over the env
+/// baseline — a runtime override can only TIGHTEN enforcement (turn strict
+/// ON early), never drop below what the deployment mandates. Disabling a
+/// deploy-mandated strict mode still requires an env change + redeploy.
+model SystemSetting {
+  id               String   @id @default(uuid())
+  key              String   @unique
+  value            Json
+  category         String?
+  updatedByAdminId String?  @map("updated_by_admin_id")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  @@map("system_settings")
 }

@@ -7,6 +7,7 @@ import {
 import { TemplateRegistry } from '../services/template-registry.service';
 import { TemplateRenderer } from '../services/template-renderer.service';
 import { NotificationPreferenceRepository } from '../../infrastructure/persistence/prisma/notification-preference.repository';
+import { NotificationLogRepository } from '../../infrastructure/persistence/prisma/notification-log.repository';
 
 /**
  * Single entry point for every other module that wants to send a
@@ -31,7 +32,39 @@ export class NotificationsPublicFacade {
     private readonly registry: TemplateRegistry,
     private readonly renderer: TemplateRenderer,
     private readonly preferences: NotificationPreferenceRepository,
+    private readonly logRepo: NotificationLogRepository,
   ) {}
+
+  // ── Phase 185 (#12) — DLQ ops surface ─────────────────────────────────
+  /** Queue depth snapshot (ready / delayed / dead-letter). */
+  getQueueStats() {
+    return this.queue.getStats();
+  }
+  listDeadLetters(offset: number, limit: number) {
+    return this.queue.listDeadLetters(offset, limit);
+  }
+  replayDeadLetter(index: number) {
+    return this.queue.replayDeadLetter(index);
+  }
+  /**
+   * Discard a dead-letter and record a CANCELLED log row (#5). Returns true
+   * when an entry was found+cancelled.
+   */
+  async discardDeadLetter(index: number, reason: string): Promise<boolean> {
+    const entry = await this.queue.discardDeadLetter(index);
+    if (!entry) return false;
+    await this.logRepo.recordCancellation(
+      entry.job,
+      `Cancelled by admin from DLQ: ${reason}`.slice(0, 500),
+    );
+    return true;
+  }
+
+  // ── Phase 185 (#5) — delivery receipts ────────────────────────────────
+  /** Flip SENT → DELIVERED on a carrier delivery-receipt. */
+  recordDeliveryReceipt(providerMessageId: string, deliveredAt: Date) {
+    return this.logRepo.markDelivered(providerMessageId, deliveredAt);
+  }
 
   /**
    * Enqueue a notification rendered from a template.
@@ -50,6 +83,8 @@ export class NotificationsPublicFacade {
     recipientId: string;
     vars: Record<string, unknown>;
     eventId?: string;
+    /** Phase 185 (#17) — provenance; defaults to EVENT_BUS:<eventClass>. */
+    triggerSource?: string;
   }): Promise<string> {
     const template = await this.registry.get(args.templateKey);
     if (!template) {
@@ -57,9 +92,15 @@ export class NotificationsPublicFacade {
       return '';
     }
 
-    // Preference check: only consult for non-marketing transactional
-    // notifications; admin override is via the user explicitly opting
-    // out per (eventClass, channel) in /account/notifications.
+    // Best-effort enqueue-time early-out: if the user has already opted out
+    // of (eventClass, channel) we can skip the queue round-trip. This is NOT
+    // the authoritative suppression check — it sees only the preference
+    // store, not the suppression list / DPDP consent / WhatsApp STOP, and it
+    // races against changes made between enqueue and send. The LOAD-BEARING
+    // chokepoint is NotificationGateService.check(), now invoked at send time
+    // in NotificationWorker.handle() for every queue-driven dispatch. We keep
+    // this cheap pre-filter purely to avoid churning the queue for the common
+    // already-opted-out case.
     const enabled = await this.preferences.isEnabled({
       userId: args.recipientId,
       eventClass: args.eventClass,
@@ -72,10 +113,34 @@ export class NotificationsPublicFacade {
       return '';
     }
 
+    // Phase 185 (#14) — strip internal-only payload fields BEFORE render so
+    // admin context (riskScore, internalNotes, _*) can never leak into a
+    // customer-facing message. Default-on (template.customerVisibleOnly).
+    const vars =
+      template.customerVisibleOnly === false
+        ? args.vars
+        : TemplateRenderer.stripInternalVars(args.vars);
+
+    // Phase 185 (#6) — fail fast on missing required vars rather than
+    // shipping "Hi {{customerName}}". Only enforced when the template
+    // declares a variablesSchema.
+    const missing = this.renderer.findMissingRequiredVars(
+      template.variablesSchema,
+      vars,
+    );
+    if (missing.length > 0) {
+      this.logger.warn(
+        `Dropping ${args.templateKey} → ${args.recipientId}: missing required vars [${missing.join(', ')}]`,
+      );
+      return '';
+    }
+
+    // Phase 188 (#8) — channel-aware rendering: SMS/WhatsApp get plain text
+    // (no HTML entity escaping), EMAIL gets HTML escaping.
     const subject = template.subject
-      ? this.renderer.render(template.subject, args.vars)
+      ? this.renderer.render(template.subject, vars, { channel: template.channel })
       : undefined;
-    const body = this.renderer.render(template.body, args.vars);
+    const body = this.renderer.render(template.body, vars, { channel: template.channel });
 
     return this.queue.enqueue({
       channel: template.channel,
@@ -85,6 +150,10 @@ export class NotificationsPublicFacade {
       body,
       eventType: args.eventClass,
       eventId: args.eventId,
+      triggerSource: args.triggerSource ?? `EVENT_BUS:${args.eventClass}`,
+      // Phase 185 (#4) — DLT ids resolved from the template for SMS.
+      dltTemplateId: template.dltTemplateId ?? null,
+      dltHeaderId: template.dltHeaderId ?? null,
     });
   }
 
@@ -102,6 +171,19 @@ export class NotificationsPublicFacade {
     body: string;
     eventType?: string;
     eventId?: string;
+    triggerSource?: string;
+    dltTemplateId?: string | null;
+    dltHeaderId?: string | null;
+    // Phase 190 (#4) — trace linkage (e.g. retry → original log id).
+    parentLogId?: string | null;
+    outboxEventId?: string | null;
+    /**
+     * Cluster-D — safety-critical send. The send-time gate bypasses user
+     * preference + DPDP marketing-consent for these (suppression list +
+     * WhatsApp STOP still hard-block). Use for OTP / password reset / refund
+     * credited and for deliberate admin opt-out-bypass dispatches.
+     */
+    transactional?: boolean;
   }): Promise<string> {
     if (!args.recipientId && !args.to) {
       this.logger.warn('notify() called without recipientId or to — dropping job');
@@ -116,6 +198,12 @@ export class NotificationsPublicFacade {
       body: args.body,
       eventType: args.eventType,
       eventId: args.eventId,
+      triggerSource: args.triggerSource ?? (args.eventType ? `EVENT_BUS:${args.eventType}` : undefined),
+      dltTemplateId: args.dltTemplateId ?? null,
+      dltHeaderId: args.dltHeaderId ?? null,
+      parentLogId: args.parentLogId ?? null,
+      outboxEventId: args.outboxEventId ?? null,
+      transactional: args.transactional,
     });
   }
 
@@ -181,11 +269,27 @@ export class NotificationsPublicFacade {
     return this.preferences.listForUser(userId);
   }
 
-  /** Bulk upsert called by the customer settings page. */
+  /**
+   * Bulk upsert with consent trail (Phase 189). `ctx` carries the change
+   * provenance (source, admin actor, IP/UA) for the GDPR-demonstrable
+   * history; all entries + history rows commit atomically.
+   */
   setPreferencesForUser(
     userId: string,
     entries: Array<{ eventClass: string; channel: NotificationChannel; enabled: boolean }>,
+    ctx: {
+      source: string;
+      updatedByAdminId?: string | null;
+      bypassReason?: string | null;
+      ipAddress?: string | null;
+      userAgent?: string | null;
+    },
   ) {
-    return this.preferences.setMany(userId, entries);
+    return this.preferences.setMany(userId, entries, ctx);
+  }
+
+  /** Phase 189 (#9) — consent-change history for a user. */
+  getPreferenceHistoryForUser(userId: string) {
+    return this.preferences.historyForUser(userId);
   }
 }

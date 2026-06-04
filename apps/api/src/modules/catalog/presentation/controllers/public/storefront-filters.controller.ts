@@ -8,6 +8,7 @@ import {
   Req,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiQuery } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Prisma } from '@prisma/client';
 import { Request } from 'express';
 import { CatalogCacheService } from '../../../application/services/catalog-cache.service';
@@ -47,6 +48,8 @@ import { CATEGORY_REPOSITORY, ICategoryRepository } from '../../../domain/reposi
 
 @ApiTags('Storefront - Filters')
 @Controller({ path: 'storefront/filters', version: '1' })
+// Phase 192 (#3) — public facets endpoint; rate-limit to deter scraping.
+@Throttle({ default: { limit: 120, ttl: 60_000 } })
 export class StorefrontFiltersController {
   constructor(
     @Inject(STOREFRONT_REPOSITORY) private readonly storefrontRepo: IStorefrontRepository,
@@ -94,16 +97,24 @@ export class StorefrontFiltersController {
 
       const baseConditions = this.buildBaseConditions(categoryId, collectionId, search);
 
-      const filters: unknown[] = [];
-      for (const config of filterConfigs) {
-        if (config.builtInType) {
-          const filter = await this.computeBuiltInFilter(config, baseConditions, activeFilters);
-          if (filter) filters.push(filter);
-        } else if (config.metafieldDefinition) {
-          const filter = await this.computeMetafieldFilter(config, baseConditions, activeFilters);
-          if (filter) filters.push(filter);
-        }
-      }
+      // Phase 194 (#9) — each facet is an independent raw-SQL aggregate.
+      // Pre-194 they ran sequentially (await-in-for), so a category with
+      // 12 filterable attributes serialized 12 round-trips on every cache
+      // miss. Fan them out concurrently; Promise.all preserves the
+      // sortOrder-sorted array order, so the rendered filter order is
+      // unchanged.
+      const computed = await Promise.all(
+        filterConfigs.map((config) => {
+          if (config.builtInType) {
+            return this.computeBuiltInFilter(config, baseConditions, activeFilters);
+          }
+          if (config.metafieldDefinition) {
+            return this.computeMetafieldFilter(config, baseConditions, activeFilters);
+          }
+          return Promise.resolve(null);
+        }),
+      );
+      const filters = computed.filter((f) => f != null);
 
       return { filters };
     });
@@ -343,6 +354,9 @@ export class StorefrontFiltersController {
     const conditions: Prisma.Sql[] = [
       Prisma.sql`p.is_deleted = false`,
       Prisma.sql`p.status = 'ACTIVE'`,
+      // Phase 192 (#2) — facets must only count publicly-visible (approved)
+      // products, consistent with the listing query.
+      Prisma.sql`p.moderation_status = 'APPROVED'`,
       Prisma.sql`EXISTS (
         SELECT 1 FROM seller_product_mappings spm
         WHERE spm.product_id = p.id
@@ -413,13 +427,89 @@ export class StorefrontFiltersController {
     return conditions;
   }
 
+  /**
+   * Phase 194 (#12) — disjunctive faceting must ALSO propagate the
+   * BUILT-IN selections (brand, price_range) to every other facet.
+   * Pre-194 buildOtherMetafieldConditions explicitly skipped built-in
+   * keys, so picking a brand did NOT refine the size / colour / price
+   * counts — the facet numbers lied about what a combined selection
+   * would actually return.
+   *
+   * `availability` is deliberately NOT emitted: the base conditions
+   * already require an in-stock seller mapping, so an `in_stock`
+   * selection is a no-op and `out_of_stock` would zero every facet.
+   */
+  private buildOtherBuiltInConditions(
+    activeFilters: Map<string, string[]>,
+    excludeKey: string,
+  ): Prisma.Sql[] {
+    const conditions: Prisma.Sql[] = [];
+
+    if (excludeKey !== 'brand') {
+      const brandIds = (activeFilters.get('brand') ?? []).filter(Boolean);
+      if (brandIds.length > 0) {
+        conditions.push(Prisma.sql`p.brand_id IN (${Prisma.join(brandIds)})`);
+      }
+    }
+
+    if (excludeKey !== 'price_range') {
+      const bounds = this.parsePriceBounds(activeFilters.get('price_range'));
+      if (bounds) {
+        conditions.push(Prisma.sql`p.base_price BETWEEN ${bounds.min} AND ${bounds.max}`);
+      }
+    }
+
+    return conditions;
+  }
+
+  /**
+   * Phase 194 (#12) — tolerant price-band parser. Accepts either the
+   * two-value shape `filter[price_range]=500,2000` (parsed to
+   * ['500','2000']) or a single `min-max` token. Returns null on any
+   * malformed / inverted input so a bad permalink never 500s — it just
+   * doesn't constrain the other facets.
+   */
+  private parsePriceBounds(values?: string[]): { min: number; max: number } | null {
+    if (!values || values.length === 0) return null;
+    const parts = values.length >= 2
+      ? [values[0] ?? '', values[1] ?? '']
+      : String(values[0] ?? '').split(/[-:]/);
+    if (parts.length < 2) return null;
+    const min = Number(parts[0]);
+    const max = Number(parts[1]);
+    if (!Number.isFinite(min) || !Number.isFinite(max) || min < 0 || max < 0 || min > max) {
+      return null;
+    }
+    return { min, max };
+  }
+
+  /**
+   * Phase 194 (#19) — surface whether a filter was auto-synthesized
+   * from the category's filterable metafields vs backed by an explicit
+   * admin StorefrontFilter row. Auto entries carry a sentinel `_auto_`
+   * id (buildAutoConfigs); an admin override replaces the id with the
+   * real row UUID, so an overridden built-in correctly reports
+   * isAutoGenerated=false. Lets the UI badge "(auto)" filters and aids
+   * support when a merchant asks "why is this filter showing?".
+   */
+  private isAutoConfig(config: any): boolean {
+    return typeof config?.id === 'string' && config.id.startsWith('_auto_');
+  }
+
   private async computeBuiltInFilter(
     config: any,
     baseConditions: Prisma.Sql[],
     activeFilters: Map<string, string[]>,
   ) {
     // Phase 40 — Gap #6 fix: bare key, not `_${builtInType}`.
-    const otherConditions = this.buildOtherMetafieldConditions(activeFilters, config.builtInType);
+    // Phase 194 (#12) — also propagate the OTHER built-in selections
+    // (brand / price) so e.g. the brand facet narrows when a price band
+    // is active, and the price range narrows when a brand is picked.
+    const otherConditions = [
+      ...this.buildOtherBuiltInConditions(activeFilters, config.builtInType),
+      ...this.buildOtherMetafieldConditions(activeFilters, config.builtInType),
+    ];
+    const isAutoGenerated = this.isAutoConfig(config);
 
     switch (config.builtInType) {
       case 'brand': {
@@ -430,6 +520,7 @@ export class StorefrontFiltersController {
           label: config.label,
           type: config.filterType,
           builtIn: true,
+          isAutoGenerated,
           collapsed: config.collapsed,
           showCounts: config.showCounts,
           values: results,
@@ -443,9 +534,11 @@ export class StorefrontFiltersController {
           label: config.label,
           type: 'price_range',
           builtIn: true,
+          isAutoGenerated,
           collapsed: config.collapsed,
           showCounts: config.showCounts,
-          range: { min: Number(range.min), max: Number(range.max) },
+          // Phase 194 (#13) — Decimal-precise string bounds (money on the wire).
+          range: { min: range.min, max: range.max },
         };
       }
       case 'availability': {
@@ -455,6 +548,7 @@ export class StorefrontFiltersController {
           label: config.label,
           type: 'checkbox',
           builtIn: true,
+          isAutoGenerated,
           collapsed: config.collapsed,
           showCounts: config.showCounts,
           values: [
@@ -476,9 +570,15 @@ export class StorefrontFiltersController {
     const def = config.metafieldDefinition;
     if (!def) return null;
 
-    const otherConditions = this.buildOtherMetafieldConditions(activeFilters, def.key);
+    // Phase 194 (#12) — propagate active brand / price selections into the
+    // metafield facet counts too, alongside the other metafield filters.
+    const otherConditions = [
+      ...this.buildOtherBuiltInConditions(activeFilters, def.key),
+      ...this.buildOtherMetafieldConditions(activeFilters, def.key),
+    ];
     const allConditions = [...baseConditions, ...otherConditions];
     const defKey = def.key;
+    const isAutoGenerated = this.isAutoConfig(config);
 
     if (def.type === 'BOOLEAN') {
       const results = await this.storefrontRepo.computeBooleanMetafieldFacets(defKey, allConditions);
@@ -487,6 +587,7 @@ export class StorefrontFiltersController {
         label: config.label,
         type: config.filterType,
         builtIn: false,
+        isAutoGenerated,
         definitionId: def.id,
         collapsed: config.collapsed,
         showCounts: config.showCounts,
@@ -505,9 +606,11 @@ export class StorefrontFiltersController {
         label: config.label,
         type: config.filterType,
         builtIn: false,
+        isAutoGenerated,
         definitionId: def.id,
         collapsed: config.collapsed,
         showCounts: config.showCounts,
+        // Non-money numeric attribute (weight, rating, …) — a plain number range.
         range: { min: Number(range.min), max: Number(range.max) },
       };
     }
@@ -528,6 +631,7 @@ export class StorefrontFiltersController {
         label: config.label,
         type: config.filterType,
         builtIn: false,
+        isAutoGenerated,
         definitionId: def.id,
         collapsed: config.collapsed,
         showCounts: config.showCounts,

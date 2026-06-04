@@ -6,6 +6,7 @@ import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
 import { StockMovementLedgerService } from '../services/stock-movement-ledger.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 
 /**
  * Phase 4.4 (2026-05-16) — Reservation expiry sweep.
@@ -39,6 +40,11 @@ export class ReservationExpirySweepCron {
     private readonly eventBus: EventBusService,
     private readonly leader: LeaderElectedCron,
     private readonly ledger: StockMovementLedgerService,
+    // Cluster C (#210-#8) — best-effort tamper-evident summary row per
+    // sweep run. The per-row StockMovement ledger already records each
+    // individual release (Gap #9); this is the run-level rollup so ops can
+    // see WHEN the sweep last ran + how many it expired. @Global AuditModule.
+    private readonly audit: AuditPublicFacade,
   ) {}
 
   enabled(): boolean {
@@ -93,6 +99,29 @@ export class ReservationExpirySweepCron {
       this.logger.log(
         `Reservation expiry sweep run complete — totalExpired=${totalExpired} totalFailed=${totalFailed} iterations=${iterations}`,
       );
+
+      // Cluster C (#210-#8) — one best-effort audit summary row per run,
+      // OUTSIDE any per-row transaction (loop has already completed). A
+      // logging failure must never abort the sweep, hence `.catch`.
+      await this.audit
+        .writeAuditLog({
+          actorId: 'system',
+          actorRole: 'SYSTEM',
+          action: 'RESERVATION_EXPIRY_SWEEP',
+          module: 'inventory',
+          resource: 'stock_reservation',
+          resourceId: 'sweep',
+          newValue: {
+            expired: totalExpired,
+            failed: totalFailed,
+            iterations,
+          },
+        })
+        .catch((err) =>
+          this.logger.warn(
+            `Failed to write reservation-expiry sweep audit row: ${(err as Error)?.message ?? err}`,
+          ),
+        );
     }
 
     return { iterations, expired: totalExpired, failed: totalFailed };

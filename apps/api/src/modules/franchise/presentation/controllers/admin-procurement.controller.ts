@@ -11,6 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { Request } from 'express';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
@@ -81,6 +82,7 @@ export class AdminProcurementController {
   // franchise payable; it must require a dedicated write permission, not the
   // class-level franchise.read every admin inherits.
   @Permissions('franchise.procurement.approve')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   async approveRequest(
     @Req() req: Request,
@@ -104,6 +106,7 @@ export class AdminProcurementController {
   @Patch(':id/reject')
   // Reject is the other half of the approval decision — same write permission.
   @Permissions('franchise.procurement.approve')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   async rejectRequest(
     @Req() req: Request,
@@ -126,6 +129,7 @@ export class AdminProcurementController {
 
   @Patch(':id/dispatch')
   @Permissions('franchise.procurement.dispatch')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   async markDispatched(
     @Req() req: Request,
@@ -155,6 +159,7 @@ export class AdminProcurementController {
 
   @Patch(':id/settle')
   @Permissions('franchise.procurement.settle')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @HttpCode(HttpStatus.OK)
   async settleRequest(
     @Req() req: Request,

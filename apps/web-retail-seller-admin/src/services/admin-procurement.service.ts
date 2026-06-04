@@ -48,6 +48,9 @@ export interface ProcurementDetail extends ProcurementListItem {
   items: ProcurementItem[];
   procurementFeeRate: number;
   notes: string | null;
+  trackingNumber?: string;
+  carrierName?: string;
+  expectedDeliveryAt?: string;
 }
 
 export interface ProcurementListResponse {
@@ -103,8 +106,18 @@ export const adminProcurementService = {
     });
   },
 
-  dispatch(id: string): Promise<ApiResponse> {
-    return apiClient(`/admin/procurement/${id}/dispatch`, { method: 'PATCH' });
+  dispatch(
+    id: string,
+    shipment: {
+      trackingNumber?: string;
+      carrierName?: string;
+      expectedDeliveryAt?: string;
+    } = {},
+  ): Promise<ApiResponse> {
+    return apiClient(`/admin/procurement/${id}/dispatch`, {
+      method: 'PATCH',
+      body: JSON.stringify(shipment),
+    });
   },
 
   settle(id: string): Promise<ApiResponse> {

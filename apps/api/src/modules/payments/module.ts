@@ -14,9 +14,15 @@ import { AdminAuthGuard, UserAuthGuard } from '../../core/guards';
 import { OrdersModule } from '../orders/module';
 import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
 import { FranchiseModule } from '../franchise/module';
+import { NotificationsModule } from '../notifications/module';
+// Phase 166 (Payment Status Poller audit #1/#12) — the two event consumers
+// the poller always needed. Registered as providers so @nestjs/event-emitter
+// discovers their @OnEvent handlers (without registration they never fire).
+import { OrphanRecoveredHandler } from './application/event-handlers/orphan-recovered.handler';
+import { OrderExpiredHandler } from './application/event-handlers/order-expired.handler';
 
 @Module({
-  imports: [OrdersModule, RazorpayModule, FranchiseModule],
+  imports: [OrdersModule, RazorpayModule, FranchiseModule, NotificationsModule],
   controllers: [
     AdminPaymentsController,
     PaymentWebhookController,
@@ -27,6 +33,8 @@ import { FranchiseModule } from '../franchise/module';
     PaymentStatusPollerService,
     PaymentExpirySweepCron,
     PaymentLifecycleService,
+    OrphanRecoveredHandler,
+    OrderExpiredHandler,
     AdminAuthGuard,
     UserAuthGuard,
   ],

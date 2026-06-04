@@ -15,6 +15,8 @@ import { AffiliateSupportController } from './presentation/controllers/affiliate
 import { SupportService } from './application/services/support.service';
 import { SupportPublicFacade } from './application/facades/support-public.facade';
 import { DisputeMirrorHandler } from './application/event-handlers/dispute-mirror.handler';
+// Phase 191 (#4) — open a support ticket from an inbound WhatsApp message.
+import { WhatsappInboundTicketHandler } from './application/event-handlers/whatsapp-inbound-ticket.handler';
 import { SlaBreachSweepCron } from './application/jobs/sla-breach-sweep.cron';
 import { TicketMirrorSweepCron } from './application/jobs/ticket-mirror-sweep.cron';
 import { DisputeMirrorBackSweepCron } from './application/jobs/dispute-mirror-back-sweep.cron';
@@ -41,6 +43,7 @@ import { SUPPORT_REPOSITORY } from './domain/repositories/support.repository.int
     SupportService,
     SupportPublicFacade,
     DisputeMirrorHandler,
+    WhatsappInboundTicketHandler,
     SlaBreachSweepCron,
     TicketMirrorSweepCron,
     DisputeMirrorBackSweepCron,

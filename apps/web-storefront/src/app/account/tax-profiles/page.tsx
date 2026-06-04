@@ -12,6 +12,14 @@ import {
   CustomerTaxProfile,
   CreateTaxProfilePayload,
 } from '@/services/customer-tax-profile.service';
+
+// Phase 200 (audit #4/#8) — the backend now returns legalNameMismatch +
+// portalStatus on each profile (read-only verification signals). The shared
+// service type predates these fields, so widen it locally for the UI warnings.
+type TaxProfileWithVerification = CustomerTaxProfile & {
+  legalNameMismatch?: boolean;
+  portalStatus?: string | null;
+};
 import {
   IndiaStateRef,
   taxReferenceService,
@@ -41,18 +49,24 @@ const EMPTY_FORM: FormState = {
   isDefault: false,
 };
 
-// Loose client-side format check before submitting — the backend
-// re-validates and runs the full Mod-36 checksum. This guard avoids
-// a round-trip for the obvious typo cases ("not 15 chars", "missing
-// state-code prefix").
-const GSTIN_LOOSE_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/;
+// Client-side format check before submitting — the backend re-validates and
+// runs the full Mod-36 checksum. This guard avoids a round-trip for the obvious
+// typo cases ("not 15 chars", "missing state-code prefix").
+//
+// Phase 200 (audit #18) — aligned to the SERVER regex (gstin-validator.ts):
+// position 14 is [A-Z] (the entity is usually 'Z' but the CBIC spec allows any
+// letter), position 13 is [1-9A-Z], position 15 is [0-9A-Z]. The old client
+// regex hard-coded 'Z' at position 14 and would reject a few valid GSTINs the
+// server accepts.
+const GSTIN_LOOSE_REGEX =
+  /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z][A-Z][0-9A-Z]$/;
 
 export default function TaxProfilesPage() {
   const { notify, confirmDialog } = useModal();
   const router = useRouter();
   const authStatus = useAuthGuard();
 
-  const [profiles, setProfiles] = useState<CustomerTaxProfile[]>([]);
+  const [profiles, setProfiles] = useState<TaxProfileWithVerification[]>([]);
   const [loading, setLoading] = useState(true);
   const [indiaStates, setIndiaStates] = useState<IndiaStateRef[]>([]);
 
@@ -279,7 +293,7 @@ export default function TaxProfilesPage() {
                     {profile.isDefault && (
                       <span className="address-card-default-badge">Default</span>
                     )}
-                    {profile.isVerified && (
+                    {profile.isVerified && !profile.legalNameMismatch && (
                       <span
                         className="address-card-default-badge"
                         style={{
@@ -290,6 +304,32 @@ export default function TaxProfilesPage() {
                         Verified
                       </span>
                     )}
+                    {/* Phase 200 (audit #4) — portal name differs from saved name. */}
+                    {profile.legalNameMismatch && (
+                      <span
+                        className="address-card-default-badge"
+                        style={{ background: '#fef3c7', color: '#92400e' }}
+                        title="The legal name you saved differs from the GST portal. Edit it to match, or your B2B invoice may be rejected."
+                      >
+                        Name mismatch
+                      </span>
+                    )}
+                    {/* Phase 200 (audit #8) — GSTIN not ACTIVE on the portal. */}
+                    {profile.portalStatus &&
+                      profile.portalStatus !== 'ACTIVE' &&
+                      profile.portalStatus !== 'UNKNOWN' && (
+                        <span
+                          className="address-card-default-badge"
+                          style={{ background: '#fee2e2', color: '#991b1b' }}
+                          title={`This GSTIN is ${profile.portalStatus.toLowerCase()} on the GST portal and cannot back a B2B invoice.`}
+                        >
+                          {profile.portalStatus === 'CANCELLED'
+                            ? 'GSTIN cancelled'
+                            : profile.portalStatus === 'SUSPENDED'
+                              ? 'GSTIN suspended'
+                              : 'GSTIN inactive'}
+                        </span>
+                      )}
                   </div>
                   <span
                     className="orders-card-date"

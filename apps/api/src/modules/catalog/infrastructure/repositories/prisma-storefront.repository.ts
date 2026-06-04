@@ -2,6 +2,9 @@ import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { IStorefrontRepository, StorefrontListParams } from '../../domain/repositories/storefront.repository.interface';
 import { Prisma } from '@prisma/client';
+// Phase 195 (#9) — escape LIKE wildcards in user search input so q="%" can't
+// match the entire catalog and q="ab_" can't match an arbitrary character.
+import { escapeLikePattern } from '../../../../core/utils/search-term.util';
 
 @Injectable()
 export class PrismaStorefrontRepository implements IStorefrontRepository {
@@ -11,11 +14,16 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
 
   async findProductsPaginated(params: StorefrontListParams): Promise<{ products: any[]; total: number }> {
     const { page, limit, search, categoryId, brandId, collectionId, sortBy, minPrice, maxPrice, filterObj } = params;
+    const sport = (params as { sport?: string }).sport;
     const offset = (page - 1) * limit;
 
     const conditions: Prisma.Sql[] = [
       Prisma.sql`p.is_deleted = false`,
       Prisma.sql`p.status = 'ACTIVE'`,
+      // Phase 192 (#2) — moderation-pending / rejected / needs-revision
+      // products must NOT leak to the public listing. The by-slug detail
+      // query already enforced this (Phase 30); the listing didn't.
+      Prisma.sql`p.moderation_status = 'APPROVED'`,
     ];
 
     const availabilityFilter = filterObj?.availability || null;
@@ -33,6 +41,20 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
 
     if (brandFilter) conditions.push(Prisma.sql`p.brand_id = ${brandFilter}`);
     if (categoryId) conditions.push(Prisma.sql`p.category_id = ${categoryId}`);
+    // Phase 192 (#11) — a product in a deactivated category must not surface
+    // even via a direct ?categoryId= URL (the nav already hides inactive
+    // categories via findActiveTree, but the listing query didn't enforce it).
+    conditions.push(Prisma.sql`(p.category_id IS NULL OR EXISTS (
+      SELECT 1 FROM categories c WHERE c.id = p.category_id AND c.is_active = true
+    ))`);
+    // Phase 192 (#4) — real sport attribute, with a title fallback for rows
+    // not yet classified so existing ?sport= links keep matching.
+    if (sport) {
+      const sportPattern = `%${escapeLikePattern(sport)}%`;
+      conditions.push(Prisma.sql`(
+        p.sport = ${sport} OR (p.sport IS NULL AND p.title ILIKE ${sportPattern})
+      )`);
+    }
     if (brandId) conditions.push(Prisma.sql`p.brand_id = ${brandId}`);
     if (collectionId) {
       conditions.push(Prisma.sql`EXISTS (
@@ -40,7 +62,7 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
       )`);
     }
     if (search) {
-      const searchPattern = `%${search}%`;
+      const searchPattern = `%${escapeLikePattern(search)}%`;
       conditions.push(Prisma.sql`(p.title ILIKE ${searchPattern} OR p.short_description ILIKE ${searchPattern} OR p.product_code ILIKE ${searchPattern})`);
     }
     if (minPrice) {
@@ -126,15 +148,24 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
 
     const whereClause = Prisma.sql`WHERE ${Prisma.join(conditions, ' AND ')}`;
 
+    // Phase 195 (#10) — name_asc / name_desc are offered by the storefront
+    // sort dropdown; pre-195 they weren't handled here AND weren't in the
+    // controller allowlist, so picking "Name A–Z" 400'd the whole SERP.
+    // Phase 195 (#20) — every branch ends with `p.id ASC` so OFFSET
+    // pagination is deterministic when the primary key ties (bulk-imported
+    // rows share created_at; price ties are common). Without it page 2 can
+    // repeat or skip rows.
     let orderByClause: Prisma.Sql;
     switch (sortBy) {
-      case 'price_asc': orderByClause = Prisma.sql`ORDER BY COALESCE(p.base_price, 0) ASC`; break;
-      case 'price_desc': orderByClause = Prisma.sql`ORDER BY COALESCE(p.base_price, 0) DESC`; break;
+      case 'price_asc': orderByClause = Prisma.sql`ORDER BY COALESCE(p.base_price, 0) ASC, p.id ASC`; break;
+      case 'price_desc': orderByClause = Prisma.sql`ORDER BY COALESCE(p.base_price, 0) DESC, p.id ASC`; break;
+      case 'name_asc': orderByClause = Prisma.sql`ORDER BY p.title ASC, p.id ASC`; break;
+      case 'name_desc': orderByClause = Prisma.sql`ORDER BY p.title DESC, p.id ASC`; break;
       case 'popular':
         // Best sellers — rank by total units sold (order_items), newest as tiebreak.
-        orderByClause = Prisma.sql`ORDER BY (SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi WHERE oi.product_id = p.id) DESC, p.created_at DESC`;
+        orderByClause = Prisma.sql`ORDER BY (SELECT COALESCE(SUM(oi.quantity), 0) FROM order_items oi WHERE oi.product_id = p.id) DESC, p.created_at DESC, p.id ASC`;
         break;
-      default: orderByClause = Prisma.sql`ORDER BY p.created_at DESC`; break;
+      default: orderByClause = Prisma.sql`ORDER BY p.created_at DESC, p.id ASC`; break;
     }
 
     const countQuery = Prisma.sql`SELECT COUNT(DISTINCT p.id)::int AS total FROM products p ${whereClause}`;
@@ -185,10 +216,12 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
   }
 
   async findSearchSuggestions(query: string): Promise<Array<{ title: string; slug: string }>> {
-    const searchPattern = `%${query.trim()}%`;
+    // Phase 195 (#9) — escape LIKE wildcards so a "%"/"_" in the typeahead
+    // term can't widen the scan to the whole table.
+    const searchPattern = `%${escapeLikePattern(query.trim())}%`;
     return this.prisma.$queryRaw<{ title: string; slug: string }[]>(Prisma.sql`
       SELECT DISTINCT p.title, p.slug FROM products p
-      WHERE p.is_deleted = false AND p.status = 'ACTIVE'
+      WHERE p.is_deleted = false AND p.status = 'ACTIVE' AND p.moderation_status = 'APPROVED'
         AND (p.title ILIKE ${searchPattern} OR p.product_code ILIKE ${searchPattern})
         AND EXISTS (SELECT 1 FROM seller_product_mappings spm WHERE spm.product_id = p.id AND spm.is_active = true AND spm.approval_status = 'APPROVED' AND (spm.stock_qty - spm.reserved_qty) > 0)
       ORDER BY p.title ASC LIMIT 5
@@ -242,6 +275,47 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
         },
       },
     });
+  }
+
+  /**
+   * Phase 193 (#2) — related products: same category (preferred) or same
+   * brand, excluding the current product, only ACTIVE + APPROVED + in-stock.
+   */
+  async findRelatedProducts(args: {
+    productId: string;
+    categoryId?: string | null;
+    brandId?: string | null;
+    limit: number;
+  }): Promise<any[]> {
+    const { productId, categoryId, brandId } = args;
+    if (!categoryId && !brandId) return [];
+    const limit = Math.min(Math.max(args.limit, 1), 12);
+    const relevance: Prisma.Sql[] = [];
+    if (categoryId) relevance.push(Prisma.sql`p.category_id = ${categoryId}`);
+    if (brandId) relevance.push(Prisma.sql`p.brand_id = ${brandId}`);
+    return this.prisma.$queryRaw<any[]>(Prisma.sql`
+      SELECT
+        p.id, p.product_code AS "productCode", p.title, p.slug,
+        p.short_description AS "shortDescription",
+        p.base_price AS "basePrice", p.compare_at_price AS "compareAtPrice",
+        b.name AS "brandName", c.name AS "categoryName",
+        (SELECT pi.url FROM product_images pi WHERE pi.product_id = p.id
+           ORDER BY pi.is_primary DESC, pi.sort_order ASC LIMIT 1) AS "primaryImageUrl"
+      FROM products p
+      LEFT JOIN brands b ON b.id = p.brand_id
+      LEFT JOIN categories c ON c.id = p.category_id
+      WHERE p.id <> ${productId}
+        AND p.is_deleted = false AND p.status = 'ACTIVE' AND p.moderation_status = 'APPROVED'
+        AND (${Prisma.join(relevance, ' OR ')})
+        AND EXISTS (
+          SELECT 1 FROM seller_product_mappings spm
+          WHERE spm.product_id = p.id AND spm.is_active = true
+            AND spm.approval_status = 'APPROVED'
+            AND (spm.stock_qty - spm.reserved_qty) > 0
+        )
+      ORDER BY (CASE WHEN ${categoryId ? Prisma.sql`p.category_id = ${categoryId}` : Prisma.sql`false`} THEN 0 ELSE 1 END), p.created_at DESC
+      LIMIT ${limit}
+    `);
   }
 
   async findSellerMappingsForProduct(productId: string): Promise<any[]> {
@@ -323,6 +397,8 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
     const select = {
       officeName: true, officeType: true, delivery: true,
       district: true, state: true, latitude: true, longitude: true,
+      // Phase 229 — surface the GST/CBIC state code for the address/tax path.
+      stateCode: true,
     } as const;
     const orderBy = [{ officeType: 'asc' as const }, { officeName: 'asc' as const }];
 
@@ -330,6 +406,9 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
       where: { pincode },
       select,
       orderBy,
+      // Phase 229 — defensive cap. A pincode legitimately maps to dozens of post
+      // offices; this bounds a pathological row count from flooding the response.
+      take: 100,
     });
     if (local.length > 0) return local;
 
@@ -438,21 +517,26 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
     `);
   }
 
-  async computePriceRange(baseConditions: Prisma.Sql[], otherConditions: Prisma.Sql[]): Promise<{ min: number; max: number } | null> {
+  async computePriceRange(baseConditions: Prisma.Sql[], otherConditions: Prisma.Sql[]): Promise<{ min: string; max: string } | null> {
     const allConditions = [...baseConditions, ...otherConditions];
     const whereClause = allConditions.length > 0
       ? Prisma.sql`WHERE ${Prisma.join(allConditions, ' AND ')}`
       : Prisma.sql``;
-    const results = await this.prisma.$queryRaw<{ min: number; max: number }[]>(Prisma.sql`
+    // Phase 194 (#18) — only return NULL bounds (no matching products), NOT
+    // when MIN/MAX are 0. COALESCE-less MIN/MAX over an empty set is SQL NULL;
+    // a real all-free-products set legitimately has min=max=0 and must show.
+    const results = await this.prisma.$queryRaw<{ min: string | null; max: string | null }[]>(Prisma.sql`
       SELECT
-        MIN(COALESCE(p.base_price, 0))::numeric AS min,
-        MAX(COALESCE(p.base_price, 0))::numeric AS max
+        MIN(p.base_price)::numeric AS min,
+        MAX(p.base_price)::numeric AS max
       FROM products p
       ${whereClause}
     `);
     const range = results[0];
-    if (!range || (range.min === 0 && range.max === 0)) return null;
-    return { min: Number(range.min), max: Number(range.max) };
+    if (!range || range.min === null || range.max === null) return null;
+    // Phase 194 (#13) — money on the wire as a string (Decimal-precise);
+    // the client coerces to Number only at the slider/format boundary.
+    return { min: String(range.min), max: String(range.max) };
   }
 
   async computeAvailabilityFacets(baseConditions: Prisma.Sql[]): Promise<{ in_stock: number; out_of_stock: number }> {
@@ -471,7 +555,7 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
             AND (spm.stock_qty - spm.reserved_qty) > 0
         ) THEN p.id END)::int AS out_of_stock
       FROM products p
-      WHERE p.is_deleted = false AND p.status = 'ACTIVE'
+      WHERE p.is_deleted = false AND p.status = 'ACTIVE' AND p.moderation_status = 'APPROVED'
       ${baseConditions.length > 2 ? Prisma.sql`AND ${Prisma.join(baseConditions.slice(2), ' AND ')}` : Prisma.sql``}
     `);
     return { in_stock: results[0]?.in_stock ?? 0, out_of_stock: results[0]?.out_of_stock ?? 0 };
@@ -545,6 +629,10 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
         jsonb_array_elements_text(pm.value_json) AS elem
         WHERE ${metafieldKeyCondition}
           AND pm.value_json IS NOT NULL
+          -- Phase 194 (#20) — a legacy/imported row with BOTH value_text and
+          -- value_json would be counted twice; the text branch already
+          -- counted it, so the json branch skips text-populated rows.
+          AND pm.value_text IS NULL
           AND jsonb_typeof(pm.value_json) = 'array'
           AND ${Prisma.join(allConditions, ' AND ')}
       ) AS combined
@@ -562,6 +650,7 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
       WHERE pcm.collection_id = ${collectionId}
         AND p.is_deleted = false
         AND p.status = 'ACTIVE'
+        AND p.moderation_status = 'APPROVED'
         AND p.category_id IS NOT NULL
     `);
     return results.map((r) => r.category_id);

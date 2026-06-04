@@ -12,11 +12,62 @@ enum NotificationChannel {
   WHATSAPP
 }
 
+/// Phase 187 — admin one-off dispatch path. TEMPLATE respects customer
+/// opt-out (via the gate); RAW is the explicit opt-out-bypass channel and
+/// requires an alertType + bypassReason.
+enum DispatchPath {
+  TEMPLATE
+  RAW
+}
+
+/// Phase 187 (#4/#11) — the only legitimate reasons a RAW dispatch may
+/// bypass customer opt-out. Marketing/promotional is deliberately absent:
+/// the raw path can NOT be used for it (the server rejects any raw dispatch
+/// without one of these).
+enum AdminDispatchAlertType {
+  ACCOUNT_SECURITY // password reset, suspicious sign-in
+  FRAUD_ALERT // chargeback, transaction reversal
+  COMPLIANCE_NOTICE // GDPR/DPDP request, account block, legal notice
+  CRITICAL_SERVICE // platform outage, urgent action required
+}
+
+/// Phase 187 (#7) — outcome of the dispatch action at enqueue time.
+enum NotificationDispatchStatus {
+  ENQUEUED // job placed on the queue
+  SUPPRESSED // template path: recipient opted out / template missing
+  FAILED // validation or enqueue error
+}
+
 enum NotificationStatus {
+  PENDING // Phase 185 (#5) — created, not yet enqueued (reserved for sync pre-queue rows)
   QUEUED // accepted, not yet processed by worker
-  SENT // provider returned success
+  PROCESSING // Phase 190 (#2) — in-flight at the provider (dispatch started, no result yet)
+  SENT // provider returned success (handed off to carrier)
+  DELIVERED // Phase 185 (#5) — carrier delivery-receipt confirmed (DLR/webhook)
   FAILED // provider returned a non-retryable error
   RETRY // transient failure; will be re-enqueued
+  RETRYING // Phase 185 (#5) — alias state for in-flight retry (kept distinct from RETRY for clarity)
+  CANCELLED // Phase 185 (#5) — admin cancelled a dead-lettered/queued job before delivery
+  DEAD_LETTERED // Phase 190 (#2) — exhausted all retries; the job was dead-lettered
+}
+
+/// Phase 190 (#6) — canonical, queryable failure taxonomy. The per-channel
+/// provider adapter maps its raw error onto one of these so ops can filter
+/// "show me all RATE_LIMITED failures" without full-text search.
+enum NotificationFailureCode {
+  INVALID_EMAIL
+  INVALID_PHONE
+  BOUNCED
+  SPAM_COMPLAINT
+  RATE_LIMITED
+  PROVIDER_ERROR
+  AUTH_FAILED
+  NETWORK_TIMEOUT
+  BLOCKED_BY_SUPPRESSION
+  BLOCKED_BY_PREFERENCE
+  MALFORMED_TEMPLATE
+  NOT_CONFIGURED
+  UNKNOWN
 }
 
 // Editable templates per (event_key, channel). Worker fetches by key
@@ -31,10 +82,68 @@ model NotificationTemplate {
   body        String              @db.Text
   description String?
   active      Boolean             @default(true)
+
+  /// Phase 185 (#4) — TRAI DLT (Distributed Ledger Technology) registration
+  /// ids for SMS templates. Indian regulation requires every transactional
+  /// SMS to carry the carrier-approved content-template id + the registered
+  /// header / principal-entity (sender) id. The SMS provider refuses to send
+  /// an SMS-channel template when `SMS_DLT_ENFORCED=true` and these are null.
+  dltTemplateId String? @map("dlt_template_id")
+  dltHeaderId   String? @map("dlt_header_id")
+
+  /// Phase 185 (#6) — optional declaration of the variables a template
+  /// expects. Shape: `{ "required": ["customerName", "orderNumber"], ... }`.
+  /// When present, the renderer validates the payload BEFORE rendering and
+  /// refuses to send if a required var is missing (no more "Hi {{name}}").
+  variablesSchema Json? @map("variables_schema")
+
+  /// Phase 185 (#14) — when true (default), the render path strips
+  /// internal-only payload fields (keys starting with `_` / `internal`, or
+  /// on the known-sensitive denylist) before substitution so admin-only
+  /// context (riskScore, internalNotes) can never leak into a customer send.
+  customerVisibleOnly Boolean @default(true) @map("customer_visible_only")
+
+  /// Phase 188 (#4) — monotonically-incrementing edit counter. Bumped on
+  /// every content/active mutation; pairs with NotificationTemplateHistory.
+  version Int @default(1)
+  /// Phase 188 (#6) — who first created / last edited this template.
+  createdByAdminId String? @map("created_by_admin_id")
+  updatedByAdminId String? @map("updated_by_admin_id")
+
   createdAt   DateTime            @default(now()) @map("created_at")
   updatedAt   DateTime            @updatedAt @map("updated_at")
 
+  history NotificationTemplateHistory[]
+
   @@map("notification_templates")
+}
+
+/// Phase 188 (#4) — immutable per-version snapshot of a template.
+///
+/// Edits OVERWRITE the live NotificationTemplate row; this table keeps the
+/// before-state so an auditor can answer "what did order.placed.email look
+/// like 3 months ago?" and ops can roll back. One row is written (in the
+/// same tx as the edit) for the PRIOR state on every mutation, plus the
+/// initial state on create.
+model NotificationTemplateHistory {
+  id          String              @id @default(uuid())
+  templateId  String              @map("template_id")
+  templateKey String              @map("template_key")
+  version     Int
+  channel     NotificationChannel
+  subject     String?
+  body        String              @db.Text
+  active      Boolean
+  /// CREATE | UPDATE | TOGGLE — what kind of change produced this snapshot.
+  changeType       String  @map("change_type")
+  changedByAdminId String? @map("changed_by_admin_id")
+  changedAt        DateTime @default(now()) @map("changed_at")
+
+  template NotificationTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@index([templateId, changedAt(sort: Desc)])
+  @@index([templateKey, version])
+  @@map("notification_template_history")
 }
 
 // Per-user opt-in/out. Convention: opt-in is the default — the absence
@@ -48,12 +157,45 @@ model NotificationPreference {
   eventClass String              @map("event_class")
   channel    NotificationChannel
   enabled    Boolean             @default(true)
+
+  /// Phase 189 (#12) — provenance of the last change: CUSTOMER | ADMIN |
+  /// UNSUBSCRIBE_LINK | SMS_STOP | WHATSAPP_STOP | IMPORT | COURT_ORDER.
+  source String @default("CUSTOMER")
+  /// Phase 189 (#10) — set when an admin override (legal/compliance) last
+  /// changed this row; null for customer-initiated changes.
+  updatedByAdminId String? @map("updated_by_admin_id")
+
   createdAt  DateTime            @default(now()) @map("created_at")
   updatedAt  DateTime            @updatedAt @map("updated_at")
 
   @@unique([userId, eventClass, channel])
   @@index([userId])
   @@map("notification_preferences")
+}
+
+/// Phase 189 (#9) — append-only consent trail for preference changes.
+///
+/// GDPR Art. 7 / CCPA require that consent (and its withdrawal) be
+/// *demonstrable*: who changed what, when, from where, and why. One row per
+/// (eventClass, channel) flipped, written in the SAME tx as the upsert.
+model NotificationPreferenceHistory {
+  id          String              @id @default(uuid())
+  userId      String              @map("user_id")
+  eventClass  String              @map("event_class")
+  channel     NotificationChannel
+  oldEnabled  Boolean?            @map("old_enabled")
+  newEnabled  Boolean             @map("new_enabled")
+  /// CUSTOMER | ADMIN | UNSUBSCRIBE_LINK | SMS_STOP | WHATSAPP_STOP | COURT_ORDER | IMPORT
+  source           String
+  updatedByAdminId String? @map("updated_by_admin_id")
+  bypassReason     String? @map("bypass_reason")
+  ipAddress        String? @map("ip_address")
+  userAgent        String? @map("user_agent") @db.Text
+  occurredAt       DateTime @default(now()) @map("occurred_at")
+
+  @@index([userId, occurredAt(sort: Desc)])
+  @@index([eventClass, channel])
+  @@map("notification_preference_history")
 }
 
 /// Phase 8 (PR 8.2) — hard-block list per (channel, destination).
@@ -156,13 +298,64 @@ model WhatsappInbound {
   textBody          String?  @map("text_body") @db.Text
   /// Whether STOP-keyword detection fired on this message.
   isOptOutSignal    Boolean  @default(false) @map("is_opt_out_signal")
+
+  /// Phase 191 (#3) — media reference for image/video/audio/document/
+  /// sticker messages (Meta media id + mime). The asset itself lives behind
+  /// Meta's 5-minute-expiring URL; support fetches it via the media id.
+  mediaId       String? @map("media_id")
+  mediaMimeType String? @map("media_mime_type")
+  /// Phase 191 (#14) — when the customer replies to a specific message,
+  /// Meta sends message.context.id. Enables conversation threading.
+  repliedToMessageId String? @map("replied_to_message_id")
+  /// Phase 191 (#5) — the WhatsApp profile name from value.contacts[].
+  contactName String? @map("contact_name")
+  /// Phase 191 (#5) — matched platform customer (User.id), if the phone
+  /// resolves to a known account.
+  customerId String? @map("customer_id")
+  /// Phase 191 (#12) — Meta WhatsApp Business Account id (entry.id). Lets a
+  /// future multi-WABA setup route by account.
+  wabaId String? @map("waba_id")
+
   /// Original Meta webhook payload. Stored as JSON for replay/debug.
   rawPayload        Json     @map("raw_payload")
   receivedAt        DateTime @default(now()) @map("received_at")
 
   @@index([fromPhoneE164, receivedAt(sort: Desc)])
   @@index([receivedAt(sort: Desc)])
+  @@index([customerId, receivedAt(sort: Desc)])
   @@map("whatsapp_inbound")
+}
+
+/// Phase 191 (#1) — Meta delivery-receipt status for an OUTBOUND message.
+enum WhatsappDeliveryStatus {
+  SENT
+  DELIVERED
+  READ
+  FAILED
+}
+
+/// Phase 191 (#1) — WhatsApp delivery receipts (statuses[] from the webhook).
+///
+/// Meta sends sent → delivered → read (and failed) callbacks referencing the
+/// outbound message id. We persist each (message, status) once and flip the
+/// matching NotificationLog row. Append-only; @@unique([providerMessageId,
+/// status]) makes Meta's retries idempotent.
+model WhatsappStatus {
+  id                String                 @id @default(uuid())
+  providerMessageId String                 @map("provider_message_id")
+  status            WhatsappDeliveryStatus
+  recipientId       String?                @map("recipient_id")
+  /// Phase 191 (#13) — Meta numeric error code + title on FAILED.
+  errorCode  String? @map("error_code")
+  errorTitle String? @map("error_title")
+  wabaId     String? @map("waba_id")
+  rawPayload Json    @map("raw_payload")
+  receivedAt DateTime @default(now()) @map("received_at")
+
+  @@unique([providerMessageId, status])
+  @@index([providerMessageId])
+  @@index([receivedAt(sort: Desc)])
+  @@map("whatsapp_statuses")
 }
 
 model NotificationLog {
@@ -190,14 +383,104 @@ model NotificationLog {
   providerMessageId String? @map("provider_message_id")
   failureReason     String? @map("failure_reason") @db.Text
 
+  /// Phase 190 (#5) — sanitized, normalized provider response (no auth
+  /// tokens / internal IPs). e.g. { httpStatus, segments, code }.
+  providerResponseSummary Json? @map("provider_response_summary")
+  /// Phase 190 (#6) — structured, queryable failure code.
+  failureCode NotificationFailureCode? @map("failure_code")
+  /// Phase 190 (#5) — which provider handled the send (sendgrid/twilio/meta/
+  /// msg91/stub). Channel implies a default, but a channel can be multi-provider.
+  provider String?
+
+  /// Phase 190 (#4) — trace linkage. outboxEventId ties a log to the domain
+  /// event that spawned it (soft link — NOT a hard FK, because raw admin
+  /// dispatches mint their own non-outbox event ids). parentLogId links a
+  /// retry attempt back to the original log row.
+  outboxEventId String? @map("outbox_event_id")
+  parentLogId   String? @map("parent_log_id")
+
+  /// Phase 185 (#17) — why this notification fired. Lets investigators
+  /// distinguish event-bus auto-sends from cron reminders and manual ops
+  /// dispatches. Examples: "EVENT_BUS:order.placed", "ADMIN_DISPATCH",
+  /// "CRON:reminders", "DLQ_REPLAY".
+  triggerSource String? @map("trigger_source")
+
+  /// Phase 185 (#5) — set when a carrier delivery-receipt (DLR / webhook)
+  /// confirms the message reached the handset/inbox, flipping SENT →
+  /// DELIVERED. Null until (or unless) a receipt arrives.
+  deliveredAt DateTime? @map("delivered_at")
+
   // Retry bookkeeping. attemptNumber starts at 1.
   attemptNumber Int @default(1) @map("attempt_number")
 
   createdAt DateTime  @default(now()) @map("created_at")
   sentAt    DateTime? @map("sent_at")
+  /// Phase 190 (#7) — distinct terminal-failure timestamp (separate from
+  /// sentAt). deliveredAt (above, Phase 185) is the success-path timestamp.
+  failedAt DateTime? @map("failed_at")
 
   @@index([recipientId, createdAt(sort: Desc)])
   @@index([eventType, eventId])
   @@index([channel, status, createdAt(sort: Desc)])
+  // Phase 185 (#5) — delivery-receipt webhooks look up the row by the
+  // provider's message id to flip SENT → DELIVERED.
+  @@index([providerMessageId])
+  // Phase 190 (#6) — filter by failure taxonomy; (#4) trace linkage.
+  @@index([failureCode])
+  @@index([outboxEventId])
+  @@index([parentLogId])
   @@map("notification_logs")
+}
+
+/// Phase 187 (#7) — admin one-off dispatch audit record.
+///
+/// Distinct from NotificationLog (which is the per-attempt DELIVERY log):
+/// this captures the admin DECISION to dispatch — WHO sent it, by which
+/// path, whether it bypassed opt-out and WHY (alertType + bypassReason),
+/// and a contact snapshot taken at dispatch time. One row per dispatch
+/// action; the eventId doubles as the idempotency key so a double-click
+/// can't fan out into two sends.
+model NotificationDispatch {
+  id String @id @default(uuid())
+
+  /// Idempotency key: "admin-dispatch-<X-Idempotency-Key | uuid>". Unique
+  /// so a replay returns the existing dispatch instead of a second send.
+  eventId String @unique @map("event_id")
+
+  /// Phase 187 (#3) — the admin who dispatched. Never null (the controller
+  /// fails closed if the actor can't be resolved).
+  dispatchedByAdminId String       @map("dispatched_by_admin_id")
+  dispatchPath        DispatchPath  @map("dispatch_path")
+  channel             NotificationChannel
+
+  // Template path
+  templateKey String? @map("template_key")
+  eventClass  String? @map("event_class")
+
+  // Raw path
+  rawSubject String? @map("raw_subject")
+  rawBody    String? @map("raw_body") @db.Text
+
+  /// Recipient identity + the contact the message was aimed at, snapshotted
+  /// NOW (#7 recipientContactSnapshot) so a later email/phone change doesn't
+  /// rewrite history.
+  recipientId String? @map("recipient_id")
+  destination String? // email / phone snapshot
+
+  /// Phase 187 (#4/#13) — opt-out bypass justification. bypassOptOut is true
+  /// only on the raw path; bypassReason + alertType are mandatory there.
+  bypassOptOut Boolean                  @default(false) @map("bypass_opt_out")
+  bypassReason String?                  @map("bypass_reason")
+  alertType    AdminDispatchAlertType?  @map("alert_type")
+
+  /// Enqueued job id (null when SUPPRESSED/FAILED) + outcome.
+  jobId  String?                    @map("job_id")
+  status NotificationDispatchStatus
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([dispatchedByAdminId, createdAt(sort: Desc)])
+  @@index([recipientId, createdAt(sort: Desc)])
+  @@index([dispatchPath, createdAt(sort: Desc)])
+  @@map("notification_dispatches")
 }

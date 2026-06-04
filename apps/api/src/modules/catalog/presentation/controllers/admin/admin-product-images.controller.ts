@@ -21,7 +21,8 @@ import { NotFoundAppException } from '../../../../../core/exceptions';
 import { AppException } from '../../../../../core/exceptions/app.exception';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { Permissions } from '../../../../../core/decorators/permissions.decorator';
-import { CloudinaryAdapter } from '../../../../../integrations/cloudinary/cloudinary.adapter';
+import { MediaStorageAdapter } from '../../../../../integrations/media/media-storage.adapter';
+import { FileService } from '../../../../files/application/services/file.service';
 import { ReorderImagesDto } from '../../dtos/reorder-images.dto';
 import { PRODUCT_IMAGE_REPOSITORY, IProductImageRepository } from '../../../domain/repositories/product-image.repository.interface';
 import {
@@ -41,7 +42,8 @@ export class AdminProductImagesController {
   constructor(
     @Inject(PRODUCT_IMAGE_REPOSITORY) private readonly imageRepo: IProductImageRepository,
     private readonly logger: AppLoggerService,
-    private readonly cloudinary: CloudinaryAdapter,
+    private readonly media: MediaStorageAdapter,
+    private readonly fileService: FileService,
   ) {
     this.logger.setContext('AdminProductImagesController');
   }
@@ -66,18 +68,35 @@ export class AdminProductImagesController {
 
     let uploadResult;
     try {
-      uploadResult = await this.cloudinary.upload(file.buffer, {
+      uploadResult = await this.media.upload(file.buffer, {
         folder: `products/${productId}`,
         transformation: [{ width: 1200, height: 1200, crop: 'limit' }],
       });
     } catch (error: any) {
-      this.logger.error(`Cloudinary upload failed for product ${productId}: ${error?.message}`);
+      this.logger.error(`media upload failed for product ${productId}: ${error?.message}`);
       throw new AppException('Image upload failed. Please try again.', 'EXTERNAL_SERVICE_ERROR');
     }
 
+    // Additively register the media asset in the central
+    // FileMetadata table so the integrity-verifier, audit, and orphan
+    // sweep can see it. Best-effort — must never break the upload.
+    void this.fileService
+      .registerExternalAsset({
+        publicId: uploadResult.publicId,
+        url: uploadResult.secureUrl,
+        mimeType: file.mimetype,
+        sizeBytes: file.size,
+        purpose: 'PRODUCT_IMAGE',
+        uploadedBy: adminId,
+        uploadedByType: 'ADMIN',
+        fileName: file.originalname,
+        buffer: file.buffer,
+      })
+      .catch(() => undefined);
+
     // Phase 29 (2026-05-21) — DB write is wrapped so that a failure
     // (FK violation, unique-collision retry exhausted, schema drift)
-    // doesn't leave the Cloudinary asset orphaned forever. On any
+    // doesn't leave the media asset orphaned forever. On any
     // throw we attempt a best-effort delete; a delete failure is
     // logged for a manual cleanup sweep but doesn't override the
     // original error returned to the caller.
@@ -109,11 +128,11 @@ export class AdminProductImagesController {
             isPrimary, sortOrder: existingImages,
           });
         } catch (retryErr: any) {
-          await this.cleanupCloudinary(uploadResult.publicId);
+          await this.cleanupmedia(uploadResult.publicId);
           throw retryErr;
         }
       } else {
-        await this.cleanupCloudinary(uploadResult.publicId);
+        await this.cleanupmedia(uploadResult.publicId);
         throw err;
       }
     }
@@ -122,16 +141,16 @@ export class AdminProductImagesController {
     return { success: true, message: 'Image uploaded successfully', data: image };
   }
 
-  private async cleanupCloudinary(publicId: string | null | undefined): Promise<void> {
+  private async cleanupmedia(publicId: string | null | undefined): Promise<void> {
     if (!publicId) return;
     try {
-      await this.cloudinary.delete(publicId);
+      await this.media.delete(publicId);
     } catch (err: any) {
       // Asset is orphaned — log loud so a manual sweep can pick it up.
       // We don't re-throw because the caller already has a more
       // useful error from the original DB-write failure.
       this.logger.error(
-        `Cloudinary cleanup failed for orphaned asset ${publicId}: ${err?.message}`,
+        `media cleanup failed for orphaned asset ${publicId}: ${err?.message}`,
       );
     }
   }
@@ -152,8 +171,8 @@ export class AdminProductImagesController {
     }
 
     if (image.publicId) {
-      this.cloudinary.delete(image.publicId).catch((err) => {
-        this.logger.warn(`Failed to delete Cloudinary asset ${image.publicId}: ${err?.message}`);
+      this.media.delete(image.publicId).catch((err) => {
+        this.logger.warn(`Failed to delete media asset ${image.publicId}: ${err?.message}`);
       });
     }
 

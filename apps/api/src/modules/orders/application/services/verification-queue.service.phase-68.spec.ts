@@ -118,13 +118,30 @@ describe('VerificationQueueService.approve (Phase 68 — Gap #11)', () => {
 
   it('delegates verifyOrder with actorContext', async () => {
     const { svc, ordersService } = makeService({ claimHeld: 'me' });
-    await svc.approve('mo-1', 'admin-A', 'OK', { ipAddress: '2.2.2.2', userAgent: 'jest' });
+    // Phase 174 (bounded enforcement) — the mock order is RED, so approve
+    // now requires a >=10-char reason; supply one and assert it threads through.
+    const reason = 'Manual review OK — ID verified';
+    await svc.approve('mo-1', 'admin-A', reason, {
+      ipAddress: '2.2.2.2',
+      userAgent: 'jest',
+    });
     expect(ordersService.verifyOrder).toHaveBeenCalledWith(
       'mo-1',
       'admin-A',
-      'OK',
+      reason,
       { ipAddress: '2.2.2.2', userAgent: 'jest' },
     );
+  });
+
+  it('Phase 174 — approving a RED order without a >=10-char reason is refused', async () => {
+    const { svc, ordersService } = makeService({ claimHeld: 'me' });
+    await expect(
+      svc.approve('mo-1', 'admin-A', 'too short'),
+    ).rejects.toMatchObject({
+      message: expect.stringContaining('requires a reason'),
+    });
+    // Bounded enforcement blocks BEFORE the verify pipeline runs.
+    expect(ordersService.verifyOrder).not.toHaveBeenCalled();
   });
 });
 

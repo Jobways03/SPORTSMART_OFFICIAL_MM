@@ -28,10 +28,11 @@ export type WalletEntity = Omit<Wallet, 'balanceInPaise'> & {
 
 export type WalletTransactionEntity = Omit<
   WalletTransaction,
-  'amountInPaise' | 'balanceAfterInPaise'
+  'amountInPaise' | 'balanceAfterInPaise' | 'balanceBeforeInPaise'
 > & {
   amountInPaise: number;
   balanceAfterInPaise: number;
+  balanceBeforeInPaise: number; // Phase 182 (#4)
 };
 
 export interface WalletWithLatest extends WalletEntity {
@@ -50,6 +51,14 @@ export interface CreateTransactionInput {
   description: string;
   internalNotes?: string | null;
   createdByAdminId?: string | null;
+  // Phase 172 (#8/#9) — credit-type discriminator + optional expiry.
+  creditType?: any;
+  expiresAt?: Date | null;
+  // Phase 182 (#8/#9) — human-readable reference + per-row currency.
+  referenceNumber?: string | null;
+  currency?: string;
+  // Phase 183 (#2) — audit-grade reason (distinct from customer description).
+  reason?: string | null;
 }
 
 export interface ApplyMutationResult {
@@ -128,6 +137,17 @@ export interface WalletRepository {
   }): Promise<ApplyMutationResult>;
 
   findTransactionById(id: string): Promise<WalletTransactionEntity | null>;
+
+  // Phase 172 (#9) — goodwill-expiry support.
+  /** Every ledger row for a user, oldest-first — input to the expiry replay. */
+  findAllTransactionsForUser(userId: string): Promise<WalletTransactionEntity[]>;
+  /** User ids that hold ≥1 not-yet-lapsed GOODWILL credit already past expiry. */
+  findUserIdsWithExpiredGoodwill(args: {
+    now: Date;
+    limit: number;
+  }): Promise<string[]>;
+  /** Stamp lapsedAt on a user's expired, unlapsed goodwill lots (sweep marker). */
+  markGoodwillLotsLapsed(args: { userId: string; now: Date }): Promise<number>;
 
   /**
    * Phase 3 (PR 3.2) — idempotency lookup. Returns the transaction

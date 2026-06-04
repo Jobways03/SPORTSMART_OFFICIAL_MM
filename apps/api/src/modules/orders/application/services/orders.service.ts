@@ -33,6 +33,11 @@ import { OrderTimelineService } from './order-timeline.service';
 import { ShipmentEvidenceService } from '../../../shipping/application/services/shipment-evidence.service';
 // Phase 89 (2026-05-23) — EWB ship-block gate at the SHIPPED transition.
 import { EWayBillService } from '../../../tax/application/services/eway-bill.service';
+// Phase 168 (COD Mark-Paid audit #15) — open a PaymentMismatchAlert when a COD
+// mark-paid flips paymentStatus but the orderStatus FSM can't reach DELIVERED,
+// instead of swallowing the inconsistency in a log line. PaymentOpsModule is
+// @Global so no OrdersModule.imports change is needed.
+import { PaymentOpsFacade } from '../../../payments-ops/application/facades/payment-ops.facade';
 
 export type ReassignTarget =
   | { nodeType: 'SELLER'; nodeId: string }
@@ -80,7 +85,10 @@ const ORDER_STATUS_LABELS: Record<string, string> = {
   DISPATCHED: 'Shipped',
   DELIVERED: 'Delivered',
   CANCELLED: 'Cancelled',
-  EXCEPTION_QUEUE: 'Processing',
+  // Phase 234 — distinct from the healthy 'Processing' (PENDING_VERIFICATION).
+  // An exception order is being manually reviewed; the customer should see a
+  // label that doesn't read identically to a normal in-flight order.
+  EXCEPTION_QUEUE: 'Being Reviewed',
 };
 
 @Injectable()
@@ -138,6 +146,11 @@ export class OrdersService {
     // pre-Phase-89 (no EWB enforcement) so legacy specs still run.
     @Optional()
     private readonly ewayBill?: EWayBillService,
+    // Phase 168 (COD Mark-Paid audit #15) — @Optional so legacy specs that
+    // construct OrdersService directly don't break; the orderStatus-mismatch
+    // path falls back to a warn log when undefined.
+    @Optional()
+    private readonly paymentOps?: PaymentOpsFacade,
   ) {
     const days = this.env.getNumber('RETURN_WINDOW_DAYS', 14);
     this.returnWindowMs = Math.round(days * 24 * 60 * 60 * 1000);
@@ -499,6 +512,29 @@ export class OrdersService {
         ? 'ROUTED_TO_SELLER'
         : 'EXCEPTION_QUEUE';
 
+    // Phase 234 (Exception Queue audit) — derive a STRUCTURED exception reason +
+    // detail to persist on the order. Pre-234 the reason existed only inside a
+    // fire-and-forget event payload (no consumer), so neither admins nor
+    // analytics could answer "why is this in exception".
+    const unserviceableCount = subOrderAllocations.filter(
+      (a) => !a.serviceable,
+    ).length;
+    const exceptionReason:
+      | 'NO_PINCODE_ON_ORDER'
+      | 'PINCODE_UNSERVICEABLE'
+      | null =
+      finalStatus !== 'EXCEPTION_QUEUE'
+        ? null
+        : !customerPincode
+          ? 'NO_PINCODE_ON_ORDER'
+          : 'PINCODE_UNSERVICEABLE';
+    const exceptionDetail =
+      finalStatus !== 'EXCEPTION_QUEUE'
+        ? null
+        : !customerPincode
+          ? 'Customer address has no pincode — order cannot be routed.'
+          : `Unserviceable after verification: ${unserviceableCount} of ${subOrderAllocations.length} sub-order(s) had no eligible node.`;
+
     await this.prisma.$transaction(async (tx) => {
       // Step 1: stamp VERIFIED + verifier identity.
       await tx.masterOrder.update({
@@ -523,12 +559,26 @@ export class OrdersService {
 
       // Step 3: final order status flip (one write — VERIFIED →
       // ROUTED_TO_SELLER or EXCEPTION_QUEUE). A separate update so
-      // the FSM history captures both transitions. finalStatus is
-      // always one of those two values today; the conditional is a
-      // forward-compat guard against future enum additions.
+      // the FSM history captures both transitions.
+      //
+      // Phase 234 — FSM-guard the edge (was a raw write that bypassed the
+      // transition map — audit "exception transition has no FSM check") and,
+      // when parking the order, persist the structured exception reason + the
+      // real time-in-queue clock (exceptionEnteredAt) so routing-health ages
+      // from when it ENTERED the queue, not from order placement.
+      assertTransition('OrderStatus', 'VERIFIED', finalStatus as any);
       await tx.masterOrder.update({
         where: { id },
-        data: { orderStatus: finalStatus as any },
+        data: {
+          orderStatus: finalStatus as any,
+          ...(finalStatus === 'EXCEPTION_QUEUE'
+            ? {
+                exceptionReason: exceptionReason as any,
+                exceptionReasonDetail: exceptionDetail,
+                exceptionEnteredAt: now,
+              }
+            : {}),
+        },
       });
 
       // Phase 74 (Phase 73 audit Gap #3/#18) — append-only decision
@@ -712,12 +762,34 @@ export class OrdersService {
             orderNumber: order.orderNumber,
             customerId: order.customerId,
             orderStatus: 'EXCEPTION_QUEUE',
-            reason: !customerPincode
-              ? 'Customer address pincode missing — cannot route'
-              : 'Some items are unserviceable after verification',
+            // Phase 234 — structured reason code so the (newly-added) consumer
+            // can route notifications + ops can group by cause.
+            exceptionReason,
+            reason: exceptionDetail,
           },
         });
       } catch { /* best-effort */ }
+
+      // Phase 234 — hash-chained audit row for the EXCEPTION_QUEUE transition
+      // (pre-234 nothing was written to the tamper-evident chain). Best-effort.
+      if (this.auditFacade) {
+        await this.auditFacade
+          .writeAuditLog({
+            actorId: adminId ?? 'SYSTEM',
+            actorRole: adminId ? 'ADMIN' : 'SYSTEM',
+            action: 'ORDER_EXCEPTION_QUEUED',
+            module: 'orders',
+            resource: 'MasterOrder',
+            resourceId: id,
+            oldValue: { orderStatus: 'VERIFIED' },
+            newValue: {
+              orderStatus: 'EXCEPTION_QUEUE',
+              exceptionReason,
+              exceptionReasonDetail: exceptionDetail,
+            },
+          } as any)
+          .catch(() => undefined);
+      }
     }
 
     return this.getOrder(id);
@@ -1810,9 +1882,53 @@ export class OrdersService {
     return updated;
   }
 
-  async markAsPaid(id: string) {
+  /**
+   * COD "mark as paid" — records that the delivery agent collected cash and
+   * flips the order to PAID (which fans out commission + affiliate settlement
+   * via `payments.payment.captured`).
+   *
+   * Phase 168 (COD Mark-Paid audit) — hardened from a thin façade over
+   * `orderStatus.update` into an auditable cash-collection event:
+   *   • #1  COD-only — an ONLINE order can NEVER be flipped PAID here (it must
+   *          settle via Razorpay verify/webhook with a gateway amount match).
+   *   • #7  CAS flip (updateMany WHERE paymentStatus='PENDING') so two
+   *          concurrent admin clicks can't both "win".
+   *   • #3  paidBy / paidAt / paymentReference / paymentNotes /
+   *          collectedAmountInPaise persisted on the order.
+   *   • #4/#9 a CashCollection ledger row per event, with variance =
+   *          collected − expected (a non-zero variance REQUIRES a reason).
+   *   • #5  AuditPublicFacade write (action COD_MARK_PAID) with actor + ip + ua.
+   *   • #14 the captured event carries amountInPaise (BigInt-safe).
+   *   • #15 an orderStatus FSM mismatch opens a PaymentMismatchAlert instead of
+   *          being swallowed in a log line.
+   *   • #17 the event is published INSIDE the tx (durable outbox when dual-write
+   *          is on) so a crash can't lose the commission/affiliate fan-out.
+   */
+  async markAsPaid(
+    id: string,
+    opts: {
+      actorId?: string;
+      actorRole?: string;
+      collectedAmountInPaise?: bigint;
+      collectionReference?: string;
+      notes?: string;
+      varianceReason?: string;
+      ipAddress?: string;
+      userAgent?: string;
+    } = {},
+  ) {
     const order = await this.orderRepo.findMasterOrderById(id);
     if (!order) throw new NotFoundAppException('Order not found');
+
+    // #1 — COD-only. An ONLINE order reaching this path means someone is
+    // trying to flip a gateway order PAID with zero gateway involvement.
+    if (order.paymentMethod !== 'COD') {
+      throw new BadRequestAppException(
+        'mark-paid is for COD orders only — online orders settle via the ' +
+          'Razorpay verify / webhook path (which verifies the captured amount).',
+        'MARK_PAID_NON_COD',
+      );
+    }
 
     // Only consider active (non-rejected) sub-orders
     const activeSubOrders = order.subOrders.filter(
@@ -1841,8 +1957,30 @@ export class OrdersService {
     }
 
     // FSM enforcement — pinning the rule that VOIDED → PAID and other
-    // illegal transitions are also rejected.
+    // illegal transitions are also rejected. (The only legal source is
+    // PENDING; see PAYMENT_STATUS_TRANSITIONS.)
     assertTransition('OrderPaymentStatus', order.paymentStatus, 'PAID');
+
+    // #4/#9 — cash variance. Default the collected amount to the full payable
+    // (the legacy callers + the UI's "collect full" affordance); when the admin
+    // records a different amount, a variance reason is mandatory so the
+    // discrepancy is never silently absorbed.
+    const expectedInPaise = BigInt(order.totalAmountInPaise);
+    const collectedInPaise =
+      opts.collectedAmountInPaise ?? expectedInPaise;
+    if (collectedInPaise < 0n) {
+      throw new BadRequestAppException('collectedAmountInPaise cannot be negative');
+    }
+    const varianceInPaise = collectedInPaise - expectedInPaise;
+    if (varianceInPaise !== 0n && !opts.varianceReason?.trim()) {
+      throw new BadRequestAppException(
+        `Collected amount (₹${(Number(collectedInPaise) / 100).toFixed(2)}) does not ` +
+          `match the payable (₹${(Number(expectedInPaise) / 100).toFixed(2)}); ` +
+          `a varianceReason is required to record a cash discrepancy.`,
+        'COD_CASH_VARIANCE_UNEXPLAINED',
+      );
+    }
+
     // Phase 0 (PR 0.8) — the old code also wrote `orderStatus: 'DELIVERED'`
     // unconditionally. Most callers reach this after sub-orders are all
     // DELIVERED, so the master is in DISPATCHED. Validate before we
@@ -1852,51 +1990,346 @@ export class OrdersService {
       order.orderStatus,
       'DELIVERED',
     );
-    if (!willTouchOrderStatus) {
-      this.logger.warn(
-        `markAsPaid: master order ${id} is in ${order.orderStatus} — ` +
-          `illegal transition to DELIVERED. paymentStatus still flips to PAID; ` +
-          `orderStatus left unchanged (admin to reconcile).`,
-      );
-    }
 
-    await this.orderRepo.executeTransaction(async (tx) => {
-      await tx.masterOrder.update({
-        where: { id },
+    const paidAt = new Date();
+    // #7 — CAS flip. The WHERE clause re-checks PENDING inside the tx so two
+    // concurrent callers can't both flip-and-fan-out; the loser sees count=0.
+    const flipped = await this.orderRepo.executeTransaction(async (tx) => {
+      const res = await tx.masterOrder.updateMany({
+        where: { id, paymentStatus: 'PENDING' },
         data: willTouchOrderStatus
-          ? { paymentStatus: 'PAID', orderStatus: 'DELIVERED' }
-          : { paymentStatus: 'PAID' },
+          ? {
+              paymentStatus: 'PAID',
+              orderStatus: 'DELIVERED',
+              paidBy: opts.actorId ?? null,
+              paidAt,
+              paymentReference: opts.collectionReference ?? null,
+              paymentNotes: opts.notes ?? null,
+              collectedAmountInPaise: collectedInPaise,
+            }
+          : {
+              paymentStatus: 'PAID',
+              paidBy: opts.actorId ?? null,
+              paidAt,
+              paymentReference: opts.collectionReference ?? null,
+              paymentNotes: opts.notes ?? null,
+              collectedAmountInPaise: collectedInPaise,
+            },
       });
+      if (res.count === 0) {
+        // Lost the race (or status moved out of PENDING under us). Do NOTHING
+        // else — the winner owns the ledger row + event fan-out.
+        return false;
+      }
+
       for (const so of relevantSubOrders) {
         await tx.subOrder.update({
           where: { id: so.id },
-          data: { paymentStatus: 'PAID' },
+          data: {
+            paymentStatus: 'PAID',
+            paidAt,
+            paidBy: opts.actorId ?? null,
+            paymentReference: opts.collectionReference ?? null,
+          },
         });
       }
-    });
 
-    // Mirror the same domain event the online (Razorpay) and payments-
-    // facade paths emit. The affiliate commission handler subscribes
-    // to this — without the emit, COD orders marked paid here never
-    // produce an AffiliateCommission row.
-    try {
-      await this.eventBus.publish({
-        eventName: 'payments.payment.captured',
-        aggregate: 'MasterOrder',
-        aggregateId: id,
-        occurredAt: new Date(),
-        payload: {
+      // #4 — immutable cash-collection ledger row.
+      await tx.cashCollection.create({
+        data: {
           masterOrderId: id,
-          orderNumber: order.orderNumber,
-          customerId: order.customerId,
-          amount: Number(order.totalAmount),
-          paymentMethod: order.paymentMethod,
-          source: 'admin.markAsPaid',
+          subOrderId: null,
+          expectedAmountInPaise: expectedInPaise,
+          collectedAmountInPaise: collectedInPaise,
+          varianceInPaise,
+          varianceReason: opts.varianceReason?.trim() || null,
+          collectionReference: opts.collectionReference ?? null,
+          notes: opts.notes ?? null,
+          collectedByAdminId: opts.actorId ?? null,
+          collectedAt: paidAt,
         },
       });
-    } catch {
-      // best-effort — the DB state is the source of truth
+
+      // #14/#17 — durable, BigInt-safe event INSIDE the tx (atomic outbox when
+      // OUTBOX_DUAL_WRITE is on; falls back to post-commit emit otherwise).
+      await this.eventBus.publish(
+        {
+          eventName: 'payments.payment.captured',
+          aggregate: 'MasterOrder',
+          aggregateId: id,
+          occurredAt: paidAt,
+          payload: {
+            masterOrderId: id,
+            orderNumber: order.orderNumber,
+            customerId: order.customerId,
+            amount: Number(order.totalAmount),
+            amountInPaise: collectedInPaise.toString(),
+            paymentMethod: order.paymentMethod,
+            source: 'admin.markAsPaid',
+          },
+        },
+        { tx },
+      );
+
+      return true;
+    });
+
+    if (!flipped) {
+      this.logger.warn(
+        `markAsPaid: order ${id} was concurrently flipped out of PENDING; ` +
+          `this caller is a no-op (idempotent).`,
+      );
+      throw new BadRequestAppException('Order is already marked as paid');
     }
+
+    // #5 — audit trail (best-effort, post-commit; the DB state is the source of
+    // truth and a logging outage must not roll back a collected payment).
+    await this.auditFacade
+      ?.writeAuditLog({
+        actorId: opts.actorId,
+        actorRole: opts.actorRole,
+        action: 'COD_MARK_PAID',
+        module: 'orders',
+        resource: 'MasterOrder',
+        resourceId: id,
+        oldValue: { paymentStatus: order.paymentStatus, orderStatus: order.orderStatus },
+        newValue: {
+          paymentStatus: 'PAID',
+          orderStatus: willTouchOrderStatus ? 'DELIVERED' : order.orderStatus,
+        },
+        metadata: {
+          orderNumber: order.orderNumber,
+          expectedInPaise: expectedInPaise.toString(),
+          collectedInPaise: collectedInPaise.toString(),
+          varianceInPaise: varianceInPaise.toString(),
+          varianceReason: opts.varianceReason ?? null,
+          collectionReference: opts.collectionReference ?? null,
+        },
+        ipAddress: opts.ipAddress,
+        userAgent: opts.userAgent,
+      })
+      .catch((err) =>
+        this.logger.error(
+          `markAsPaid: audit write failed for order ${id}: ${(err as Error)?.message ?? err}`,
+        ),
+      );
+
+    // #15 — orderStatus FSM mismatch is a real reconciliation item, not a
+    // log-and-forget. The payment IS collected (good), but the order is PAID
+    // while sitting in a non-DELIVERED orderStatus — surface it to ops.
+    if (!willTouchOrderStatus) {
+      this.logger.warn(
+        `markAsPaid: master order ${id} is in ${order.orderStatus} — ` +
+          `illegal transition to DELIVERED. paymentStatus flipped to PAID; ` +
+          `orderStatus left unchanged. Opening a reconciliation alert.`,
+      );
+      await this.paymentOps
+        ?.flagMismatch({
+          kind: 'DUPLICATE_PAYMENT',
+          masterOrderId: id,
+          orderNumber: order.orderNumber,
+          severity: 70,
+          description:
+            `COD mark-paid succeeded for order ${order.orderNumber} but its ` +
+            `orderStatus (${order.orderStatus}) could not advance to DELIVERED. ` +
+            `paymentStatus is PAID; orderStatus needs manual reconciliation. ` +
+            `actorId=${opts.actorId ?? 'n/a'}`,
+        })
+        .catch((err) =>
+          this.logger.error(
+            `markAsPaid: failed to open orderStatus-mismatch alert for ${id}: ${(err as Error)?.message ?? err}`,
+          ),
+        );
+    }
+  }
+
+  /**
+   * Phase 168 (COD Mark-Paid audit #10) — per-sub-order COD cash collection.
+   *
+   * Multi-seller COD orders deliver sub-orders independently; cash for a
+   * delivered sub-order can be collected (and attributed) while siblings are
+   * still in transit. This records that single collection, then recomputes the
+   * master's paymentStatus — flipping the MASTER to PAID only once EVERY active
+   * sub-order is PAID (so commission/affiliate fan-out fires exactly once, at
+   * the right moment).
+   *
+   * Reuses the same money-safety contract as `markAsPaid`: COD-only, delivered-
+   * only, CAS on the sub-order's PENDING→PAID flip, a CashCollection ledger row,
+   * variance gate, and an audit row.
+   */
+  async markSubOrderAsPaid(
+    subOrderId: string,
+    opts: {
+      actorId?: string;
+      actorRole?: string;
+      collectedAmountInPaise?: bigint;
+      collectionReference?: string;
+      notes?: string;
+      varianceReason?: string;
+      ipAddress?: string;
+      userAgent?: string;
+    } = {},
+  ) {
+    const sub = await this.orderRepo.findSubOrderByIdWithMasterOrder(subOrderId);
+    if (!sub) throw new NotFoundAppException('Sub-order not found');
+    const master = sub.masterOrder;
+    if (!master) throw new NotFoundAppException('Parent order not found');
+
+    if (master.paymentMethod !== 'COD') {
+      throw new BadRequestAppException(
+        'Per-sub-order mark-paid is for COD orders only.',
+        'MARK_PAID_NON_COD',
+      );
+    }
+    if (sub.acceptStatus === 'REJECTED') {
+      throw new BadRequestAppException('Cannot collect cash for a rejected sub-order');
+    }
+    if (sub.fulfillmentStatus !== 'DELIVERED') {
+      throw new BadRequestAppException(
+        'Cannot mark a sub-order as paid before it is DELIVERED',
+      );
+    }
+    if (sub.paymentStatus === 'PAID') {
+      throw new BadRequestAppException('Sub-order is already marked as paid');
+    }
+    if (sub.paymentStatus === 'CANCELLED') {
+      throw new BadRequestAppException('Cannot mark a cancelled sub-order as paid');
+    }
+
+    const expectedInPaise = BigInt(sub.subTotalInPaise);
+    const collectedInPaise = opts.collectedAmountInPaise ?? expectedInPaise;
+    if (collectedInPaise < 0n) {
+      throw new BadRequestAppException('collectedAmountInPaise cannot be negative');
+    }
+    const varianceInPaise = collectedInPaise - expectedInPaise;
+    if (varianceInPaise !== 0n && !opts.varianceReason?.trim()) {
+      throw new BadRequestAppException(
+        `Collected amount does not match the sub-order payable; a varianceReason ` +
+          `is required to record a cash discrepancy.`,
+        'COD_CASH_VARIANCE_UNEXPLAINED',
+      );
+    }
+
+    const paidAt = new Date();
+    const activeSubs = (master.subOrders ?? []).filter(
+      (so: any) => so.acceptStatus !== 'REJECTED',
+    );
+
+    const result = await this.orderRepo.executeTransaction(async (tx) => {
+      // CAS on the sub-order flip.
+      const flip = await tx.subOrder.updateMany({
+        where: { id: subOrderId, paymentStatus: 'PENDING' },
+        data: {
+          paymentStatus: 'PAID',
+          paidAt,
+          paidBy: opts.actorId ?? null,
+          paymentReference: opts.collectionReference ?? null,
+        },
+      });
+      if (flip.count === 0) return { flipped: false, masterFlipped: false };
+
+      await tx.cashCollection.create({
+        data: {
+          masterOrderId: master.id,
+          subOrderId,
+          expectedAmountInPaise: expectedInPaise,
+          collectedAmountInPaise: collectedInPaise,
+          varianceInPaise,
+          varianceReason: opts.varianceReason?.trim() || null,
+          collectionReference: opts.collectionReference ?? null,
+          notes: opts.notes ?? null,
+          collectedByAdminId: opts.actorId ?? null,
+          collectedAt: paidAt,
+        },
+      });
+
+      // Recompute master from siblings RE-READ INSIDE THE TX (not the pre-tx
+      // snapshot). Phase 168 review (L1) — two admins collecting two different
+      // sub-orders of the same order concurrently would each see the OTHER as
+      // still PENDING off the stale snapshot, so NEITHER would flip the master
+      // → an all-paid order stuck PENDING + the captured event never fires.
+      // Re-reading here means the second committer sees the first's PAID flip.
+      const freshSiblings = await tx.subOrder.findMany({
+        where: { masterOrderId: master.id },
+        select: { id: true, acceptStatus: true, paymentStatus: true },
+      });
+      const freshActive = freshSiblings.filter(
+        (s: any) => s.acceptStatus !== 'REJECTED',
+      );
+      const allActivePaid =
+        freshActive.length > 0 &&
+        freshActive.every((s: any) => s.paymentStatus === 'PAID');
+      let masterFlipped = false;
+      if (allActivePaid && master.paymentStatus === 'PENDING') {
+        const willTouchOrderStatus = isTransitionAllowed(
+          'OrderStatus',
+          master.orderStatus,
+          'DELIVERED',
+        );
+        const mflip = await tx.masterOrder.updateMany({
+          where: { id: master.id, paymentStatus: 'PENDING' },
+          data: willTouchOrderStatus
+            ? { paymentStatus: 'PAID', orderStatus: 'DELIVERED', paidAt, paidBy: opts.actorId ?? null }
+            : { paymentStatus: 'PAID', paidAt, paidBy: opts.actorId ?? null },
+        });
+        masterFlipped = mflip.count > 0;
+        if (masterFlipped) {
+          await this.eventBus.publish(
+            {
+              eventName: 'payments.payment.captured',
+              aggregate: 'MasterOrder',
+              aggregateId: master.id,
+              occurredAt: paidAt,
+              payload: {
+                masterOrderId: master.id,
+                orderNumber: master.orderNumber,
+                customerId: master.customerId,
+                amount: Number(master.totalAmount),
+                amountInPaise: BigInt(master.totalAmountInPaise).toString(),
+                paymentMethod: master.paymentMethod,
+                source: 'admin.markSubOrderAsPaid',
+              },
+            },
+            { tx },
+          );
+        }
+      }
+      return { flipped: true, masterFlipped };
+    });
+
+    if (!result.flipped) {
+      throw new BadRequestAppException('Sub-order is already marked as paid');
+    }
+
+    await this.auditFacade
+      ?.writeAuditLog({
+        actorId: opts.actorId,
+        actorRole: opts.actorRole,
+        action: 'COD_SUBORDER_MARK_PAID',
+        module: 'orders',
+        resource: 'SubOrder',
+        resourceId: subOrderId,
+        oldValue: { paymentStatus: sub.paymentStatus },
+        newValue: { paymentStatus: 'PAID', masterFlipped: result.masterFlipped },
+        metadata: {
+          masterOrderId: master.id,
+          orderNumber: master.orderNumber,
+          expectedInPaise: expectedInPaise.toString(),
+          collectedInPaise: collectedInPaise.toString(),
+          varianceInPaise: varianceInPaise.toString(),
+          varianceReason: opts.varianceReason ?? null,
+          collectionReference: opts.collectionReference ?? null,
+        },
+        ipAddress: opts.ipAddress,
+        userAgent: opts.userAgent,
+      })
+      .catch((err) =>
+        this.logger.error(
+          `markSubOrderAsPaid: audit write failed for ${subOrderId}: ${(err as Error)?.message ?? err}`,
+        ),
+      );
+
+    return { subOrderPaid: true, masterPaid: result.masterFlipped };
   }
 
   // ────────────────────────────────────────────────────────────────────────
@@ -1969,6 +2402,9 @@ export class OrdersService {
           customerPincode,
           quantity: item.quantity,
           excludeMappingIds,
+          // Phase 233 — admin browse, not a real checkout decision: keep it out
+          // of allocation analytics.
+          eventSource: 'LISTING',
         });
 
         if (allocation.allEligible) {
@@ -2060,6 +2496,12 @@ export class OrdersService {
     };
     const scoreMap = new Map<string, NodeCandidate>();
 
+    // Phase 231 — COD orders must not list non-COD nodes (reassigning to one
+    // just guarantees a downstream rejection). Defensive: if paymentMethod
+    // isn't on the loaded master, default to ONLINE (no COD filter).
+    const orderPaymentMethod: 'COD' | 'ONLINE' =
+      (subOrder.masterOrder as any).paymentMethod === 'COD' ? 'COD' : 'ONLINE';
+
     for (const item of subOrder.items) {
       try {
         const allocation = await this.catalogFacade.allocate({
@@ -2067,6 +2509,9 @@ export class OrdersService {
           variantId: item.variantId ?? undefined,
           customerPincode,
           quantity: item.quantity,
+          paymentMethod: orderPaymentMethod,
+          // Phase 233 — admin browse, not a real checkout decision.
+          eventSource: 'LISTING',
         });
 
         if (allocation.allEligible) {
@@ -2578,11 +3023,37 @@ export class OrdersService {
           } as any,
         });
 
+        // Phase 234 (Exception Queue audit) — only promote the master OUT of
+        // EXCEPTION_QUEUE when EVERY non-REJECTED sub-order has actually been
+        // routed (acceptDeadlineAt is stamped at verify-route AND at reassign,
+        // so a null deadline means "still unrouted/unserviceable"). Pre-234 a
+        // single reassign flipped the master straight to ROUTED_TO_SELLER even
+        // if other sub-orders were still stuck — prematurely "resolving" a
+        // still-broken order and hiding it from the exception queue. We scan
+        // siblings IN-TX so this row's just-set acceptDeadlineAt is visible.
         if (subOrder.masterOrder.orderStatus === 'EXCEPTION_QUEUE') {
-          await tx.masterOrder.update({
-            where: { id: subOrder.masterOrder.id },
-            data: { orderStatus: 'ROUTED_TO_SELLER' },
+          const siblings = await tx.subOrder.findMany({
+            where: { masterOrderId: subOrder.masterOrder.id },
+            select: { acceptStatus: true, acceptDeadlineAt: true },
           });
+          const active = siblings.filter(
+            (s: any) => s.acceptStatus !== 'REJECTED',
+          );
+          const allRouted =
+            active.length > 0 &&
+            active.every((s: any) => s.acceptDeadlineAt !== null);
+          if (allRouted) {
+            await tx.masterOrder.update({
+              where: { id: subOrder.masterOrder.id },
+              data: {
+                orderStatus: 'ROUTED_TO_SELLER',
+                // Clear the exception provenance now that it's resolved.
+                exceptionReason: null,
+                exceptionReasonDetail: null,
+                exceptionEnteredAt: null,
+              },
+            });
+          }
         }
 
         // 7. Gap #21 — ONE AllocationLog per reassignment, summarising
@@ -2611,6 +3082,12 @@ export class OrdersService {
               `from ${previousNodeType.toLowerCase()} ${previousSellerId ?? previousFranchiseId ?? 'NONE'} ` +
               `to ${newTarget.nodeType.toLowerCase()} ${newTarget.nodeId} — ${trimmedReason}` +
               (force ? ' [force]' : ''),
+            // Phase 233 — tag this as a manual reassignment so allocation
+            // analytics counts it in the REASSIGNED bucket (and excludes it
+            // from LIVE checkout decisions) instead of being an indistinct row.
+            eventSource: 'MANUAL_REASSIGNMENT',
+            outcome: 'REASSIGNED',
+            reasonCode: 'MANUAL_REASSIGN',
             isReallocated: true,
             orderId: subOrder.masterOrder.id,
           } as any,
@@ -2733,6 +3210,36 @@ export class OrdersService {
             );
           });
       }
+    }
+
+    // Phase 230/231 (Eligible-node listing audit) — hash-chained audit_logs
+    // row. Pre-230 a reassignment wrote OrderReassignmentLog + AllocationLog +
+    // timeline + outbox event, but NOT the tamper-evident audit chain every
+    // other risk-sensitive admin action uses. Best-effort, after commit.
+    if (this.auditFacade) {
+      await this.auditFacade
+        .writeAuditLog({
+          actorId: adminId ?? 'SYSTEM',
+          actorRole: adminId ? 'ADMIN' : 'SYSTEM',
+          action: 'SUB_ORDER_REASSIGNED',
+          module: 'orders',
+          resource: 'SubOrder',
+          resourceId: subOrderId,
+          oldValue: {
+            nodeType: previousNodeType,
+            nodeId: previousSellerId ?? previousFranchiseId ?? null,
+          },
+          newValue: {
+            nodeType: newTarget.nodeType,
+            nodeId: newTarget.nodeId,
+            masterOrderId: subOrder.masterOrder.id,
+            orderNumber: subOrder.masterOrder.orderNumber,
+            reason: trimmedReason,
+            reassignmentSequence: resultSequence,
+            force,
+          },
+        } as any)
+        .catch(() => undefined);
     }
 
     const updated =
@@ -4013,14 +4520,18 @@ export class OrdersService {
     customerId: string,
     page: number,
     limit: number,
+    // Phase 197 (My-Orders audit #7) — server-side status bucket.
+    bucket: 'all' | 'active' | 'delivered' | 'cancelled' = 'all',
   ) {
-    const [orders, total] = await Promise.all([
+    const [orders, total, bucketCounts] = await Promise.all([
       this.orderRepo.findCustomerOrders(
         customerId,
         (page - 1) * limit,
         limit,
+        bucket,
       ),
-      this.orderRepo.countCustomerOrders(customerId),
+      this.orderRepo.countCustomerOrders(customerId, bucket),
+      this.orderRepo.countCustomerOrdersByBucket(customerId),
     ]);
 
     // Strip seller information — customers should not see seller names
@@ -4037,21 +4548,21 @@ export class OrdersService {
         o.orderStatus,
         o.subOrders,
       );
+      // Phase 197 (My-Orders audit #1/#2) — explicit customer-safe
+      // whitelist. The previous `...o` spread leaked every internal
+      // MasterOrder column (verificationRiskScore/Band/Reasons,
+      // claimedByAdminId/claimedAt/claimExpiresAt, verifiedBy,
+      // selectedTaxProfileId, razorpayOrderId/razorpayPaymentId,
+      // paymentExpiresAt, lastPaymentFailure*, sourceCartSnapshot, …)
+      // straight to the buyer. Build the response field-by-field
+      // instead so a future MasterOrder column can't silently leak.
       return {
-        ...o,
+        ...this.toCustomerSafeMasterOrder(o),
         orderStatus: derivedStatus,
         orderStatusLabel: this.mapOrderStatusLabel(derivedStatus),
-        subOrders: o.subOrders.map((so: any) => ({
-          id: so.id,
-          subTotal: so.subTotal,
-          paymentStatus: so.paymentStatus,
-          fulfillmentStatus: so.fulfillmentStatus,
-          acceptStatus: so.acceptStatus,
-          deliveredAt: so.deliveredAt,
-          deliveryMethod: so.deliveryMethod,
-          selfDeliveryStatus: so.selfDeliveryStatus,
-          items: so.items,
-        })),
+        subOrders: o.subOrders.map((so: any) =>
+          this.toCustomerSafeSubOrder(so),
+        ),
       };
     });
 
@@ -4062,6 +4573,11 @@ export class OrdersService {
         limit,
         total,
         totalPages: Math.ceil(total / limit),
+        // Phase 197 (My-Orders audit #7) — the active filter + accurate
+        // per-bucket counts so the storefront tab badges are correct on
+        // any page (previously computed client-side from one page only).
+        status: bucket,
+        counts: bucketCounts,
       },
     };
   }
@@ -4236,13 +4752,48 @@ export class OrdersService {
       order.orderStatus,
       order.subOrders,
     );
+
+    // Phase 197 (My-Orders audit #10) — embed the in-flight returns
+    // scoped to THIS order. Pre-Phase-197 the detail page fetched
+    // `/customer/returns?limit=50` and filtered client-side to one
+    // order (an N+1 + over-fetch + a 50-row cap that could miss a
+    // return on a heavy account). Server-scoped by masterOrderId here.
+    let orderReturns: Array<{
+      id: string;
+      returnNumber: string | null;
+      status: string;
+      createdAt: Date;
+    }> = [];
+    try {
+      orderReturns = await this.prisma.return.findMany({
+        where: { masterOrderId: order.id },
+        select: {
+          id: true,
+          returnNumber: true,
+          status: true,
+          createdAt: true,
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    } catch {
+      // Best-effort — the returns embed must never block the order page.
+    }
+
+    // Phase 197 (My-Orders audit #1) — explicit customer-safe whitelist
+    // (see listCustomerOrders). The `...order` spread previously leaked
+    // the full MasterOrder row to the buyer; build the response
+    // field-by-field. paymentExpiresAt is the ONE additional field
+    // surfaced (My-Orders audit #16, safe + needed so the UI hides the
+    // Retry-payment CTA after the window closes).
     return {
-      ...order,
+      ...this.toCustomerSafeMasterOrder(order),
+      paymentExpiresAt: order.paymentExpiresAt ?? null,
       orderStatus: derivedStatus,
       orderStatusLabel: this.mapOrderStatusLabel(derivedStatus),
       appliedDiscount,
       shipping,
       timeline,
+      returns: orderReturns,
       // Phase 26 GST — per-item snapshots (BigInt → string for JSON
       // safety) + roll-up totals. Frontend renders these on the order
       // detail page so the customer sees a clear GST breakdown without
@@ -4265,23 +4816,111 @@ export class OrdersService {
         igstInPaise: taxSummary.igstInPaise.toString(),
         totalTaxInPaise: taxSummary.totalTaxInPaise.toString(),
       },
-      subOrders: order.subOrders.map((so: any) => ({
-        id: so.id,
-        subTotal: so.subTotal,
-        paymentStatus: so.paymentStatus,
-        fulfillmentStatus: so.fulfillmentStatus,
-        acceptStatus: so.acceptStatus,
-        deliveredAt: so.deliveredAt,
-        // Sprint 3 Story 2.5 — surface per-sub-order timestamps the
-        // frontend needs to render the timeline alongside each shipment.
-        acceptDeadlineAt: so.acceptDeadlineAt,
-        lastTrackingEventAt: so.lastTrackingEventAt,
-        returnWindowEndsAt: so.returnWindowEndsAt,
-        fulfilledBy: 'SPORTSMART',
-        deliveryMethod: so.deliveryMethod,
-        selfDeliveryStatus: so.selfDeliveryStatus,
-        items: so.items,
-      })),
+      subOrders: order.subOrders.map((so: any) =>
+        this.toCustomerSafeSubOrder(so),
+      ),
+    };
+  }
+
+  /**
+   * Phase 197 (My-Orders audit #1/#2) — the single source of truth for
+   * which MasterOrder columns are safe to return to the buyer. Every
+   * customer-facing order response funnels through here so a column
+   * added to MasterOrder later (commission*, a new risk signal, a new
+   * gateway id) is excluded BY DEFAULT — a developer must consciously
+   * add it to this whitelist for it to reach the customer.
+   *
+   * Deliberately EXCLUDED (internal / PII / fraud-signal):
+   *   verificationRiskScore / Band / Reasons / Remarks,
+   *   verified / verifiedAt / verifiedBy, claimedByAdminId / claimedAt /
+   *   claimExpiresAt, verificationDeadlineAt / verificationScored*,
+   *   selectedTaxProfileId, razorpayOrderId / razorpayPaymentId,
+   *   lastFailedPaymentId / lastPaymentFailure*, lastPolledAt /
+   *   pollAttemptCount / lastPollError, previousPaymentStatus,
+   *   rejected* , paidBy / paymentReference / paymentNotes,
+   *   walletTransactionId, idempotencyKey, sourceCartId /
+   *   sourceCartSnapshot, finalizedAt, gstModeSnapshot, customerId.
+   *
+   * paymentExpiresAt is NOT included here (it's added explicitly by
+   * the detail path only — the listing doesn't need it).
+   */
+  private toCustomerSafeMasterOrder(o: any) {
+    return {
+      id: o.id,
+      orderNumber: o.orderNumber,
+      orderStatus: o.orderStatus,
+      orderStatusLabel: this.mapOrderStatusLabel(o.orderStatus),
+      paymentStatus: o.paymentStatus,
+      paymentMethod: o.paymentMethod,
+      totalAmount: o.totalAmount,
+      totalAmountInPaise:
+        o.totalAmountInPaise != null ? o.totalAmountInPaise.toString() : null,
+      currency: o.currency ?? 'INR',
+      itemCount: o.itemCount,
+      discountCode: o.discountCode ?? null,
+      discountAmount: o.discountAmount ?? null,
+      discountAmountInPaise:
+        o.discountAmountInPaise != null
+          ? o.discountAmountInPaise.toString()
+          : null,
+      shippingOptionName: o.shippingOptionName ?? null,
+      shippingFeeInPaise:
+        o.shippingFeeInPaise != null ? o.shippingFeeInPaise.toString() : null,
+      shippingAddressSnapshot: o.shippingAddressSnapshot,
+      createdAt: o.createdAt,
+      updatedAt: o.updatedAt,
+    };
+  }
+
+  /**
+   * Phase 197 (My-Orders audit #2) — typed customer-safe sub-order
+   * shape. Locks out internal SubOrder columns (sellerId / franchiseId,
+   * commissionRateSnapshot / commissionProcessed / commissionDecision /
+   * commissionEarning, rejectionReason, lastCourierReasonCode, internal
+   * SLA + NDR/RTO forensic fields) that the `...so` spread would leak if
+   * anyone reverted the inline whitelist. `fulfilledBy` is forced to the
+   * brand string so the seller identity never surfaces.
+   */
+  private toCustomerSafeSubOrder(so: any) {
+    return {
+      id: so.id,
+      subTotal: so.subTotal,
+      paymentStatus: so.paymentStatus,
+      fulfillmentStatus: so.fulfillmentStatus,
+      acceptStatus: so.acceptStatus,
+      deliveredAt: so.deliveredAt ?? null,
+      // Sprint 3 Story 2.5 — per-sub-order timestamps the timeline needs.
+      acceptDeadlineAt: so.acceptDeadlineAt ?? null,
+      lastTrackingEventAt: so.lastTrackingEventAt ?? null,
+      returnWindowEndsAt: so.returnWindowEndsAt ?? null,
+      // Customer never sees the seller; always "SPORTSMART".
+      fulfilledBy: 'SPORTSMART',
+      deliveryMethod: so.deliveryMethod ?? null,
+      selfDeliveryStatus: so.selfDeliveryStatus ?? null,
+      items: (so.items ?? []).map((it: any) => this.toCustomerSafeItem(it)),
+    };
+  }
+
+  /**
+   * Phase 197 (My-Orders audit #2) — customer-safe order-item shape.
+   * Matches the storefront `OrderItem` type. Excludes internal pricing-
+   * tier snapshots (appliedPricingTierId / appliedDiscountPercent /
+   * appliedFixedUnitPrice / appliedListUnitPrice), stockReservationId,
+   * imagePublicId, masterSku, and the paise mirrors (the customer reads
+   * the Decimal unitPrice/totalPrice).
+   */
+  private toCustomerSafeItem(it: any) {
+    return {
+      id: it.id,
+      productId: it.productId,
+      variantId: it.variantId ?? null,
+      productTitle: it.productTitle,
+      variantTitle: it.variantTitle ?? null,
+      sku: it.sku ?? null,
+      imageUrl: it.imageUrl ?? null,
+      unitPrice: it.unitPrice,
+      quantity: it.quantity,
+      totalPrice: it.totalPrice,
     };
   }
 }

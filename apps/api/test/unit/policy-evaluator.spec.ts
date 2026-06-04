@@ -45,7 +45,14 @@ function makeEvaluator(opts: {
     getBoolean: (_key: string, _fallback?: boolean) => !!opts.abacEnabled,
   } as any;
 
-  return new PolicyEvaluatorService(fakePrisma, fakeEnv);
+  // PR 12.x — isStrict() now resolves via AuthzModeService.isAbacEnabled()
+  // (effective env-OR-runtime-override flag) rather than reading env
+  // directly. Drive it from the same abacEnabled option.
+  const fakeAuthzMode = {
+    isAbacEnabled: () => !!opts.abacEnabled,
+  } as any;
+
+  return new PolicyEvaluatorService(fakePrisma, fakeEnv, fakeAuthzMode);
 }
 
 const baseActor: PolicyActor = {
@@ -251,7 +258,8 @@ describe('PolicyEvaluatorService', () => {
       },
     } as any;
     const fakeEnv = { getBoolean: () => false } as any;
-    const ev = new PolicyEvaluatorService(fakePrisma, fakeEnv);
+    const fakeAuthzMode = { isAbacEnabled: () => false } as any;
+    const ev = new PolicyEvaluatorService(fakePrisma, fakeEnv, fakeAuthzMode);
 
     await ev.evaluate({
       actor: baseActor,

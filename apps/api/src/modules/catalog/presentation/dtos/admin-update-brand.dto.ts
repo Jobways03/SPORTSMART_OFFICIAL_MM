@@ -13,7 +13,7 @@ import { Transform } from 'class-transformer';
  * Phase 35 (2026-05-21) — explicit allowlist DTO for admin brand
  * update. Mirrors AdminCreateBrandDto but every field is optional
  * because PATCH semantics. `logoPublicId` is deliberately NOT here
- * — it's server-derived from the Cloudinary upload response.
+ * — it's server-derived from the media upload response.
  */
 export class AdminUpdateBrandDto {
   @IsOptional()

@@ -133,6 +133,15 @@ export interface ReversalInput {
   originalCgstInPaise: bigint;
   originalSgstInPaise: bigint;
   originalIgstInPaise: bigint;
+  /**
+   * Audit #164 (#8) — GST Compensation Cess (e.g. tobacco, aerated
+   * drinks, automobiles) snapshotted on the original line. Optional +
+   * defaults to 0n so existing callers (refund proration) are
+   * unchanged; the credit-note generator passes it so a cessable
+   * product's CN reverses cess proportionally instead of silently
+   * dropping it.
+   */
+  originalCessInPaise?: bigint;
   purchasedQuantity: number;
   returnedQuantity: number;
 }
@@ -144,7 +153,10 @@ export interface ReversalResult {
   cgstReversalInPaise: bigint;
   sgstReversalInPaise: bigint;
   igstReversalInPaise: bigint;
+  /** Audit #164 (#8) — proportional cess reversal (0n when no cess). */
+  cessReversalInPaise: bigint;
   totalTaxReversalInPaise: bigint;
+  /** taxable + CGST + SGST + IGST + cess reversal. */
   totalCreditNoteInPaise: bigint;
 }
 
@@ -174,8 +186,13 @@ export function calculateGstReversal(input: ReversalInput): ReversalResult {
   const cgstReversal = (input.originalCgstInPaise * returned) / purchased;
   const sgstReversal = (input.originalSgstInPaise * returned) / purchased;
   const igstReversal = (input.originalIgstInPaise * returned) / purchased;
+  // Audit #164 (#8) — cess reverses proportionally just like GST. 0n when
+  // the product carries no cess (the common case for Sportsmart catalog).
+  const cessReversal =
+    ((input.originalCessInPaise ?? 0n) * returned) / purchased;
   const totalTaxReversal = cgstReversal + sgstReversal + igstReversal;
-  const totalCreditNote = taxableReversal + totalTaxReversal;
+  // Credit-note total includes cess (a refundable component the buyer paid).
+  const totalCreditNote = taxableReversal + totalTaxReversal + cessReversal;
 
   return {
     grossReturnedInPaise: grossReturned,
@@ -184,6 +201,7 @@ export function calculateGstReversal(input: ReversalInput): ReversalResult {
     cgstReversalInPaise: cgstReversal,
     sgstReversalInPaise: sgstReversal,
     igstReversalInPaise: igstReversal,
+    cessReversalInPaise: cessReversal,
     totalTaxReversalInPaise: totalTaxReversal,
     totalCreditNoteInPaise: totalCreditNote,
   };

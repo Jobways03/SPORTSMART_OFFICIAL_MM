@@ -93,6 +93,45 @@ export interface IrnCancelResult {
   signedDocumentJson: unknown;
 }
 
+/**
+ * Phase 160 (e-invoice audit #8) — typed provider error so the service +
+ * controller can map NIC's failure modes to the right HTTP status / retry
+ * behaviour instead of collapsing everything to 500. Categories:
+ *   - AUTH       (NIC 2172 / HTTP 401): token expired → refresh + retry
+ *   - RATE_LIMIT (HTTP 429): back off + retry
+ *   - DUPLICATE  (NIC 2150): invoice already registered — idempotent;
+ *                 the provider SHOULD recover the existing IRN, but if it
+ *                 can't, the controller maps to 409 (not 500).
+ *   - PERMANENT  (NIC 2253 etc. / HTTP 400): bad payload — do NOT retry.
+ *   - TRANSIENT  (HTTP 5xx / network): retryable.
+ * `retryable` is the single signal the retry cron / controller consult.
+ */
+export type EInvoiceProviderErrorCategory =
+  | 'AUTH'
+  | 'RATE_LIMIT'
+  | 'DUPLICATE'
+  | 'PERMANENT'
+  | 'TRANSIENT';
+
+export class EInvoiceProviderError extends Error {
+  constructor(
+    message: string,
+    public readonly category: EInvoiceProviderErrorCategory,
+    public readonly opts: {
+      nicErrorCode?: string | null;
+      httpStatus?: number | null;
+    } = {},
+  ) {
+    super(message);
+    this.name = 'EInvoiceProviderError';
+  }
+
+  /** Should the retry cron / caller re-attempt this? */
+  get retryable(): boolean {
+    return this.category === 'AUTH' || this.category === 'RATE_LIMIT' || this.category === 'TRANSIENT';
+  }
+}
+
 export const EINVOICE_PROVIDER = Symbol.for('EInvoiceProvider');
 
 export interface EInvoiceProvider {

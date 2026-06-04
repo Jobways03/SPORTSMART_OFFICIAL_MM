@@ -76,7 +76,9 @@ describe('sub_orders.lastTrackingEventAt invariant (PR 4.4)', () => {
       'utf8',
     );
     const claimIdx = source.indexOf('claimTrackingEvent');
-    const markIdx = source.indexOf('markSubOrderDelivered(subOrder.id)');
+    // `markSubOrderDelivered(subOrder.id, { … })` — the method gained a
+    // second options arg, so match the call prefix (no trailing paren).
+    const markIdx = source.indexOf('markSubOrderDelivered(subOrder.id');
     expect(claimIdx).toBeGreaterThan(0);
     expect(markIdx).toBeGreaterThan(0);
     expect(claimIdx).toBeLessThan(markIdx);

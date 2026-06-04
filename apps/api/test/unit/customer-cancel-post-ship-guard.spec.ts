@@ -24,8 +24,15 @@ describe('CustomerOrdersService.cancelOrder — post-ship guard', () => {
       findMasterOrderWithSubOrders: jest.fn().mockResolvedValue(order),
       cancelOrderTransaction: jest.fn().mockResolvedValue(undefined),
     };
-    const svc = new CustomerOrdersService(repo);
-    return { svc, repo };
+    // Phase 197 — cancelOrder now writes a best-effort compliance audit
+    // row after a successful cancel (AuditModule is @Global()). The
+    // service swallows audit failures via .catch, so a resolving stub is
+    // enough for the happy path.
+    const audit: any = {
+      writeAuditLog: jest.fn().mockResolvedValue(undefined),
+    };
+    const svc = new CustomerOrdersService(repo, audit);
+    return { svc, repo, audit };
   };
 
   const buildOrder = (statuses: string[]) => ({

@@ -9,6 +9,7 @@ import {
   Min,
   Max,
   Matches,
+  MaxLength,
   ValidateNested,
   IsEnum,
 } from 'class-validator';
@@ -232,4 +233,17 @@ export class CreateProductDto {
   @ValidateNested({ each: true })
   @Type(() => CreateVariantInlineDto)
   variants?: CreateVariantInlineDto[];
+
+  // Phase 249 (#4) — AI-content provenance. When the product is saved
+  // carrying AI-generated copy, the FE echoes back the generate
+  // endpoint's `meta.generationLogId`. The controller stamps the
+  // product's AI provenance columns and flips the matching
+  // AiGenerationLog row GENERATED → ACCEPTED. Optional; allowlisted
+  // because the global ValidationPipe runs forbidNonWhitelisted.
+  // (AdminCreateProductDto extends this DTO, so the admin create path
+  // inherits the field too.)
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  aiGenerationLogId?: string;
 }

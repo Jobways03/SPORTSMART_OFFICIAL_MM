@@ -30,8 +30,13 @@ describe('PermissionsGuard', () => {
     const prisma = {
       adminSession: { findUnique: jest.fn().mockResolvedValue(null) },
     } as any;
+    const authzMode = {
+      isStrict: () => opts.strict,
+      isAbacEnabled: () => false,
+      isAuditEnabled: () => true,
+    } as any;
 
-    const guard = new PermissionsGuard(reflector, env, audit, unifiedAudit, prisma);
+    const guard = new PermissionsGuard(reflector, env, audit, unifiedAudit, prisma, authzMode);
     return { guard, reflector, audit, unifiedAudit, prisma };
   }
 

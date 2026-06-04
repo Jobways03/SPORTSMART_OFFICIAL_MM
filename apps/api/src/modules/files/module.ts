@@ -7,9 +7,7 @@ import {
   SellerAuthGuard,
   UserAuthGuard,
 } from '../../core/guards';
-import { CloudinaryAdapter } from '../../integrations/cloudinary/cloudinary.adapter';
-import { S3Adapter } from '../../integrations/s3/adapters/s3.adapter';
-import { S3Client } from '../../integrations/s3/clients/s3.client';
+import { MediaStorageAdapter } from '../../integrations/media/media-storage.adapter';
 import { FilesPublicFacade } from './application/facades/files-public.facade';
 import { FileService } from './application/services/file.service';
 import { PrismaFileMetadataRepository } from './infrastructure/repositories/prisma-file-metadata.prisma-repository';
@@ -34,10 +32,9 @@ import {
     AffiliateAuthGuard,
     AnyAuthGuard,
 
-    // Storage adapters
-    CloudinaryAdapter,
-    S3Client,
-    S3Adapter,
+    // Storage adapters. MediaStorageAdapter is local; R2Client/R2Adapter come
+    // from the @Global R2Module (replaces the former local S3 providers).
+    MediaStorageAdapter,
 
     // Services
     FileService,
@@ -47,6 +44,8 @@ import {
     PrismaFileMetadataRepository,
     PrismaFileAttachmentRepository,
   ],
-  exports: [FileService, FilesPublicFacade],
+  // Phase 253 — export MediaStorageAdapter so the (also @Global) retention
+  // enforcer can issue real provider deletes on erasure.
+  exports: [FileService, FilesPublicFacade, MediaStorageAdapter],
 })
 export class FilesModule {}

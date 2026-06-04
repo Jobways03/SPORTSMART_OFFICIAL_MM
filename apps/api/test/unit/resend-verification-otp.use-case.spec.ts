@@ -16,6 +16,9 @@ describe('ResendVerificationOtpUseCase', () => {
     const userRepo = {
       findByEmailForVerification: jest.fn(),
       findRecentEmailVerificationOtp: jest.fn().mockResolvedValue(null),
+      // Phase 27 — per-user hourly resend cap. Default 0 keeps the happy
+      // path under the MAX_RESENDS_PER_HOUR limit so a new OTP is issued.
+      countEmailVerificationOtpsSince: jest.fn().mockResolvedValue(0),
       invalidateActiveEmailVerificationOtps: jest.fn().mockResolvedValue(undefined),
       createEmailVerificationOtp: jest.fn().mockResolvedValue({ id: 'otp-1' }),
       ...overrides,

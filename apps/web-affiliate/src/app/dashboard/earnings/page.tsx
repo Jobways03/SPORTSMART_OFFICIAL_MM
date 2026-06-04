@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useSseStream } from '@sportsmart/ui';
 import { apiFetch, formatDate, formatINR } from '../../../lib/api';
 
 interface Commission {
@@ -49,15 +50,22 @@ export default function EarningsPage() {
   const [search, setSearch] = useState('');
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [legendOpen, setLegendOpen] = useState(false);
+  // Bumped by the affiliate SSE stream to refetch balances + commissions
+  // live when a commission is confirmed/reversed or a payout changes.
+  const [refreshTick, setRefreshTick] = useState(0);
 
-  // Balances are independent of filter/page so fetch once.
+  useSseStream('/portal/streams/affiliate-earnings', {
+    onMessage: () => setRefreshTick((t) => t + 1),
+  });
+
+  // Balances are independent of filter/page so fetch once (+ on live update).
   useEffect(() => {
     apiFetch<Balances>('/affiliate/me/balances')
       .then(setBalances)
       .catch(() => {
         // Hero shows '—' if balances fail; non-fatal.
       });
-  }, []);
+  }, [refreshTick]);
 
   useEffect(() => {
     setLoading(true);
@@ -68,7 +76,7 @@ export default function EarningsPage() {
       .then(setData)
       .catch((e) => setError(e?.message ?? 'Could not load commissions.'))
       .finally(() => setLoading(false));
-  }, [filter, page, search]);
+  }, [filter, page, search, refreshTick]);
 
   const total = data?.pagination.total ?? 0;
   const totalEarned =

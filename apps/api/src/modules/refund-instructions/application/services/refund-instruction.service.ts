@@ -5,8 +5,10 @@ import type {
   RefundMethod,
   RefundSourceType,
 } from '@prisma/client';
+import { Optional } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EnvService } from '../../../../bootstrap/env/env.service';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { ConflictAppException } from '../../../../core/exceptions';
 import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
 import { RefundSagaService } from '../../../payments-saga/application/services/refund-saga.service';
@@ -18,7 +20,12 @@ export interface CreateInstructionForDisputeArgs {
   disputeNumber: string;
   customerId: string;
   masterOrderId: string | null;
-  amountInPaise: number;
+  // Phase 172 (#5) — accept bigint too so callers don't have to down-cast; the
+  // create() coerces via BigInt() (exact for integer paise — a JS number is
+  // exact to 2^53 ≈ ₹90 trillion, so this was never a real-world precision risk).
+  amountInPaise: number | bigint;
+  // Phase 172 (#12) — optional apologetic customer-facing message for goodwill.
+  customerVisibleMessage?: string | null;
   // Wallet is the default for dispute resolutions per ADR-009.
   // Admin can override to BANK_TRANSFER for high-value cases.
   refundMethod?: RefundMethod;
@@ -97,7 +104,50 @@ export class RefundInstructionService {
     private readonly wallet: WalletPublicFacade,
     private readonly saga: RefundSagaService,
     private readonly splitCalculator: RefundSplitCalculatorService,
+    // Phase 170 (#2-approve) — emit refunds.instruction.approved for the
+    // customer-notification handler. @Optional so existing specs that construct
+    // the service with 5 args keep working (EventBus is @Global in prod).
+    @Optional() private readonly eventBus?: EventBusService,
   ) {}
+
+  /**
+   * Phase 170 (#16) — append a status-transition history row (best-effort; a
+   * history-write failure must never fail the money operation). `actorId` is an
+   * admin id or a SYSTEM sentinel ('saga', 'recon', 'system').
+   */
+  private async recordHistory(
+    instructionId: string,
+    fromStatus: RefundInstruction['status'] | null,
+    toStatus: RefundInstruction['status'],
+    actorId: string | null,
+    notes?: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.refundInstructionStatusHistory.create({
+        data: {
+          instructionId,
+          fromStatus: fromStatus ?? null,
+          toStatus,
+          actorId: actorId ?? null,
+          notes: notes ?? null,
+        },
+      });
+    } catch (err) {
+      // Best-effort: a history-write failure must never fail the money op.
+      this.logger.error(
+        `Failed to record status history for ${instructionId} (${fromStatus}→${toStatus}): ${(err as Error)?.message ?? err}`,
+      );
+    }
+  }
+
+  /**
+   * Phase 170 (#6) — compute the approval SLA deadline for a freshly-queued
+   * instruction (createdAt + REFUND_APPROVAL_SLA_HOURS, default 48h).
+   */
+  private approvalDueByFromNow(): Date {
+    const hours = this.env.getNumber('REFUND_APPROVAL_SLA_HOURS', 48);
+    return new Date(Date.now() + Math.max(1, hours) * 3_600_000);
+  }
 
   /**
    * Multi-payment refund split (2026-05-16). When an order was paid via
@@ -165,6 +215,8 @@ export class RefundInstructionService {
             amountInPaise: leg.amountInPaise,
             refundMethod: leg.method,
             status: requiresApproval ? 'PENDING_APPROVAL' : 'PROCESSING',
+            // Phase 170 (#6) — SLA deadline only while it awaits approval.
+            approvalDueBy: requiresApproval ? this.approvalDueByFromNow() : null,
             idempotencyKey: legKey,
             // For multi-leg splits, surface the leg context via the
             // failureReason column with a [SPLIT_LEG] prefix so it's
@@ -234,20 +286,59 @@ export class RefundInstructionService {
   ): Promise<RefundInstruction | null> {
     // Intentionally NOT gated on this.required() — see docstring above.
 
-    const idempotencyKey =
-      args.idempotencyKey ?? `dispute:${args.disputeId}`;
+    const baseKey = args.idempotencyKey ?? `dispute:${args.disputeId}`;
+    let idempotencyKey = baseKey;
 
     // Idempotent insert: if the same idempotencyKey already exists,
     // return that row instead of creating a duplicate. Race-safe via
     // the unique index on idempotency_key.
     const existing = await this.prisma.refundInstruction.findUnique({
-      where: { idempotencyKey },
+      where: { idempotencyKey: baseKey },
     });
     if (existing) {
+      // Phase 171 review (CRITICAL) — if the existing instruction for this key
+      // is in a finance-REJECTED terminal state (the dispute bounced back and is
+      // being re-decided), reusing it would mean the re-decision mints NO new
+      // refund and the customer is never paid. Mint a FRESH instruction under a
+      // versioned key instead. A genuine replay of a live/decided instruction
+      // (PENDING_APPROVAL/PROCESSING/SUCCESS/etc.) still dedups to the row.
+      const rejectedTerminal =
+        existing.status === 'ROUTED_BACK_TO_DISPUTE' ||
+        existing.status === 'REJECTED' ||
+        existing.status === 'CANCELLED';
+      if (!rejectedTerminal) {
+        this.logger.log(
+          `Reusing existing RefundInstruction ${existing.id} for ${baseKey}`,
+        );
+        return existing;
+      }
+      // Find the next free versioned key (base:redecide-2, -3, …). The count of
+      // prior rejected attempts gives a stable, collision-resistant suffix.
+      const priorAttempts = await this.prisma.refundInstruction.count({
+        where: { sourceType: 'DISPUTE', sourceId: args.disputeId },
+      });
+      idempotencyKey = `${baseKey}:redecide-${priorAttempts + 1}`;
+      // Guard the (rare) case where that versioned key already exists (a prior
+      // re-decision that itself was rejected): return it if it's still live.
+      const versioned = await this.prisma.refundInstruction.findUnique({
+        where: { idempotencyKey },
+      });
+      if (
+        versioned &&
+        versioned.status !== 'ROUTED_BACK_TO_DISPUTE' &&
+        versioned.status !== 'REJECTED' &&
+        versioned.status !== 'CANCELLED'
+      ) {
+        return versioned;
+      }
+      if (versioned) {
+        // even the versioned slot is rejected — bump once more.
+        idempotencyKey = `${baseKey}:redecide-${priorAttempts + 2}`;
+      }
       this.logger.log(
-        `Reusing existing RefundInstruction ${existing.id} for ${idempotencyKey}`,
+        `Prior refund for dispute ${args.disputeId} was finance-rejected ` +
+          `(${existing.status}); minting a fresh instruction under ${idempotencyKey}`,
       );
-      return existing;
     }
 
     // ── Phase 12 (ADR-017) — finance approval gate ─────────────────
@@ -271,6 +362,16 @@ export class RefundInstructionService {
           amountInPaise: BigInt(args.amountInPaise),
           refundMethod: args.refundMethod ?? 'WALLET',
           status: requiresApproval ? 'PENDING_APPROVAL' : 'PROCESSING',
+          // Phase 170 (#6) — SLA deadline only while it awaits approval.
+          approvalDueBy: requiresApproval ? this.approvalDueByFromNow() : null,
+          // Phase 171 (#4) — explicit dispute link for fast dispute→refund lookup.
+          linkedDisputeId: args.disputeId,
+          // Phase 172 (#2/#12) — goodwill is first-class on the row now: an
+          // indexed marker + the remedy snapshot (so the row is self-describing
+          // for the finance queue + reconciliation) + the customer-facing note.
+          isGoodwill: args.customerRemedy === 'GOODWILL_CREDIT',
+          customerRemedy: args.customerRemedy ?? null,
+          customerVisibleMessage: args.customerVisibleMessage ?? null,
           idempotencyKey,
         },
       });
@@ -292,7 +393,7 @@ export class RefundInstructionService {
     if (requiresApproval) {
       this.logger.log(
         `RefundInstruction ${instruction.id} PENDING_APPROVAL ` +
-          `(amount=₹${(args.amountInPaise / 100).toFixed(2)}, ` +
+          `(amount=₹${(Number(args.amountInPaise) / 100).toFixed(2)}, ` +
           `remedy=${args.customerRemedy ?? 'unknown'}) — finance must approve`,
       );
       return instruction;
@@ -304,7 +405,7 @@ export class RefundInstructionService {
       sourceId: args.disputeId,
       label: args.disputeNumber,
       customerId: args.customerId,
-      amountInPaise: args.amountInPaise,
+      amountInPaise: Number(args.amountInPaise),
     });
   }
 
@@ -397,11 +498,14 @@ export class RefundInstructionService {
       throw new Error(`RefundInstruction ${args.instructionId} not found`);
     }
     if (row.status === 'SUCCESS') return row;
-    if (row.status !== 'PENDING_APPROVAL') {
+    // Phase 170 (#10) — a NEEDS_CLARIFICATION instruction is still decidable;
+    // approving it resolves the clarification and proceeds.
+    if (row.status !== 'PENDING_APPROVAL' && row.status !== 'NEEDS_CLARIFICATION') {
       throw new ConflictAppException(
-        `RefundInstruction ${args.instructionId} is ${row.status}, not PENDING_APPROVAL — cannot approve`,
+        `RefundInstruction ${args.instructionId} is ${row.status}, not awaiting approval — cannot approve`,
       );
     }
+    const fromStatus = row.status; // PENDING_APPROVAL | NEEDS_CLARIFICATION
     if (!row.idempotencyKey) {
       throw new Error(
         `RefundInstruction ${args.instructionId} has no idempotencyKey — cannot run saga safely`,
@@ -423,7 +527,7 @@ export class RefundInstructionService {
         const claim = await this.prisma.refundInstruction.updateMany({
           where: {
             id: args.instructionId,
-            status: 'PENDING_APPROVAL',
+            status: { in: ['PENDING_APPROVAL', 'NEEDS_CLARIFICATION'] },
             firstApprovedBy: null,
           },
           data: {
@@ -448,7 +552,11 @@ export class RefundInstructionService {
         const fresh = await this.prisma.refundInstruction.findUnique({
           where: { id: args.instructionId },
         });
-        if (!fresh || fresh.status !== 'PENDING_APPROVAL') {
+        if (
+          !fresh ||
+          (fresh.status !== 'PENDING_APPROVAL' &&
+            fresh.status !== 'NEEDS_CLARIFICATION')
+        ) {
           throw new ConflictAppException(
             `RefundInstruction ${args.instructionId} is no longer awaiting approval`,
           );
@@ -470,11 +578,15 @@ export class RefundInstructionService {
     // CAS (status: PENDING_APPROVAL in the WHERE) guarantees exactly one
     // releaser even if two distinct admins approve concurrently.
     const release = await this.prisma.refundInstruction.updateMany({
-      where: { id: args.instructionId, status: 'PENDING_APPROVAL' },
+      where: {
+        id: args.instructionId,
+        status: { in: ['PENDING_APPROVAL', 'NEEDS_CLARIFICATION'] },
+      },
       data: {
         status: 'PROCESSING',
         approvedBy: args.adminId,
         approvedAt: new Date(),
+        approvalDueBy: null,
       },
     });
     if (release.count === 0) {
@@ -495,6 +607,30 @@ export class RefundInstructionService {
           ? ` (dual-approval: first=${claimed.firstApprovedBy}, second=${args.adminId})`
           : ''),
     );
+    await this.recordHistory(claimed.id, fromStatus, 'PROCESSING', args.adminId, 'finance approved');
+    // Phase 170 (#2-approve) — emit the approved event so the customer is told
+    // their refund cleared finance review (mirror of the rejected event). The
+    // notification handler consumes it; best-effort so a notify hiccup can't
+    // fail the approval.
+    await this.eventBus
+      ?.publish({
+        eventName: 'refunds.instruction.approved',
+        aggregate: 'RefundInstruction',
+        aggregateId: claimed.id,
+        occurredAt: new Date(),
+        payload: {
+          instructionId: claimed.id,
+          sourceType: claimed.sourceType,
+          sourceId: claimed.sourceId,
+          customerId: claimed.customerId,
+          amountInPaise: claimed.amountInPaise.toString(),
+        },
+      })
+      .catch((err) =>
+        this.logger.error(
+          `Failed to emit refunds.instruction.approved for ${claimed.id}: ${(err as Error).message}`,
+        ),
+      );
 
     const labelPrefix = claimed.sourceType === 'RETURN' ? 'return' : 'dispute';
     const ranInstruction = await this.runSagaForInstruction(
@@ -560,36 +696,86 @@ export class RefundInstructionService {
     instructionId: string;
     adminId: string;
     reason: string;
-  }): Promise<RefundInstruction> {
+    // Phase 171 (#6) — optional SAFE customer-facing message, kept separate
+    // from the internal `reason` (which may contain "fraud signals" etc).
+    customerVisibleReason?: string;
+  }): Promise<RefundInstruction & { routedBackToDispute?: boolean }> {
     const reason = args.reason?.trim();
     if (!reason || reason.length < 3) {
       throw new Error('reason (min 3 chars) is required to reject a refund');
     }
+    const customerVisibleReason = args.customerVisibleReason?.trim() || null;
     const row = await this.prisma.refundInstruction.findUnique({
       where: { id: args.instructionId },
     });
     if (!row) {
       throw new Error(`RefundInstruction ${args.instructionId} not found`);
     }
-    if (row.status === 'CANCELLED') return row;
-    if (row.status !== 'PENDING_APPROVAL') {
-      throw new Error(
-        `RefundInstruction ${args.instructionId} is ${row.status}, not PENDING_APPROVAL — cannot reject`,
+    // Phase 171 (#2) — idempotent on either finance-rejection terminal state.
+    if (
+      row.status === 'CANCELLED' ||
+      row.status === 'REJECTED' ||
+      row.status === 'ROUTED_BACK_TO_DISPUTE'
+    ) {
+      return row;
+    }
+    // Phase 170 (#10) — a NEEDS_CLARIFICATION instruction is rejectable too.
+    if (row.status !== 'PENDING_APPROVAL' && row.status !== 'NEEDS_CLARIFICATION') {
+      // Phase 171 (#13) — symmetric defence: never reject a row whose money may
+      // already be moving/moved (PROCESSING/SUCCESS/SETTLED/MANUAL_REQUIRED).
+      throw new ConflictAppException(
+        `RefundInstruction ${args.instructionId} is ${row.status}, not awaiting approval — cannot reject`,
       );
     }
-    const updated = await this.prisma.refundInstruction.update({
-      where: { id: args.instructionId },
+    // Phase 171 (#1/#2/#3) — a dispute-sourced rejection ROUTES BACK to the
+    // dispute team (the headline rule); a non-dispute (e.g. RETURN) rejection is
+    // a plain finance REJECTED. Both are distinct from an admin pre-approval
+    // CANCELLED.
+    const isDispute = row.sourceType === 'DISPUTE';
+    const terminalStatus = isDispute ? 'ROUTED_BACK_TO_DISPUTE' : 'REJECTED';
+    // Phase 170 (#4)/#171(#8/#9) — CAS so a concurrent approve can't race a
+    // reject (both read PENDING_APPROVAL, both write). Exactly one wins.
+    const res = await this.prisma.refundInstruction.updateMany({
+      where: {
+        id: args.instructionId,
+        status: { in: ['PENDING_APPROVAL', 'NEEDS_CLARIFICATION'] },
+      },
       data: {
-        status: 'CANCELLED',
+        status: terminalStatus,
         rejectedBy: args.adminId,
         rejectedAt: new Date(),
         rejectionReason: reason,
+        customerVisibleReason,
+        approvalDueBy: null,
+        linkedDisputeId: isDispute ? row.sourceId : row.linkedDisputeId,
+        routedBackAt: isDispute ? new Date() : null,
+        routedBackBy: isDispute ? args.adminId : null,
       },
     });
+    if (res.count === 0) {
+      const fresh = await this.prisma.refundInstruction.findUnique({
+        where: { id: args.instructionId },
+      });
+      if (
+        fresh &&
+        (fresh.status === 'CANCELLED' ||
+          fresh.status === 'REJECTED' ||
+          fresh.status === 'ROUTED_BACK_TO_DISPUTE')
+      ) {
+        return fresh;
+      }
+      throw new ConflictAppException(
+        `RefundInstruction ${args.instructionId} was already actioned by another approver`,
+      );
+    }
+    await this.recordHistory(args.instructionId, row.status, terminalStatus, args.adminId, reason);
+    const updated = (await this.prisma.refundInstruction.findUnique({
+      where: { id: args.instructionId },
+    })) as RefundInstruction;
     this.logger.log(
-      `RefundInstruction ${updated.id} rejected by admin ${args.adminId}: ${reason}`,
+      `RefundInstruction ${updated.id} ${terminalStatus} by admin ${args.adminId}: ${reason}`,
     );
-    return updated;
+    return { ...updated, routedBackToDispute: isDispute };
   }
 
   /**
@@ -621,21 +807,129 @@ export class RefundInstructionService {
     if (!row) {
       throw new Error(`RefundInstruction ${args.instructionId} not found`);
     }
-    if (row.status !== 'PENDING_APPROVAL') {
+    // Phase 170 (#10) — allow re-asking while already NEEDS_CLARIFICATION
+    // (finance can append a follow-up question), but not from a decided state.
+    if (row.status !== 'PENDING_APPROVAL' && row.status !== 'NEEDS_CLARIFICATION') {
       throw new Error(
-        `RefundInstruction ${args.instructionId} is ${row.status}, not PENDING_APPROVAL — cannot request clarification`,
+        `RefundInstruction ${args.instructionId} is ${row.status}, not awaiting approval — cannot request clarification`,
+      );
+    }
+    // Phase 170 (#10) — flip OUT of the "to decide" queue into
+    // NEEDS_CLARIFICATION + persist the question/actor, via CAS so a concurrent
+    // approve/reject can't be clobbered. Idempotent re-ask: if already
+    // NEEDS_CLARIFICATION the CAS still matches and updates the note.
+    const res = await this.prisma.refundInstruction.updateMany({
+      where: {
+        id: args.instructionId,
+        status: { in: ['PENDING_APPROVAL', 'NEEDS_CLARIFICATION'] },
+      },
+      data: {
+        status: 'NEEDS_CLARIFICATION',
+        clarificationNote: question,
+        clarificationBy: args.adminId,
+        clarificationAt: new Date(),
+      },
+    });
+    if (res.count === 0) {
+      throw new ConflictAppException(
+        `RefundInstruction ${args.instructionId} is no longer awaiting approval`,
+      );
+    }
+    if (row.status !== 'NEEDS_CLARIFICATION') {
+      await this.recordHistory(
+        args.instructionId,
+        row.status,
+        'NEEDS_CLARIFICATION',
+        args.adminId,
+        question,
       );
     }
     this.logger.log(
       `RefundInstruction ${row.id}: clarification requested by admin ${args.adminId} — ${question}`,
     );
-    // Row left untouched intentionally; the request is purely a
-    // signal to the upstream admin via AdminTask + audit. The
-    // caller wires the AdminTask creation (the controller does it,
-    // since LiabilityLedgerPublicFacade isn't directly imported
-    // here — keeping this service free of cross-module deps that
-    // already exist for the createForDispute path).
-    return row;
+    return (await this.prisma.refundInstruction.findUnique({
+      where: { id: args.instructionId },
+    })) as RefundInstruction;
+  }
+
+  /**
+   * Phase 170 (Refund Queue audit #15) — undo a wrong rejection. Flips a
+   * CANCELLED instruction back to PENDING_APPROVAL (CAS-guarded) so finance
+   * doesn't have to mint a fresh instruction (which the @unique idempotencyKey
+   * would block). Clears the rejection stamps + re-sets the SLA clock.
+   */
+  async revertRejection(args: {
+    instructionId: string;
+    adminId: string;
+    reason: string;
+  }): Promise<RefundInstruction> {
+    const reason = args.reason?.trim();
+    if (!reason || reason.length < 3) {
+      throw new Error('reason (min 3 chars) is required to revert a rejection');
+    }
+    const row = await this.prisma.refundInstruction.findUnique({
+      where: { id: args.instructionId },
+    });
+    if (!row) {
+      throw new Error(`RefundInstruction ${args.instructionId} not found`);
+    }
+    if (row.status === 'PENDING_APPROVAL') return row; // idempotent
+    if (row.status !== 'CANCELLED') {
+      throw new ConflictAppException(
+        `RefundInstruction ${args.instructionId} is ${row.status}, not CANCELLED — cannot revert`,
+      );
+    }
+    const res = await this.prisma.refundInstruction.updateMany({
+      where: { id: args.instructionId, status: 'CANCELLED' },
+      data: {
+        status: 'PENDING_APPROVAL',
+        rejectedBy: null,
+        rejectedAt: null,
+        rejectionReason: null,
+        approvalDueBy: this.approvalDueByFromNow(),
+        // Phase 170 review (L1#2) — CLEAR the dual-approval stamps. A re-opened
+        // instruction must require FRESH approvals; leaving a stale
+        // firstApprovedBy would let a single second approver release a
+        // high-value refund, bypassing the two-person rule.
+        firstApprovedBy: null,
+        firstApprovedAt: null,
+        approvedBy: null,
+        approvedAt: null,
+      },
+    });
+    if (res.count === 0) {
+      throw new ConflictAppException(
+        `RefundInstruction ${args.instructionId} was concurrently modified`,
+      );
+    }
+    await this.recordHistory(
+      args.instructionId,
+      'CANCELLED',
+      'PENDING_APPROVAL',
+      args.adminId,
+      `rejection reverted: ${reason}`,
+    );
+    this.logger.log(
+      `RefundInstruction ${args.instructionId} rejection reverted by admin ${args.adminId}: ${reason}`,
+    );
+    return (await this.prisma.refundInstruction.findUnique({
+      where: { id: args.instructionId },
+    })) as RefundInstruction;
+  }
+
+  /**
+   * Phase 170 (#6) — overdue PENDING_APPROVAL / NEEDS_CLARIFICATION sweep for
+   * the aging report (?overdue=true). Returns the rows past their SLA deadline.
+   */
+  async listOverdueAwaitingApproval(limit = 100) {
+    return this.prisma.refundInstruction.findMany({
+      where: {
+        status: { in: ['PENDING_APPROVAL', 'NEEDS_CLARIFICATION'] },
+        approvalDueBy: { lt: new Date() },
+      },
+      orderBy: { approvalDueBy: 'asc' },
+      take: Math.min(200, Math.max(1, limit)),
+    });
   }
 
   /**
@@ -646,14 +940,13 @@ export class RefundInstructionService {
   private disputeRequiresApproval(
     args: CreateInstructionForDisputeArgs,
   ): boolean {
-    const goodwillRequiresApproval = this.env.getBoolean(
-      'REFUND_GOODWILL_REQUIRES_APPROVAL',
-      true,
-    );
-    if (
-      goodwillRequiresApproval &&
-      args.customerRemedy === 'GOODWILL_CREDIT'
-    ) {
+    // Phase 172 (Goodwill Credit audit #1) — goodwill ALWAYS queues for finance
+    // approval, regardless of amount. This is a policy INVARIANT, not a tunable:
+    // goodwill is a non-recoverable platform expense, so the rule must not be a
+    // single config flip away from auto-approving below threshold. Pre-172 this
+    // was gated on REFUND_GOODWILL_REQUIRES_APPROVAL (default true) — that flag
+    // is now retired from this decision (the constant below is unconditional).
+    if (args.customerRemedy === 'GOODWILL_CREDIT') {
       return true;
     }
     return this.amountRequiresApproval(
@@ -675,9 +968,12 @@ export class RefundInstructionService {
    * refunds always require a finance signoff.
    */
   private amountRequiresApproval(
-    amountInPaise: number,
+    amountInPaiseRaw: number | bigint,
     refundMethod?: string,
   ): boolean {
+    // Phase 172 (#5) — accept bigint; coerce once for the numeric comparison
+    // (paise is exact in a JS number up to 2^53 ≈ ₹90 trillion).
+    const amountInPaise = Number(amountInPaiseRaw);
     if (refundMethod) {
       const perMethodKey =
         `REFUND_AUTO_APPROVE_THRESHOLD_PAISE_${refundMethod}` as any;
@@ -686,14 +982,18 @@ export class RefundInstructionService {
       const perMethod = this.env.getOptional(perMethodKey);
       if (perMethod !== undefined && perMethod !== '') {
         const n = Number(perMethod);
-        if (Number.isFinite(n)) return amountInPaise > n;
+        // Phase 170 (#17) — >= so a refund EXACTLY at the threshold queues for
+        // approval (the defensive choice; an at-threshold refund is precisely
+        // the boundary finance wants eyes on).
+        if (Number.isFinite(n)) return amountInPaise >= n;
       }
     }
     const thresholdPaise = this.env.getNumber(
       'REFUND_AUTO_APPROVE_THRESHOLD_PAISE',
       1_000_000, // ₹10,000
     );
-    return amountInPaise > thresholdPaise;
+    // Phase 170 (#17) — >= (was >). At-threshold now requires approval.
+    return amountInPaise >= thresholdPaise;
   }
 
   /**
@@ -735,6 +1035,12 @@ export class RefundInstructionService {
       steps: this.buildStepsForMethod(instruction.refundMethod, {
         sourceType: src.sourceType,
         label: src.label,
+        // Phase 172 (#6/#8/#9) — thread goodwill context (read off the persisted
+        // instruction row) into the wallet step so it picks goodwill wording + a
+        // GOODWILL creditType + an expiry date.
+        isGoodwill: instruction.isGoodwill === true,
+        customerRemedy: instruction.customerRemedy ?? undefined,
+        customerVisibleMessage: instruction.customerVisibleMessage ?? undefined,
       }),
     });
 
@@ -753,6 +1059,7 @@ export class RefundInstructionService {
       this.logger.log(
         `RefundInstruction ${instruction.id} SUCCESS via ${instruction.refundMethod}`,
       );
+      await this.recordHistory(instruction.id, instruction.status, 'SUCCESS', 'saga');
       return updated;
     }
 
@@ -767,14 +1074,62 @@ export class RefundInstructionService {
     this.logger.error(
       `RefundInstruction ${instruction.id} FAILED: ${sagaResult.failureReason}`,
     );
+    await this.recordHistory(
+      instruction.id,
+      instruction.status,
+      'FAILED',
+      'saga',
+      sagaResult.failureReason ?? undefined,
+    );
     return updated;
+  }
+
+  /**
+   * Phase 167 (Refund Execution audit #1/#7) — gateway-reconciliation flip.
+   * Called by the refund-gateway recon cron (and the refund.settled webhook)
+   * AFTER it polls Razorpay's refund GET for a PROCESSING instruction. CAS-
+   * guarded so it's idempotent against the webhook / a concurrent recon tick:
+   *   - SUCCESS  : gateway says `processed` — PROCESSING → SUCCESS.
+   *   - SETTLED  : bank credited (refund.settled webhook) — SUCCESS → SETTLED.
+   *   - FAILED   : gateway says `failed` — PROCESSING → FAILED.
+   * Returns flipped=false when another path already moved it (no double work).
+   */
+  async markGatewayOutcome(args: {
+    instructionId: string;
+    outcome: 'SUCCESS' | 'FAILED' | 'SETTLED';
+    failureReason?: string | null;
+  }): Promise<{ flipped: boolean }> {
+    const fromStatuses =
+      args.outcome === 'SETTLED' ? ['SUCCESS'] : ['PROCESSING'];
+    const data =
+      args.outcome === 'SUCCESS'
+        ? { status: 'SUCCESS' as const, processedAt: new Date() }
+        : args.outcome === 'SETTLED'
+          ? { status: 'SETTLED' as const, settledAt: new Date() }
+          : {
+              status: 'FAILED' as const,
+              failureReason: args.failureReason ?? 'Gateway reported refund failed',
+              attempts: { increment: 1 },
+            };
+    const res = await this.prisma.refundInstruction.updateMany({
+      where: { id: args.instructionId, status: { in: fromStatuses as any } },
+      data,
+    });
+    return { flipped: res.count > 0 };
   }
 
   // ─── Step builder ────────────────────────────────────────────────
 
   private buildStepsForMethod(
     method: RefundMethod,
-    meta: { sourceType: RefundSourceType; label: string },
+    meta: {
+      sourceType: RefundSourceType;
+      label: string;
+      // Phase 172 (#6/#8/#9) — goodwill context for the wallet step.
+      isGoodwill?: boolean;
+      customerRemedy?: string;
+      customerVisibleMessage?: string;
+    },
   ): SagaStep<RefundExecutionContext>[] {
     switch (method) {
       case 'WALLET':
@@ -802,14 +1157,38 @@ export class RefundInstructionService {
   private walletCreditStep(meta: {
     sourceType: RefundSourceType;
     label: string;
+    // Phase 172 (#6/#8/#9) — goodwill credit context.
+    isGoodwill?: boolean;
+    customerRemedy?: string | null;
+    customerVisibleMessage?: string;
   }): SagaStep<RefundExecutionContext> {
     return {
       name: 'wallet.credit',
       execute: async (ctx) => {
         const noun = meta.sourceType === 'RETURN' ? 'Return' : 'Dispute';
-        const description = meta.label
-          ? `${noun} ${meta.label} — ₹${(ctx.amountInPaise / 100).toFixed(2)} refunded to wallet`
-          : `Refund — ₹${(ctx.amountInPaise / 100).toFixed(2)}`;
+        // Phase 172 (#6) — a goodwill credit reads differently on the customer's
+        // wallet statement than a genuine refund: it's an apology, not money we
+        // owed. Prefer an explicit customer-visible message if finance set one.
+        const rupees = (ctx.amountInPaise / 100).toFixed(2);
+        const description = meta.isGoodwill
+          ? meta.customerVisibleMessage?.trim()
+            ? meta.customerVisibleMessage.trim()
+            : `${noun}${meta.label ? ` ${meta.label}` : ''} — ₹${rupees} goodwill credit (with our apologies)`
+          : meta.label
+            ? `${noun} ${meta.label} — ₹${rupees} refunded to wallet`
+            : `Refund — ₹${rupees}`;
+        // Phase 172 (#9) — goodwill credit lapses after a configurable window
+        // (default 180 days); a genuine refund never expires.
+        const expiresAt = meta.isGoodwill
+          ? new Date(
+              Date.now() +
+                this.env.getNumber('GOODWILL_CREDIT_EXPIRY_DAYS', 180) *
+                  24 *
+                  60 *
+                  60 *
+                  1000,
+            )
+          : undefined;
         const result = await this.wallet.creditFromRefund({
           userId: ctx.customerId,
           amountInPaise: ctx.amountInPaise,
@@ -818,6 +1197,10 @@ export class RefundInstructionService {
           // the instruction id so the wallet row is traceable back.
           refundId: ctx.instructionId,
           description,
+          // Phase 172 (#8) — reconciliation discriminator: goodwill is a
+          // platform expense, a refund is a liability reversal.
+          creditType: meta.isGoodwill ? 'GOODWILL' : 'REFUND_ORIGINAL',
+          expiresAt,
         });
         return {
           result: { walletTransactionId: result.transaction.id },

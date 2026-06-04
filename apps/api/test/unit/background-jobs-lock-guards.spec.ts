@@ -45,7 +45,9 @@ const POLLERS_WITH_REDIS_LOCK = [
   'src/modules/accounts/application/services/settlement-cycle-processor.service.ts',
   'src/modules/franchise/application/services/franchise-commission-processor.service.ts',
   'src/modules/franchise/application/services/franchise-reservation-cleanup.service.ts',
-  'src/modules/orders/application/services/order-timeout.service.ts',
+  // Phase 174 — order-timeout.service.ts was superseded by the SLA
+  // auto-reject processor, now @Cron + leader.run-gated.
+  'src/modules/orders/application/services/order-acceptance-sla.processor.ts',
 ];
 
 // seller-allocation.service.ts uses an equivalent safety pattern —
@@ -65,9 +67,13 @@ describe('background pollers — per-tick concurrency guard', () => {
       const absolutePath = join(__dirname, '..', '..', relativePath);
       const source = readFileSync(absolutePath, 'utf8');
 
-      // Pattern (a) — legacy direct acquireLock/releaseLock pair.
+      // Pattern (a) — direct lock pair: either the legacy un-fenced
+      // acquireLock/releaseLock OR the fenced acquireLockWithToken/
+      // releaseLockWithToken variant (commission-processor uses the latter,
+      // which is a strictly stronger guarantee).
       const usesDirectLockPair =
-        /acquireLock\s*\(/.test(source) && /releaseLock\s*\(/.test(source);
+        /acquireLock(WithToken)?\s*\(/.test(source) &&
+        /releaseLock(WithToken)?\s*\(/.test(source);
 
       // Pattern (b) — fenced LeaderElectedCron wrapper. `leader.run(...)`
       // is the call site; importing `LeaderElectedCron` is the type

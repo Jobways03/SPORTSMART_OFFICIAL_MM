@@ -1,23 +1,42 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { RequirePermission } from '@/lib/permissions';
+import { RequirePermission, usePermissions } from '@/lib/permissions';
 import { apiClient } from '@/lib/api-client';
 
 /* ── Types ──────────────────────────────────────────────────── */
 
 type RiskTier = 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
 
+interface FlagTriple {
+  env: boolean;
+  override: boolean | null;
+  effective: boolean;
+}
+
 interface ReadinessData {
+  // Whether the caller holds authz.readiness.full (full key lists vs counts).
+  full?: boolean;
   flags: { strictMode: boolean; abacEnabled: boolean; auditEnabled: boolean };
+  // env vs runtime-override vs effective, with source + who/when.
+  mode?: {
+    strictMode: FlagTriple;
+    abacEnabled: FlagTriple;
+    auditEnabled: FlagTriple;
+    source: string;
+    updatedAt: string | null;
+    updatedByAdminId: string | null;
+  };
   registry: {
     totalPermissions: number;
     riskTiers: Record<RiskTier, number>;
-    permissionsByTier: Record<RiskTier, string[]>;
-    ungrantedKeys: string[];
+    // Key lists are present only for the full-detail caller.
+    permissionsByTier?: Record<RiskTier, string[]>;
+    ungrantedCount: number;
+    ungrantedKeys?: string[];
   };
-  roles: { role: string; permissionCount: number; permissions: string[] }[];
-  superAdmin: { permissionCount: number; fullyResolved: boolean; permissions: string[] };
+  roles: { role: string; permissionCount: number; permissions?: string[] }[];
+  superAdmin: { permissionCount: number; fullyResolved: boolean; permissions?: string[] };
   warnings: string[];
 }
 
@@ -36,12 +55,28 @@ interface DenialRow {
   resourceType: string | null;
   action: string | null;
   reason: string | null;
+  reviewStatus: ReviewStatus;
+  reviewedByAdminId: string | null;
+  reviewedAt: string | null;
+  reviewNote: string | null;
 }
+
+type ReviewStatus =
+  | 'UNREVIEWED'
+  | 'FALSE_POSITIVE'
+  | 'EXPECTED_DENY'
+  | 'FIXED'
+  | 'IGNORED';
 
 interface DenialsResponse {
   items: DenialRow[];
   total: number;
-  filters: { limit: number; wouldHaveBlocked: boolean; since: string | null };
+  filters: {
+    limit: number;
+    wouldHaveBlocked: boolean;
+    since: string | null;
+    reviewStatus?: string;
+  };
 }
 
 type DrawerKind =
@@ -76,6 +111,13 @@ function ReadinessInner() {
 
   const [drawer, setDrawer] = useState<DrawerKind | null>(null);
 
+  // Mode-toggle (SUPER_ADMIN only) + denial review-FSM state.
+  const { isSuperAdmin } = usePermissions();
+  const [reviewStatusFilter, setReviewStatusFilter] = useState<ReviewStatus | 'all'>('UNREVIEWED');
+  const [modeBusy, setModeBusy] = useState(false);
+  const [reviewBusyId, setReviewBusyId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState('');
+
   /* ── Loaders ────────────────────────────────────────────── */
 
   const fetchReadiness = useCallback(async (silent = false) => {
@@ -93,31 +135,76 @@ function ReadinessInner() {
     }
   }, []);
 
-  const fetchDenials = useCallback(async (alsoStrict: boolean) => {
-    setDenialsLoading(true);
-    setDenialsError('');
-    try {
-      const params = new URLSearchParams();
-      params.set('limit', '30');
-      if (alsoStrict) params.set('wouldHaveBlocked', 'false');
-      const res = await apiClient<DenialsResponse>(
-        `/admin/authz/recent-denials?${params.toString()}`,
-      );
-      if (res.data) setDenials(res.data);
-    } catch (err: any) {
-      setDenialsError(err?.message ?? 'Failed to load recent denials');
-    } finally {
-      setDenialsLoading(false);
-    }
-  }, []);
+  const fetchDenials = useCallback(
+    async (alsoStrict: boolean, review: ReviewStatus | 'all') => {
+      setDenialsLoading(true);
+      setDenialsError('');
+      try {
+        const params = new URLSearchParams();
+        params.set('limit', '30');
+        if (alsoStrict) params.set('wouldHaveBlocked', 'false');
+        params.set('reviewStatus', review);
+        const res = await apiClient<DenialsResponse>(
+          `/admin/authz/recent-denials?${params.toString()}`,
+        );
+        if (res.data) setDenials(res.data);
+      } catch (err: any) {
+        setDenialsError(err?.message ?? 'Failed to load recent denials');
+      } finally {
+        setDenialsLoading(false);
+      }
+    },
+    [],
+  );
+
+  // SUPER_ADMIN: enable strict/abac/audit at runtime (tighten-only — the
+  // server applies the override OR env, so this never weakens enforcement).
+  const changeMode = useCallback(
+    async (patch: { strictMode?: boolean; abacEnabled?: boolean; auditEnabled?: boolean }) => {
+      setModeBusy(true);
+      setActionError('');
+      try {
+        await apiClient('/admin/authz/mode', {
+          method: 'POST',
+          body: JSON.stringify(patch),
+        });
+        await fetchReadiness(true);
+      } catch (err: any) {
+        setActionError(err?.message ?? 'Failed to change authorization mode');
+      } finally {
+        setModeBusy(false);
+      }
+    },
+    [fetchReadiness],
+  );
+
+  // Triage a logged denial (false-positive review FSM).
+  const reviewDenial = useCallback(
+    async (id: string, reviewStatus: ReviewStatus) => {
+      setReviewBusyId(id);
+      setActionError('');
+      try {
+        await apiClient(`/admin/authz/denials/${id}/review`, {
+          method: 'PATCH',
+          body: JSON.stringify({ reviewStatus }),
+        });
+        await fetchDenials(includeStrictDenials, reviewStatusFilter);
+      } catch (err: any) {
+        setActionError(err?.message ?? 'Failed to update review status');
+      } finally {
+        setReviewBusyId(null);
+      }
+    },
+    [fetchDenials, includeStrictDenials, reviewStatusFilter],
+  );
 
   useEffect(() => {
     fetchReadiness();
   }, [fetchReadiness]);
 
   useEffect(() => {
-    fetchDenials(includeStrictDenials);
-  }, [fetchDenials, includeStrictDenials]);
+    fetchDenials(includeStrictDenials, reviewStatusFilter);
+  }, [fetchDenials, includeStrictDenials, reviewStatusFilter]);
 
   /* ── Verdict logic ───────────────────────────────────────── */
 
@@ -150,9 +237,9 @@ function ReadinessInner() {
         `${wouldFailCount} recent request${wouldFailCount === 1 ? '' : 's'} would 403 in strict mode. Review the Denials panel before flipping.`,
       );
     }
-    if (data.registry.ungrantedKeys.length > 0) {
+    if (data.registry.ungrantedCount > 0) {
       cautions.push(
-        `${data.registry.ungrantedKeys.length} permission${data.registry.ungrantedKeys.length === 1 ? '' : 's'} are not granted to any system role.`,
+        `${data.registry.ungrantedCount} permission${data.registry.ungrantedCount === 1 ? '' : 's'} are not granted to any system role.`,
       );
     }
 
@@ -185,8 +272,8 @@ function ReadinessInner() {
     if (drawer.kind === 'tier') {
       return {
         title: `${drawer.tier} permissions`,
-        subtitle: `${data.registry.permissionsByTier[drawer.tier].length} keys`,
-        keys: data.registry.permissionsByTier[drawer.tier],
+        subtitle: `${(data.registry.permissionsByTier?.[drawer.tier] ?? []).length} keys`,
+        keys: data.registry.permissionsByTier?.[drawer.tier] ?? [],
       };
     }
     if (drawer.kind === 'role') {
@@ -195,7 +282,7 @@ function ReadinessInner() {
         ? {
             title: role.role,
             subtitle: `${role.permissionCount} permissions granted`,
-            keys: role.permissions,
+            keys: role.permissions ?? [],
           }
         : null;
     }
@@ -205,14 +292,14 @@ function ReadinessInner() {
         subtitle: `${data.superAdmin.permissionCount} permissions resolved · ${
           data.superAdmin.fullyResolved ? 'fullyResolved' : 'degraded'
         }`,
-        keys: data.superAdmin.permissions,
+        keys: data.superAdmin.permissions ?? [],
       };
     }
     if (drawer.kind === 'ungranted') {
       return {
         title: 'Ungranted permissions',
-        subtitle: `${data.registry.ungrantedKeys.length} keys not granted to any system role`,
-        keys: data.registry.ungrantedKeys,
+        subtitle: `${data.registry.ungrantedCount} keys not granted to any system role`,
+        keys: data.registry.ungrantedKeys ?? [],
       };
     }
     return null;
@@ -254,7 +341,7 @@ function ReadinessInner() {
           type="button"
           onClick={() => {
             fetchReadiness(true);
-            fetchDenials(includeStrictDenials);
+            fetchDenials(includeStrictDenials, reviewStatusFilter);
           }}
           disabled={refreshing}
           style={{ ...styles.btnGhost, ...(refreshing ? styles.disabled : {}) }}
@@ -326,6 +413,57 @@ function ReadinessInner() {
         />
       </Section>
 
+      {/* Authorization mode — env vs runtime override. SUPER_ADMIN can
+          ENABLE flags early (tighten-only); disabling needs an env redeploy. */}
+      {data.mode && (
+        <Section
+          title="Authorization mode"
+          right={
+            data.mode.source === 'env+db' ? (
+              <span style={{ fontSize: 11, fontWeight: 600, color: '#92400e', background: '#fef3c7', padding: '2px 8px', borderRadius: 999 }}>
+                runtime override active
+              </span>
+            ) : null
+          }
+        >
+          {actionError && <div style={styles.errorBox}>{actionError}</div>}
+          <ModeRow
+            label="Strict mode"
+            flag={data.mode.strictMode}
+            canEnable={isSuperAdmin && !data.mode.strictMode.effective}
+            busy={modeBusy}
+            onEnable={() => changeMode({ strictMode: true })}
+            onReset={isSuperAdmin && data.mode.strictMode.override !== null ? () => changeMode({ strictMode: false }) : undefined}
+          />
+          <ModeRow
+            label="ABAC enforce"
+            flag={data.mode.abacEnabled}
+            canEnable={isSuperAdmin && !data.mode.abacEnabled.effective}
+            busy={modeBusy}
+            onEnable={() => changeMode({ abacEnabled: true })}
+            onReset={isSuperAdmin && data.mode.abacEnabled.override !== null ? () => changeMode({ abacEnabled: false }) : undefined}
+          />
+          <ModeRow
+            label="Authz audit"
+            flag={data.mode.auditEnabled}
+            canEnable={isSuperAdmin && !data.mode.auditEnabled.effective}
+            busy={modeBusy}
+            onEnable={() => changeMode({ auditEnabled: true })}
+            onReset={isSuperAdmin && data.mode.auditEnabled.override !== null ? () => changeMode({ auditEnabled: false }) : undefined}
+          />
+          {isSuperAdmin ? (
+            <p style={{ margin: '12px 2px 0', fontSize: 12, color: '#64748b', lineHeight: 1.5 }}>
+              Overrides are <strong>tighten-only</strong>: you can enable a flag at runtime, but
+              disabling a deployment-mandated flag still requires an env change + redeploy.
+            </p>
+          ) : (
+            <p style={{ margin: '12px 2px 0', fontSize: 12, color: '#94a3b8' }}>
+              Only SUPER_ADMIN can change authorization mode.
+            </p>
+          )}
+        </Section>
+      )}
+
       {/* SUPER_ADMIN smoke check */}
       <Section title="SUPER_ADMIN resolution">
         <button
@@ -369,13 +507,13 @@ function ReadinessInner() {
       <Section
         title="Permission registry"
         right={
-          data.registry.ungrantedKeys.length > 0 && (
+          data.registry.ungrantedCount > 0 && (
             <button
               type="button"
               onClick={() => setDrawer({ kind: 'ungranted' })}
               style={styles.linkLikeBtn}
             >
-              {data.registry.ungrantedKeys.length} ungranted →
+              {data.registry.ungrantedCount} ungranted →
             </button>
           )
         }
@@ -448,15 +586,30 @@ function ReadinessInner() {
       <Section
         title="Recent denials"
         right={
-          <label style={styles.toggle}>
-            <input
-              type="checkbox"
-              checked={includeStrictDenials}
-              onChange={(e) => setIncludeStrictDenials(e.target.checked)}
-              style={{ accentColor: '#0f172a' }}
-            />
-            <span>Also include strict-mode 403s</span>
-          </label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+            <label style={styles.toggle}>
+              <input
+                type="checkbox"
+                checked={includeStrictDenials}
+                onChange={(e) => setIncludeStrictDenials(e.target.checked)}
+                style={{ accentColor: '#0f172a' }}
+              />
+              <span>Also include strict-mode 403s</span>
+            </label>
+            <select
+              value={reviewStatusFilter}
+              onChange={(e) => setReviewStatusFilter(e.target.value as ReviewStatus | 'all')}
+              style={{ fontSize: 12, padding: '4px 8px', borderRadius: 6, border: '1px solid #cbd5e1', color: '#334155' }}
+              aria-label="Filter by review status"
+            >
+              <option value="UNREVIEWED">Unreviewed</option>
+              <option value="FALSE_POSITIVE">False positive</option>
+              <option value="EXPECTED_DENY">Expected deny</option>
+              <option value="FIXED">Fixed</option>
+              <option value="IGNORED">Ignored</option>
+              <option value="all">All statuses</option>
+            </select>
+          </div>
         }
       >
         {denialsLoading && !denials ? (
@@ -472,7 +625,7 @@ function ReadinessInner() {
               : 'No request would have been blocked in strict mode during the recent window.'}
           </div>
         ) : (
-          <DenialsTable rows={denials.items} />
+          <DenialsTable rows={denials.items} onReview={reviewDenial} busyId={reviewBusyId} />
         )}
       </Section>
 
@@ -558,6 +711,102 @@ function VerdictBanner({
 
 /* ── Flag row ───────────────────────────────────────────────── */
 
+function ModeRow({
+  label,
+  flag,
+  canEnable,
+  busy,
+  onEnable,
+  onReset,
+}: {
+  label: string;
+  flag: FlagTriple;
+  canEnable: boolean;
+  busy: boolean;
+  onEnable: () => void;
+  onReset?: () => void;
+}) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        padding: '10px 2px',
+        borderBottom: '1px solid #f1f5f9',
+        flexWrap: 'wrap',
+      }}
+    >
+      <span style={{ width: 110, fontSize: 13, fontWeight: 600, color: '#0f172a' }}>{label}</span>
+      <span style={{ fontSize: 12, color: '#64748b' }}>
+        env{' '}
+        <b style={{ color: flag.env ? '#16a34a' : '#94a3b8' }}>{flag.env ? 'ON' : 'OFF'}</b>
+        {flag.override !== null && (
+          <>
+            {' · '}override{' '}
+            <b style={{ color: flag.override ? '#16a34a' : '#dc2626' }}>
+              {flag.override ? 'ON' : 'OFF'}
+            </b>
+          </>
+        )}
+      </span>
+      <span
+        style={{
+          marginLeft: 'auto',
+          fontSize: 12,
+          fontWeight: 700,
+          padding: '2px 10px',
+          borderRadius: 999,
+          color: flag.effective ? '#166534' : '#92400e',
+          background: flag.effective ? '#dcfce7' : '#fef3c7',
+        }}
+      >
+        effective {flag.effective ? 'ON' : 'OFF'}
+      </span>
+      {canEnable && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onEnable}
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            padding: '4px 12px',
+            borderRadius: 6,
+            border: '1px solid #15803d',
+            background: '#16a34a',
+            color: '#fff',
+            cursor: busy ? 'not-allowed' : 'pointer',
+            opacity: busy ? 0.6 : 1,
+          }}
+        >
+          Enable
+        </button>
+      )}
+      {onReset && (
+        <button
+          type="button"
+          disabled={busy}
+          onClick={onReset}
+          style={{
+            fontSize: 12,
+            fontWeight: 600,
+            padding: '4px 10px',
+            borderRadius: 6,
+            border: '1px solid #cbd5e1',
+            background: '#fff',
+            color: '#475569',
+            cursor: busy ? 'not-allowed' : 'pointer',
+            opacity: busy ? 0.6 : 1,
+          }}
+        >
+          Reset to env
+        </button>
+      )}
+    </div>
+  );
+}
+
 function FlagRow({
   name,
   value,
@@ -616,7 +865,15 @@ function FlagRow({
 
 /* ── Denials table ──────────────────────────────────────────── */
 
-function DenialsTable({ rows }: { rows: DenialRow[] }) {
+function DenialsTable({
+  rows,
+  onReview,
+  busyId,
+}: {
+  rows: DenialRow[];
+  onReview: (id: string, status: ReviewStatus) => void;
+  busyId: string | null;
+}) {
   return (
     <div style={{ overflowX: 'auto' }}>
       <table style={styles.table}>
@@ -627,6 +884,7 @@ function DenialsTable({ rows }: { rows: DenialRow[] }) {
             <th style={styles.th}>Route</th>
             <th style={styles.th}>Required</th>
             <th style={styles.th}>Effect</th>
+            <th style={styles.th}>Review</th>
           </tr>
         </thead>
         <tbody>
@@ -686,6 +944,29 @@ function DenialsTable({ rows }: { rows: DenialRow[] }) {
                 ) : (
                   <span style={styles.pillStrict}>403 (strict)</span>
                 )}
+              </td>
+              <td style={styles.td}>
+                <select
+                  value={r.reviewStatus}
+                  disabled={busyId === r.id}
+                  onChange={(e) => onReview(r.id, e.target.value as ReviewStatus)}
+                  style={{
+                    fontSize: 11.5,
+                    padding: '3px 6px',
+                    borderRadius: 6,
+                    border: '1px solid #cbd5e1',
+                    color: r.reviewStatus === 'UNREVIEWED' ? '#92400e' : '#15803d',
+                    background: r.reviewStatus === 'UNREVIEWED' ? '#fffbeb' : '#f0fdf4',
+                    cursor: busyId === r.id ? 'wait' : 'pointer',
+                  }}
+                  aria-label="Set review status"
+                >
+                  <option value="UNREVIEWED">Unreviewed</option>
+                  <option value="FALSE_POSITIVE">False positive</option>
+                  <option value="EXPECTED_DENY">Expected deny</option>
+                  <option value="FIXED">Fixed</option>
+                  <option value="IGNORED">Ignored</option>
+                </select>
               </td>
             </tr>
           ))}

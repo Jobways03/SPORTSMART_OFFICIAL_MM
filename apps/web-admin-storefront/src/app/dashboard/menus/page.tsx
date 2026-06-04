@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
+import { RequirePermission } from '@/lib/permissions';
 
 interface MenuListRow {
   id: string;
@@ -13,6 +14,19 @@ interface MenuListRow {
 }
 
 export default function MenusListPage() {
+  // Server-truth gate so a direct URL can't render the page for an admin
+  // without storefront access (the backend already 403s the API).
+  return (
+    <RequirePermission
+      anyOf={['storefront.read']}
+      fallback={<div style={{ padding: 24 }}>Loading…</div>}
+    >
+      <MenusListInner />
+    </RequirePermission>
+  );
+}
+
+function MenusListInner() {
   const [menus, setMenus] = useState<MenuListRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);

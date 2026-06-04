@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/tsconfig",
   "_about": "Shared Next.js app tsconfig — all apps/web-* extend this. Leaves keep only what TypeScript cannot inherit safely: `paths` (relative to the file that contains them) and `include`/`exclude` (not inherited from extends at all). Bumping the toolchain target / module / strict / jsx mode happens here once, not eight times.",
   "compilerOptions": {
-    "target": "ES2017",
+    "target": "ES2020",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,

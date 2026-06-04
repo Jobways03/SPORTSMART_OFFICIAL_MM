@@ -5,6 +5,7 @@ import { GeminiAiProvider } from './providers/gemini.provider';
 import { AnthropicAiProvider } from './providers/anthropic.provider';
 import { AiOrchestratorService } from './services/ai-orchestrator.service';
 import { AiQuotaService } from './services/ai-quota.service';
+import { AiGenerationLogService } from './services/ai-generation-log.service';
 
 /**
  * Phase 7 (2026-05-16) — AI module wiring.
@@ -31,6 +32,7 @@ import { AiQuotaService } from './services/ai-quota.service';
     AnthropicAiProvider,
     AiOrchestratorService,
     AiQuotaService,
+    AiGenerationLogService,
   ],
 })
 export class AiModule {}

@@ -50,11 +50,22 @@ export class AnthropicAiProvider implements AiProvider {
       const response = await this.client.messages.create(
         {
           model: modelName,
-          max_tokens: 2048,
+          // Phase 249 (#18) — 2048 was tight for the requested 2-3 paragraph
+          // HTML description + highlights + two SEO fields, so the model
+          // truncated mid-JSON → opaque parse_error. 4096 matches the
+          // Gemini-Flash budget and leaves headroom.
+          max_tokens: 4096,
           messages: [{ role: 'user', content: input.prompt }],
         },
         { signal: controller.signal },
       );
+
+      // Phase 249 (#18) — surface a max_tokens truncation as a clear
+      // provider failure (→ orchestrator falls back / caller retries)
+      // instead of a downstream "invalid JSON" the user can't act on.
+      if (response.stop_reason === 'max_tokens') {
+        throw new Error('Anthropic response truncated (max_tokens) — output incomplete');
+      }
 
       // Concatenate any text blocks the model returns. Tool-use blocks
       // / thinking blocks aren't expected for product-content

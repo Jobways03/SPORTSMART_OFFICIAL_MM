@@ -120,20 +120,38 @@ export interface ReturnDetail {
   // Both can be null pre-QC. The UI renders one or the other (or
   // "processing" when neither is present yet but refund is in flight).
   creditNote?: {
-    id: string;
     documentNumber: string;
     documentTotalInPaise: string;
     status: string;
     generatedAt: string | null;
   } | null;
   walletCredit?: {
-    id: string;
     kind: string;
     status: string;
     amountInPaise: string;
     approvedAt: string | null;
     reason: string;
   } | null;
+  // Phase 199 (2026-06-02) — Returns audit #23. Gateway refund attempt
+  // history (customer-safe shape; no gatewayRefundId). Lets the detail
+  // page show "Refund attempt 2 failed — retrying" instead of leaving
+  // the customer guessing during a retry loop.
+  refundTransactions?: Array<{
+    id: string;
+    attemptNumber: number;
+    status: string; // INITIATED | PROCESSED | FAILED
+    createdAt: string;
+  }>;
+  // Phase 199 (2026-06-02) — Returns audit #24. Latest dispute linked to
+  // this return (if any) so the UI can offer an "Open dispute" CTA when
+  // a return is rejected. Customer-safe: id + number + status only.
+  dispute?: {
+    id: string;
+    disputeNumber: string;
+    status: string;
+  } | null;
+  // Customer-safe mirror of the raw gateway failure reason.
+  refundFailureMessageCustomer?: string | null;
 }
 
 export interface CreateReturnPayload {

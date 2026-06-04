@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { DiscoveryModule } from '@nestjs/core';
+import { RouteAuthzInventoryService } from '../../core/authorization/route-authz-inventory.service';
 
 
 // Guards
@@ -35,6 +37,7 @@ import { ForgotAdminPasswordUseCase } from './application/use-cases/forgot-admin
 import { VerifyAdminResetOtpUseCase } from './application/use-cases/verify-admin-reset-otp.use-case';
 import { ResendAdminResetOtpUseCase } from './application/use-cases/resend-admin-reset-otp.use-case';
 import { ResetAdminPasswordUseCase } from './application/use-cases/reset-admin-password.use-case';
+import { AdminSellerFulfillmentHoldUseCase } from './application/use-cases/admin-seller-fulfillment-hold.use-case';
 
 // Email OTP adapter (used by password reset flow)
 import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.adapter';
@@ -56,6 +59,9 @@ import { RoleService } from './application/services/role.service';
 import { SellerStatusTransitionPolicy } from '../seller/application/policies/seller-status-transition.policy';
 
 @Module({
+  // DiscoveryModule exposes DiscoveryService + MetadataScanner for the
+  // route-authz-inventory scanner (walks the live controller graph).
+  imports: [DiscoveryModule],
   controllers: [
     AdminAuthController,
     AdminSellersController,
@@ -67,6 +73,7 @@ import { SellerStatusTransitionPolicy } from '../seller/application/policies/sel
     AdminFranchiseDeliveryMethodsController,
   ],
   providers: [
+    RouteAuthzInventoryService,
     AdminAuthGuard,
     // Phase 23 (2026-05-20) — admin-users controller composes
     // RolesGuard + StepUpGuard on top of AdminAuthGuard + PermissionsGuard.
@@ -98,6 +105,7 @@ import { SellerStatusTransitionPolicy } from '../seller/application/policies/sel
     AdminSendSellerMessageUseCase,
     AdminChangeSellerPasswordUseCase,
     AdminDeleteSellerUseCase,
+    AdminSellerFulfillmentHoldUseCase,
     ForgotAdminPasswordUseCase,
     VerifyAdminResetOtpUseCase,
     ResendAdminResetOtpUseCase,

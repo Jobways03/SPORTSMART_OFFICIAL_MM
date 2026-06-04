@@ -125,6 +125,52 @@ export class ProductTaxAttestationService {
         defaultUqcCode: product.defaultUqcCode,
       });
 
+      // Phase 161 (HSN Master audit B1/B4) — the HSN master is AUTHORITATIVE.
+      // A TAXABLE product can only be attested when its HSN resolves to an
+      // active HsnMaster row whose effective window includes now. Pre-Phase-161
+      // attestation only regex-checked the code, so a regex-valid but
+      // non-existent/inactive code (e.g. '99999999') could be blessed —
+      // making the "master" a passive autocomplete list. Enforcing it here,
+      // at the gate that already governs STRICT-mode invoiceability, closes
+      // the loop without a hard FK to the (versioned, multi-row) master table.
+      // Queried inside this tx (no cross-module DI) for read-consistency.
+      const taxability = product.supplyTaxability ?? 'TAXABLE';
+      if (taxability === 'TAXABLE') {
+        const now = new Date();
+        const activeHsn = await tx.hsnMaster.findFirst({
+          where: {
+            hsnCode: product.hsnCode!,
+            isActive: true,
+            effectiveFrom: { lte: now },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+          },
+          select: { id: true },
+        });
+        if (!activeHsn) {
+          throw new BadRequestAppException(
+            `Cannot attest — HSN ${product.hsnCode} is not an active code in the HSN master. Add it to the master first.`,
+          );
+        }
+      }
+
+      // Phase 161 (UQC Master audit B1/B4) — when the product declares a UQC
+      // it must be an active code in the UQC master (CBIC Rule 46(g)). A null
+      // UQC is permitted (the engine falls back per existing policy); a SET
+      // value must be canonical so the downstream OrderItem/TaxDocumentLine
+      // snapshots hydrate from a controlled source rather than a free-text
+      // string. Direct in-tx lookup (no cross-module DI), same as the HSN gate.
+      if (product.defaultUqcCode) {
+        const activeUqc = await tx.uqcMaster.findFirst({
+          where: { code: product.defaultUqcCode, isActive: true },
+          select: { id: true },
+        });
+        if (!activeUqc) {
+          throw new BadRequestAppException(
+            `Cannot attest — UQC ${product.defaultUqcCode} is not an active code in the UQC master.`,
+          );
+        }
+      }
+
       // Idempotent — already attested at this version. Still write
       // an audit row so we can prove the admin re-clicked.
       if (product.taxConfigVerified && product.taxConfigVerifiedAt) {

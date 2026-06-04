@@ -3,7 +3,6 @@ import { Cron, CronExpression } from '@nestjs/schedule';
 import { PrismaService } from '../database/prisma.service';
 import { EnvService } from '../env/env.service';
 import { EventBusService } from '../events/event-bus.service';
-import { LowStockAlertService } from '../../modules/inventory/application/services/low-stock-alert.service';
 import { ReconciliationService } from '../../modules/reconciliation/application/services/reconciliation.service';
 import { computeSlaTarget } from '../../modules/support/application/services/support.service';
 import { LeaderElectedCron } from './leader-elected-cron';
@@ -25,40 +24,24 @@ export class CronJobsService {
 
   constructor(
     private readonly prisma: PrismaService,
-    private readonly lowStock: LowStockAlertService,
     private readonly recon: ReconciliationService,
     private readonly leader: LeaderElectedCron,
     // Phase 5 (PR 5.4) — cron-run observability. One service hosting
-    // four crons → four distinct job names so cron_runs.jobName
-    // discriminates per-tick metrics: hourly-low-stock-sweep,
-    // ticket-sla-breach, daily-reconciliation, cleanup-stale-pending-files.
+    // these crons → distinct job names so cron_runs.jobName
+    // discriminates per-tick metrics: ticket-sla-breach,
+    // daily-reconciliation, cleanup-stale-pending-files.
+    //
+    // Cluster C (#218-#1) — the duplicate `hourlyLowStockSweep` was
+    // removed from here. The dedicated, canonical low-stock sweep lives
+    // in inventory/.../jobs/low-stock-sweep.cron.ts (every 15 min,
+    // job name `low-stock-sweep`). Running both meant two replicas'
+    // worth of leader-elected sweeps on overlapping schedules.
     private readonly instr: CronInstrumentationService,
     // Phase 7 (2026-05-16) — procurement SLA breach cron needs env
     // (cron flag) + event bus (breach notification).
     private readonly env: EnvService,
     private readonly eventBus: EventBusService,
   ) {}
-
-  /** Hourly — refresh low-stock alerts on seller mappings. */
-  @Cron(CronExpression.EVERY_HOUR)
-  async hourlyLowStockSweep() {
-    // Lock TTL = 2× tick interval (2 hours) so a slow body doesn't
-    // get its lock revoked mid-run on a busy DB.
-    await this.leader.run('hourly-low-stock-sweep', 2 * 60 * 60, async () => {
-      try {
-        await this.instr.wrap('hourly-low-stock-sweep', async () => {
-          const result = await this.lowStock.sweep();
-          this.logger.log(`[cron] low-stock: ${JSON.stringify(result)}`);
-          // `result` is forwarded verbatim — captures whatever
-          // sweep() returns (typed by LowStockAlertService) as the
-          // structured per-tick metric in cron_runs.result.
-          return result as Record<string, unknown>;
-        });
-      } catch (err) {
-        this.logger.error(`[cron] low-stock failed: ${(err as Error).message}`);
-      }
-    });
-  }
 
   /**
    * Hourly — escalate tickets whose SLA target has passed and they're

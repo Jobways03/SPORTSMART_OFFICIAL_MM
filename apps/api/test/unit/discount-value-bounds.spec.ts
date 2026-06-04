@@ -20,6 +20,11 @@ describe('DiscountsService — numeric value bounds', () => {
     const discountRepo: any = {
       findByCode: jest.fn().mockResolvedValue(null),
       findById: jest.fn(),
+      // Phase 243 (#5) — the row + its scope links are now written
+      // atomically through *WithRelations, replacing the plain create/update
+      // + separate link calls.
+      createWithRelations: jest.fn().mockResolvedValue({ id: 'd1' }),
+      updateWithRelations: jest.fn().mockResolvedValue({ id: 'd1' }),
       create: jest.fn().mockResolvedValue({ id: 'd1' }),
       update: jest.fn().mockResolvedValue({ id: 'd1' }),
       delete: jest.fn(),
@@ -33,7 +38,12 @@ describe('DiscountsService — numeric value bounds', () => {
     // (P1.1 audit + outbox emission), DiscountEligibilityService
     // (P1.3 eligibility rules). Value-bounds tests only exercise the
     // discountRepo path; pass-through stubs are sufficient.
-    const affiliatePublicFacade: any = {};
+    // Phase 244 (#10) — create() now cross-checks the affiliate-coupon
+    // namespace before accepting a code; stub it as "no collision".
+    const affiliatePublicFacade: any = {
+      couponCodeExists: jest.fn().mockResolvedValue(false),
+      affiliateExists: jest.fn().mockResolvedValue(true),
+    };
     const events: any = {
       emitDiscountCrud: jest.fn(),
       onDiscountCreated: jest.fn(),
@@ -88,7 +98,7 @@ describe('DiscountsService — numeric value bounds', () => {
       valueType: 'FIXED',
       value: 500,
     });
-    expect(discountRepo.create).toHaveBeenCalled();
+    expect(discountRepo.createWithRelations).toHaveBeenCalled();
   });
 
   it('rejects endsAt <= startsAt', async () => {
@@ -122,6 +132,6 @@ describe('DiscountsService — numeric value bounds', () => {
       value: 10,
     });
     await svc.update('d1', { valueType: 'FIXED', value: 5000 });
-    expect(discountRepo.update).toHaveBeenCalled();
+    expect(discountRepo.updateWithRelations).toHaveBeenCalled();
   });
 });

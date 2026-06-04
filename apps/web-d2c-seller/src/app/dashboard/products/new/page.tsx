@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { sellerProductService } from '@/services/product.service';
 import { apiClient, ApiError } from '@/lib/api-client';
 import '../product-form.css';
-import { RichTextEditor } from '@sportsmart/ui';
+import { RichTextEditor, useModal } from '@sportsmart/ui';
 // Phase 39 (2026-05-21) — category metafield section.
 import {
   CategoryMetafieldFormSection,
@@ -62,6 +62,7 @@ function slugify(text: string): string {
 
 export default function CreateProductPage() {
   const router = useRouter();
+  const { confirmDialog } = useModal();
   // Phase 32 (2026-05-21) — the sessionStorage-based seller status
   // gate that previously lived here was removed. It was a defence-in-
   // depth check that fell through silently when sessionStorage was
@@ -122,11 +123,29 @@ export default function CreateProductPage() {
 
   // AI generation
   const [aiGenerating, setAiGenerating] = useState(false);
+  // Phase 249 (#4) — the generationLogId returned by the AI generate
+  // endpoint (meta.generationLogId), captured only when the seller
+  // actually accepts the generated draft. Echoed back on product save
+  // so the backend stamps AI provenance + flips the log to ACCEPTED.
+  // Cleared after a successful save (consumed) or null when untracked.
+  const [aiGenerationLogId, setAiGenerationLogId] = useState<string | null>(null);
 
   const generateWithAI = useCallback(async () => {
     if (!form.title.trim()) {
       setToast({ type: 'error', message: 'Enter a product title first to generate content with AI.' });
       return;
+    }
+    // Data-loss guard: if the seller already wrote content into any of
+    // the fields AI would overwrite, confirm before clobbering it. Uses
+    // confirmDialog from useModal — the same modal the rest of the
+    // dashboard (and the edit page) uses.
+    const hasExistingContent =
+      form.description.trim() !== '' ||
+      form.seoHandle.trim() !== '' ||
+      form.seoMetaTitle.trim() !== '' ||
+      form.seoMetaDescription.trim() !== '';
+    if (hasExistingContent) {
+      if (!(await confirmDialog('You already have content in some fields. Overwrite it with the AI-generated version?'))) return;
     }
     setAiGenerating(true);
     try {
@@ -147,8 +166,12 @@ export default function CreateProductPage() {
           seoMetaTitle: json.data.metaTitle || prev.seoMetaTitle,
           seoMetaDescription: json.data.metaDescription || prev.seoMetaDescription,
         }));
+        // meta is a sibling of data on the raw apiClient response envelope.
+        // Captured only here — after the confirm guard passed and we applied
+        // the result — so the id is threaded only when the seller accepted.
+        setAiGenerationLogId((json as any).meta?.generationLogId ?? null);
         setSeoHandleEdited(true);
-        setToast({ type: 'success', message: 'AI content generated! Review and edit as needed.' });
+        setToast({ type: 'success', message: '✨ AI-generated — review for accuracy before saving.' });
       } else {
         setToast({ type: 'error', message: json.message || 'AI generation failed.' });
       }
@@ -157,7 +180,7 @@ export default function CreateProductPage() {
     } finally {
       setAiGenerating(false);
     }
-  }, [form.title, form.categoryName, form.categoryId, form.brandName, form.brandId, form.shortDescription, categories, brands]);
+  }, [form.title, form.categoryName, form.categoryId, form.brandName, form.brandId, form.shortDescription, form.description, form.seoHandle, form.seoMetaTitle, form.seoMetaDescription, categories, brands, confirmDialog]);
 
   // UI state
   const [saving, setSaving] = useState(false);
@@ -332,7 +355,13 @@ export default function CreateProductPage() {
     try {
       const token = sessionStorage.getItem('accessToken') || '';
       const payload = buildPayload();
+      // Phase 249 (#4) — thread the AI generation log id onto the create
+      // so the backend stamps provenance + marks the generation ACCEPTED.
+      // Allowlisted on SellerCreateProductDto; backend CAS-guards double-accept.
+      if (aiGenerationLogId) payload.aiGenerationLogId = aiGenerationLogId;
       const res = await sellerProductService.createProduct(token, payload);
+      // Consumed — clear so a later save (or resubmit) doesn't re-send it.
+      setAiGenerationLogId(null);
 
       if (submitForReview && res.data?.id) {
         try {

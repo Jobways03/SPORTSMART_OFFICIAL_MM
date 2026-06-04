@@ -55,8 +55,11 @@ import { Gstr8ReportService } from './application/services/gstr8-report.service'
 import { Gstr1ReportService } from './application/services/gstr1-report.service';
 import { Gstr3bReportService } from './application/services/gstr3b-report.service';
 import { SettlementTcsHookService } from './application/services/settlement-tcs-hook.service';
+import { CommissionInvoiceService } from './application/services/commission-invoice.service';
 import { Tds194OService } from './application/services/tds-194o.service';
 import { SettlementTds194OHookService } from './application/services/settlement-tds-194o-hook.service';
+import { Tds194OExemptionService } from './application/services/tds-194o-exemption.service';
+import { Tds194ORevalidationCron } from './application/jobs/tds-194o-revalidation.cron';
 import { Form26QReportService } from './application/services/form-26q-report.service';
 import { MarketplaceCommissionGstrService } from './application/services/marketplace-commission-gstr.service';
 import { CheckoutTaxPreviewService } from './application/services/checkout-tax-preview.service';
@@ -74,6 +77,7 @@ import { CustomerTaxProfileService } from './application/services/customer-tax-p
 import { CustomerTaxDocumentsController } from './presentation/controllers/customer-tax-documents.controller';
 import { CustomerTaxProfilesController } from './presentation/controllers/customer-tax-profiles.controller';
 import { SellerTaxDocumentsController } from './presentation/controllers/seller-tax-documents.controller';
+import { SellerTcsController } from './presentation/controllers/seller-tcs.controller';
 import { FranchiseTaxDocumentsController } from './presentation/controllers/franchise-tax-documents.controller';
 import { AdminTaxReportsController } from './presentation/controllers/admin-tax-reports.controller';
 import { AdminTaxOperationsController } from './presentation/controllers/admin-tax-operations.controller';
@@ -90,6 +94,8 @@ import { PlatformGstProfileService } from './application/services/platform-gst-p
 import { TaxCreditNoteTimeBarCron } from './application/jobs/tax-credit-note-timebar.cron';
 import { TaxDocumentPdfRetryCron } from './application/jobs/tax-document-pdf-retry.cron';
 import { EInvoiceRetryCron } from './application/jobs/einvoice-retry.cron';
+import { TaxReadinessSnapshotCron } from './application/jobs/tax-readiness-snapshot.cron';
+import { GstnReVerificationCron } from './application/jobs/gstn-reverification.cron';
 import {
   EINVOICE_PROVIDER,
   type EInvoiceProvider,
@@ -102,6 +108,8 @@ import {
   type TaxPdfStorageProvider,
 } from './infrastructure/pdf/tax-pdf-storage.provider';
 import { StubTaxPdfStorageProvider } from './infrastructure/pdf/stub-tax-pdf-storage.provider';
+import { R2TaxPdfStorageProvider } from './infrastructure/pdf/r2-tax-pdf-storage.provider';
+import { R2Adapter } from '../../integrations/r2/adapters/r2.adapter';
 import {
   EWAY_BILL_PROVIDER,
   type EWayBillProvider,
@@ -189,6 +197,18 @@ const gstnProvider = {
     const choice = env.getString('GSTN_PROVIDER', 'stub');
     switch (choice) {
       case 'stub':
+        // Phase 161 (Seller GSTIN Verification audit #15) — the stub derives
+        // "verified" purely from the local Mod-36 checksum; in production that
+        // mints a FALSE compliance signal (a row looks GSTN-verified without
+        // ever touching the portal). Refuse at boot, same as the e-invoice /
+        // e-way-bill provider factories.
+        if (env.getString('NODE_ENV', 'development') === 'production') {
+          throw new Error(
+            "GSTN_PROVIDER='stub' is unsafe in production — it marks GSTINs " +
+              'verified from a local checksum without consulting the GST portal. ' +
+              'Set GSTN_PROVIDER=sandbox with credentials before going live.',
+          );
+        }
         return new StubGstnProvider();
       case 'sandbox':
         throw new Error(
@@ -202,26 +222,23 @@ const gstnProvider = {
   inject: [EnvService],
 };
 
-// Phase 19 — Tax-document PDF storage provider selector. Same
-// crash-loudly pattern as the EWB provider: 's3' is reserved until
-// the S3 adapter supports PUT, then this factory will switch on it.
+// Phase 19 / R2 migration — Tax-document PDF storage provider selector.
+// 'r2' (Cloudflare R2, S3-compatible, PUT-capable) replaces the former
+// reserved-and-throwing 's3' branch. 'stub' stays the dev/test default.
 const taxPdfStorageProvider = {
   provide: TAX_PDF_STORAGE_PROVIDER,
-  useFactory: (env: EnvService): TaxPdfStorageProvider => {
+  useFactory: (env: EnvService, r2: R2Adapter): TaxPdfStorageProvider => {
     const choice = env.getString('TAX_PDF_STORAGE_PROVIDER', 'stub');
     switch (choice) {
       case 'stub':
         return new StubTaxPdfStorageProvider();
-      case 's3':
-        throw new Error(
-          "TAX_PDF_STORAGE_PROVIDER='s3' selected but S3 adapter does not " +
-            'yet support PUT. Set TAX_PDF_STORAGE_PROVIDER=stub or wire S3.',
-        );
+      case 'r2':
+        return new R2TaxPdfStorageProvider(r2);
       default:
         throw new Error(`Unknown TAX_PDF_STORAGE_PROVIDER='${choice}'`);
     }
   },
-  inject: [EnvService],
+  inject: [EnvService, R2Adapter],
 };
 
 @Module({
@@ -242,6 +259,7 @@ const taxPdfStorageProvider = {
     CustomerTaxDocumentsController,
     CustomerTaxProfilesController,
     SellerTaxDocumentsController,
+    SellerTcsController,
     FranchiseTaxDocumentsController,
     AdminTaxReportsController,
     AdminTaxOperationsController,
@@ -285,6 +303,7 @@ const taxPdfStorageProvider = {
     SettlementTds194OHookService,
     Form26QReportService,
     MarketplaceCommissionGstrService,
+    CommissionInvoiceService,
     HsnMasterService,
     UqcMasterService,
     PlatformGstProfileService,
@@ -306,6 +325,14 @@ const taxPdfStorageProvider = {
     TaxCreditNoteTimeBarCron,
     TaxDocumentPdfRetryCron,
     EInvoiceRetryCron,
+    // Phase 161 (TDS 194-O exempt audit) — exemption lifecycle + revalidation cron.
+    Tds194OExemptionService,
+    Tds194ORevalidationCron,
+    // Phase 163 (Tax Audit Readiness audit #16) — 6-hourly readiness trend snapshot.
+    TaxReadinessSnapshotCron,
+    // Phase 200 (Customer Tax Profile audit #14) — weekly GSTN re-verification
+    // (leader-elected, default-OFF until the live provider is wired).
+    GstnReVerificationCron,
   ],
   exports: [
     PlaceOfSupplyService,
@@ -328,6 +355,7 @@ const taxPdfStorageProvider = {
     SettlementTds194OHookService,
     Form26QReportService,
     MarketplaceCommissionGstrService,
+    CommissionInvoiceService,
     HsnMasterService,
     UqcMasterService,
     PlatformGstProfileService,

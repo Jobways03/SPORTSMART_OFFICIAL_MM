@@ -36,6 +36,20 @@ enum GstRegistrationType {
   UNREGISTERED
 }
 
+// Phase 200 (Customer Tax Profile audit #8) — GSTN portal taxpayer status,
+// first-class enum (was a free String). Mirrors GstnTaxpayerStatus in
+// infrastructure/gstn/gstn-provider.ts. ACTIVE rows may back a B2B invoice;
+// SUSPENDED / CANCELLED / INACTIVE must not (the checkout usability gate +
+// STRICT-mode invoice gate read it). UNKNOWN = portal not yet consulted /
+// provider error. Persisted on both SellerGstin and CustomerTaxProfile.
+enum GstnPortalStatus {
+  ACTIVE
+  SUSPENDED
+  CANCELLED
+  INACTIVE
+  UNKNOWN
+}
+
 // Phase 5 will use these (LineType) and Phase 8 will use these
 // (DocumentType). Declaring early so Phase 1 schema can reference
 // the enum names without forward-declaration churn.
@@ -121,10 +135,46 @@ model UqcMaster {
   code        String   @unique @map("code")
   description String   @map("description")
   isActive    Boolean  @default(true) @map("is_active")
+  // Phase 161 (UQC Master audit B2/#9/#11) — mirrors the HsnMaster hardening.
+  // createdBy/updatedBy: actor attribution (was never captured — the
+  // controller didn't even read req.adminId). version: optimistic-concurrency
+  // token. deactivationReason: why a code was retired.
+  createdBy          String? @map("created_by")
+  updatedBy          String? @map("updated_by")
+  version            Int     @default(0)
+  deactivationReason String? @map("deactivation_reason")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
+  // Phase 161 (audit #7) — append-only field-change history.
+  history UqcMasterHistory[]
+
   @@map("uqc_master")
+}
+
+// Phase 161 (UQC Master audit #7) — append-only field-change history.
+// description edits overwrote in place (no effectiveFrom/To versioning on
+// UQC), so "what did NOS mean in 2024" was unanswerable. One row per
+// mutation with before/after snapshot, actor, and reason. The cross-cutting
+// AuditPublicFacade row (module 'tax-master') is the compliance mirror.
+model UqcMasterHistory {
+  id        String   @id @default(uuid())
+  uqcId     String   @map("uqc_id")
+  // Denormalised so "history for code X" survives a cascade-removed row.
+  code      String   @map("code")
+  // CREATE / UPDATE / DEACTIVATE / REACTIVATE
+  action    String
+  oldValues Json?    @map("old_values")
+  newValues Json?    @map("new_values")
+  changedBy String?  @map("changed_by")
+  reason    String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+
+  uqc UqcMaster @relation(fields: [uqcId], references: [id], onDelete: Cascade)
+
+  @@index([uqcId, createdAt(sort: Desc)])
+  @@index([code, createdAt(sort: Desc)])
+  @@map("uqc_master_history")
 }
 
 // HSN master — engineering-seeded stub for sports goods; CA replaces
@@ -146,8 +196,23 @@ model HsnMaster {
   isActive          Boolean          @default(true) @map("is_active")
   effectiveFrom     DateTime         @map("effective_from")
   effectiveTo       DateTime?        @map("effective_to")
+  // Phase 161 (HSN Master audit B2) — actor attribution. Pre-Phase-161 the
+  // service received an `_actor` arg and discarded it; "which admin set the
+  // rate for 851713" was unanswerable. Persisted on create + every update.
+  createdBy          String?         @map("created_by")
+  updatedBy          String?         @map("updated_by")
+  // Phase 161 (audit #12) — optimistic-concurrency token. Bumped on every
+  // mutating write; update refuses (409) when the caller's expectedVersion
+  // has drifted, closing the silent last-write-wins race.
+  version            Int             @default(0)
+  // Phase 161 (audit #11) — reason captured when a code is deactivated, so
+  // a mass/accidental deactivation has an audit trail to roll back from.
+  deactivationReason String?         @map("deactivation_reason")
   createdAt         DateTime         @default(now()) @map("created_at")
   updatedAt         DateTime         @updatedAt @map("updated_at")
+
+  // Phase 161 (audit #8) — append-only field-change history.
+  history HsnMasterHistory[]
 
   // A HSN code may have multiple effective-period rows (rate changes).
   // No two rows for the same code can have the same effectiveFrom.
@@ -155,6 +220,36 @@ model HsnMaster {
   @@index([hsnCode])
   @@index([isActive, effectiveFrom])
   @@map("hsn_master")
+}
+
+// Phase 161 (HSN Master audit #8) — append-only field-change history.
+//
+// The effectiveFrom/effectiveTo versioning captures RATE changes (each is a
+// new row), but in-place edits to description / defaultUqcCode / categoryHint
+// / isActive overwrote silently — "what was 851713's description in March
+// 2026" was unanswerable. This table records a row per mutation with the
+// before/after snapshot, the acting admin, and the reason. The cross-cutting
+// AuditPublicFacade row (module 'tax-master') is the compliance mirror; this
+// is the module-local, queryable-by-code trail.
+model HsnMasterHistory {
+  id          String   @id @default(uuid())
+  hsnMasterId String   @map("hsn_master_id")
+  // Denormalised so "history for code X" survives even if the row is later
+  // cascade-removed, and so the index can serve code-keyed lookups directly.
+  hsnCode     String   @map("hsn_code")
+  // CREATE / UPDATE / DEACTIVATE / REACTIVATE / CLOSE_WINDOW
+  action      String
+  oldValues   Json?    @map("old_values")
+  newValues   Json?    @map("new_values")
+  changedBy   String?  @map("changed_by")
+  reason      String?  @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  hsnMaster HsnMaster @relation(fields: [hsnMasterId], references: [id], onDelete: Cascade)
+
+  @@index([hsnMasterId, createdAt(sort: Desc)])
+  @@index([hsnCode, createdAt(sort: Desc)])
+  @@map("hsn_master_history")
 }
 
 // ─── Supplier / customer GST profiles ────────────────────────────
@@ -177,9 +272,34 @@ model SellerGstin {
   isPrimary                Boolean             @default(false) @map("is_primary")
   isActive                 Boolean             @default(true) @map("is_active")
   registrationType         GstRegistrationType @default(REGULAR) @map("registration_type")
+  // Phase 161 (Seller GSTIN Verification audit) — verification result is now
+  // first-class + queryable, not buried in the verificationNotes text blob.
+  //   B3  isVerified — true ONLY when the provider found the GSTIN AND it is
+  //       ACTIVE (mirrors CustomerTaxProfile.isVerified, which SellerGstin lacked).
+  //   B2  verifiedAt = timestamp of the last SUCCESSFUL verification only;
+  //       lastCheckedAt = every attempt (so a failed re-check doesn't make the
+  //       row look "verified" by a verifiedAt-IS-NOT-NULL filter).
+  //   B1  legalNameMismatch + gstLegalName — the portal-returned name + the
+  //       mismatch flag, queryable for the KYC-review dashboard.
+  //   B5  gstnPortalStatus / gstnRawResponseJson / lastVerifiedProvider — the
+  //       full provider envelope for the compliance audit trail.
+  isVerified               Boolean             @default(false) @map("is_verified")
   verifiedAt               DateTime?           @map("verified_at")
   verifiedBy               String?             @map("verified_by")
-  verificationNotes        String?             @map("verification_notes")
+  verificationNotes        String?             @db.Text @map("verification_notes")
+  legalNameMismatch        Boolean             @default(false) @map("legal_name_mismatch")
+  gstLegalName             String?             @map("gst_legal_name")
+  // Phase 200 (Customer Tax Profile audit #8) — String → GstnPortalStatus enum.
+  gstnPortalStatus         GstnPortalStatus?   @map("gstn_portal_status")
+  gstnRawResponseJson      Json?               @map("gstn_raw_response_json")
+  // Phase 200 (audit #20) — verificationNotes stays @db.Text: the service
+  // (gstn-verification.service.appendNotes) already bounds it to the most
+  // recent NOTES_MAX_LINES=50 lines, so an unbounded column never grows
+  // without limit and a hard VarChar(2000) would risk a write-time truncation
+  // failure on a long line. The bound lives in code, documented here.
+  verificationFailureReason String?            @map("verification_failure_reason")
+  lastVerifiedProvider     String?             @map("last_verified_provider")
+  lastCheckedAt            DateTime?           @map("last_checked_at")
   // Phase 22 — drives the e-invoice applicability check. Aggregate
   // annual turnover (paise). Update on annual-return upload. Crossing
   // the env threshold (TAX_EINVOICE_TURNOVER_THRESHOLD_PAISE, default
@@ -201,6 +321,9 @@ model SellerGstin {
   @@index([sellerId, isActive])
   @@index([stateCode])
   @@index([registrationType])
+  // Phase 161 (audit #16/B1) — KYC dashboard filters: verified / mismatched.
+  @@index([isVerified])
+  @@index([legalNameMismatch])
   @@map("seller_gstins")
 }
 
@@ -220,16 +343,104 @@ model CustomerTaxProfile {
   isVerified         Boolean   @default(false) @map("is_verified")
   verifiedAt         DateTime? @map("verified_at")
   verifiedBy         String?   @map("verified_by")
-  verificationNotes  String?   @map("verification_notes")
+  verificationNotes  String?   @db.Text @map("verification_notes")
+  // Phase 161 (Seller GSTIN Verification audit #18) — same first-class
+  // verification columns as SellerGstin (the customer flow shares the service).
+  legalNameMismatch  Boolean   @default(false) @map("legal_name_mismatch")
+  gstLegalName       String?   @map("gst_legal_name")
+  // Phase 200 (audit #8) — String → GstnPortalStatus enum. Written by the
+  // shared GstnVerificationService; read by the checkout usability gate (#6).
+  gstnPortalStatus   GstnPortalStatus? @map("gstn_portal_status")
+  gstnRawResponseJson Json?    @map("gstn_raw_response_json")
+  // Phase 200 (audit #20) — see SellerGstin.verificationNotes: stays @db.Text,
+  // bounded in code (appendNotes → NOTES_MAX_LINES) rather than by a VarChar
+  // that could truncation-fail.
+  verificationFailureReason String? @map("verification_failure_reason")
+  lastVerifiedProvider String?  @map("last_verified_provider")
+  lastCheckedAt      DateTime? @map("last_checked_at")
+  // Phase 161 (Customer Tax Profile audit #18) — set on each B2B order that
+  // uses this profile; powers "suggest this as your default" prompts.
+  lastSelectedAt     DateTime? @map("last_selected_at")
   createdAt          DateTime  @default(now()) @map("created_at")
   updatedAt          DateTime  @updatedAt @map("updated_at")
 
   customer User @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  // Phase 161 (audit B2) — invoices issued to this profile (snapshot FK).
+  // Phase 200 (audit #16) — RETENTION GUARANTEE: a TaxDocument snapshots the
+  // buyer identity (buyerGstin / buyerLegalName / billingAddressJson) AT ISSUE
+  // TIME and is NEVER mutated when this profile is later edited or hard-deleted.
+  // The TaxDocument.customerTaxProfile FK is ON DELETE SET NULL (declared in
+  // tax-documents.prisma), so a hard delete nulls only the FK — the snapshotted
+  // buyer* columns remain. An issued invoice therefore always carries the
+  // GSTIN/name/address that were in effect when it was minted. Order-placement
+  // additionally captures MasterOrder.customerTaxProfileSnapshot (audit #11,
+  // migration 20260602380000) so invoice GENERATION still succeeds even if the
+  // profile is deleted before the order ships.
+  taxDocuments TaxDocument[]
 
   @@unique([customerId, gstin], map: "customer_tax_profiles_user_gstin_uniq")
+  // Phase 200 (audit #7) — at most ONE default per customer is also enforced at
+  // the DB level by a raw-SQL PARTIAL unique index
+  // `customer_tax_profiles_one_default_per_customer_uniq`
+  // (UNIQUE (customer_id) WHERE is_default = true) — Prisma can't express a
+  // WHERE-partial unique, so it lives in migration 20260602360000. The service
+  // already serialises the unset-then-set in one tx; this index is the backstop
+  // against a concurrent two-default race.
   @@index([customerId, isDefault])
   @@index([gstin])
+  @@index([legalNameMismatch])
   @@map("customer_tax_profiles")
+}
+
+// Phase 161 (Customer Tax Profile audit #8) — append-only field-change
+// history. legalName / billingAddress / isDefault edits overwrite in place;
+// invoices are already protected (TaxDocument snapshots buyer identity), so
+// this answers "what did this customer's profile look like before the edit".
+// changedBy is the customerId (the customer is the actor) or an admin id.
+// NO FK to the profile — profiles are HARD-deleted, and this history (incl.
+// the DELETE event) must survive that (same design as GstinVerificationEvent).
+model CustomerTaxProfileHistory {
+  id         String   @id @default(uuid())
+  profileId  String   @map("profile_id")
+  customerId String   @map("customer_id")
+  // CREATE / UPDATE / SET_DEFAULT / DELETE
+  action     String
+  oldValues  Json?    @map("old_values")
+  newValues  Json?    @map("new_values")
+  changedBy  String?  @map("changed_by")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  @@index([profileId, createdAt(sort: Desc)])
+  @@index([customerId, createdAt(sort: Desc)])
+  @@map("customer_tax_profile_history")
+}
+
+// Phase 161 (Seller GSTIN Verification audit B4/#8) — append-only history of
+// every GSTN verification attempt for BOTH SellerGstin and CustomerTaxProfile
+// (targetType discriminates). verificationNotes on the row keeps only the
+// latest line; this table is the full, queryable audit trail (who checked,
+// what the portal returned, mismatch, the raw envelope) so a re-verify no
+// longer loses history.
+model GstinVerificationEvent {
+  id                String   @id @default(uuid())
+  // SELLER_GSTIN | CUSTOMER_TAX_PROFILE
+  targetType        String   @map("target_type")
+  targetId          String   @map("target_id")
+  gstin             String   @map("gstin")
+  provider          String
+  actorId           String?  @map("actor_id")
+  found             Boolean
+  verified          Boolean
+  status            String
+  portalLegalName   String?  @map("portal_legal_name")
+  legalNameMismatch Boolean  @default(false) @map("legal_name_mismatch")
+  failureReason     String?  @db.Text @map("failure_reason")
+  rawResponseJson   Json?    @map("raw_response_json")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  @@index([targetType, targetId, createdAt(sort: Desc)])
+  @@index([gstin, createdAt(sort: Desc)])
+  @@map("gstin_verification_events")
 }
 
 // Platform GST profile — Sportsmart's own GSTIN(s). Used when
@@ -250,12 +461,57 @@ model PlatformGstProfile {
   panVerified           Boolean             @default(false) @map("pan_verified")
   isDefault             Boolean             @default(false) @map("is_default")
   isActive              Boolean             @default(true) @map("is_active")
+  // Phase 161 (Platform GST Profile audit B5/#11/#12) — actor attribution,
+  // OCC, and reason capture on the two most consequential mutations.
+  // createdBy/updatedBy: which admin touched the platform's own tax identity
+  // (was never captured). version: optimistic-concurrency token.
+  // deactivationReason / setDefaultReason: why a profile was retired / the
+  // default GSTIN switched (every subsequent invoice rides on the default).
+  createdBy             String?             @map("created_by")
+  updatedBy             String?             @map("updated_by")
+  version               Int                 @default(0)
+  deactivationReason    String?             @map("deactivation_reason")
+  setDefaultReason      String?             @map("set_default_reason")
   createdAt             DateTime            @default(now()) @map("created_at")
   updatedAt             DateTime            @updatedAt @map("updated_at")
 
+  // Phase 161 (audit #12) — append-only field-change history.
+  history      PlatformGstProfileHistory[]
+  // Phase 161 (audit B3) — invoices minted under this profile (snapshot FK).
+  taxDocuments TaxDocument[]
+
   @@index([isDefault, isActive])
   @@index([gstStateCode])
+  // Phase 161 (#6) — at-most-one ACTIVE profile per state + at-most-one
+  // DEFAULT row are enforced by PARTIAL unique indexes declared in the
+  // migration SQL (Prisma can't express `WHERE` on @@unique). See
+  // 20260529140000_platform_gst_profile_hardening.
   @@map("platform_gst_profiles")
+}
+
+// Phase 161 (Platform GST Profile audit #12) — append-only field-change
+// history. legalBusinessName / registeredAddressJson / registrationType /
+// isDefault / isActive edits overwrote in place; this records a row per
+// mutation with the before/after snapshot, the acting admin, and reason.
+// (Historical INVOICES are already protected — TaxDocument snapshots
+// sellerLegalName/sellerAddressJson/sellerStateCode at issuance — so this
+// answers "what did the PROFILE look like in March 2026", not invoice drift.)
+model PlatformGstProfileHistory {
+  id        String   @id @default(uuid())
+  profileId String   @map("profile_id")
+  gstin     String   @map("gstin")
+  // CREATE / UPDATE / DEACTIVATE / REACTIVATE / SET_DEFAULT
+  action    String
+  oldValues Json?    @map("old_values")
+  newValues Json?    @map("new_values")
+  changedBy String?  @map("changed_by")
+  reason    String?  @db.Text
+  createdAt DateTime @default(now()) @map("created_at")
+
+  profile PlatformGstProfile @relation(fields: [profileId], references: [id], onDelete: Cascade)
+
+  @@index([profileId, createdAt(sort: Desc)])
+  @@map("platform_gst_profile_history")
 }
 
 // Runtime tax configuration — JSON values for admin-tunable settings.

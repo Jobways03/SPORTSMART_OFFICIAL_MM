@@ -3,7 +3,7 @@
 // Abstracts the upload target so the renderer can swap between:
 //   - StubTaxPdfStorageProvider (default in dev/test) — writes to the
 //     local filesystem, returns a stable file:// URL.
-//   - S3 / Cloudinary adapter (later phase) — same contract.
+//   - S3 / media adapter (later phase) — same contract.
 //
 // Selection is via env (`TAX_PDF_STORAGE_PROVIDER`) — choice is
 // boot-time, not service-layer.

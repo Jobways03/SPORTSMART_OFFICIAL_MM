@@ -38,6 +38,12 @@ function build(opts: {
     payoutMethodType: args.data.payoutMethodType,
     payoutMethodSnapshot: args.data.payoutMethodSnapshot,
     status: args.data.status,
+    // Phase 160 (#14) — echo the frozen TDS snapshot back (a real Prisma
+    // create returns the full row) so the post-commit audit log can read it.
+    tdsSection: args.data.tdsSection,
+    tdsRateBps: args.data.tdsRateBps,
+    filingQuarter: args.data.filingQuarter,
+    panOnFileAtDeduction: args.data.panOnFileAtDeduction,
   }));
   const commissionUpdateMany = jest.fn(async (args: any) =>
     args.data.payoutRequestId !== undefined
@@ -240,6 +246,7 @@ describe('AffiliatePayoutService.requestPayout — §194-O TDS (Phase 159e)', ()
       tdsSection: '194H',
       tdsRate: 5, // settings rate
       eligible: [{ id: 'c1', adjustedAmount: D(20000) }], // above ₹15k threshold
+      panOnFile: true,
     });
     await svc.requestPayout({ affiliateId: 'aff1' });
     const data = create.mock.calls[0]![0].data;
@@ -247,5 +254,52 @@ describe('AffiliatePayoutService.requestPayout — §194-O TDS (Phase 159e)', ()
     expect(Number(data.tdsAmount)).toBe(250);
     expect(data.tdsSection).toBe('194H');
     expect(ledgerCreate).not.toHaveBeenCalled(); // §194H doesn't use the §194-O ledger
+  });
+
+  // Phase 160 (§194-O affiliate audit B6) — §206AA: a PAN-less §194H deductee
+  // is withheld at the HIGHER of the in-force rate and 20%.
+  it('§194H + no PAN → §206AA escalation to 20% (floored above the 10% rate)', async () => {
+    const { svc, create } = build({
+      tdsSection: '194H',
+      tdsRate: 10, // configured 10%, but no PAN → §206AA floors at 20%
+      eligible: [{ id: 'c1', adjustedAmount: D(20000) }], // taxable slice = 5000
+      panOnFile: false,
+    });
+    await svc.requestPayout({ affiliateId: 'aff1' });
+    const data = create.mock.calls[0]![0].data;
+    // taxable 5000 × 20% = 1000 (NOT 500 at the un-escalated 10%).
+    expect(Number(data.tdsAmount)).toBe(1000);
+    expect(data.tdsRateBps).toBe(2000); // 20%
+    expect(data.panOnFileAtDeduction).toBe(false);
+  });
+
+  it('§194H + PAN on file → configured rate applies (no §206AA escalation)', async () => {
+    const { svc, create } = build({
+      tdsSection: '194H',
+      tdsRate: 10,
+      eligible: [{ id: 'c1', adjustedAmount: D(20000) }],
+      panOnFile: true,
+    });
+    await svc.requestPayout({ affiliateId: 'aff1' });
+    const data = create.mock.calls[0]![0].data;
+    expect(Number(data.tdsAmount)).toBe(500); // 5000 × 10%
+    expect(data.tdsRateBps).toBe(1000);
+  });
+
+  // Phase 160 (#14) — the TDS decision is reconstructable from the audit row.
+  it('audit log carries the TDS decision (section, rate, quarter, PAN)', async () => {
+    const { svc, audit } = build({ panOnFile: true });
+    await svc.requestPayout({ affiliateId: 'aff1' });
+    expect(audit.writeAuditLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'affiliate.payout.requested',
+        newValue: expect.objectContaining({
+          tdsSection: '194O',
+          tdsRateBps: 100,
+          panOnFileAtDeduction: true,
+          filingQuarter: expect.stringMatching(/^\d{4}-Q[1-4]$/),
+        }),
+      }),
+    );
   });
 });

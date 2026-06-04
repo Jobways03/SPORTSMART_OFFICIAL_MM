@@ -41,11 +41,20 @@ describe('WalletService — credit idempotency', () => {
     status: 'COMPLETED' as any,
     amountInPaise: 50000,
     balanceAfterInPaise: 50000,
+    balanceBeforeInPaise: 0,
+    direction: 'CREDIT' as any,
+    currency: 'INR',
+    referenceNumber: null,
     referenceType: 'RefundInstruction',
     referenceId: 'rin-1',
     description: 'Return RET-2026-000001 — wallet refund',
+    reason: null,
     internalNotes: null,
     createdByAdminId: null,
+    // Phase 172 (#8/#9) — now-required ledger columns.
+    creditType: null,
+    expiresAt: null,
+    lapsedAt: null,
     createdAt: new Date(),
   };
 

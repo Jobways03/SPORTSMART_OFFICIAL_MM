@@ -1,6 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import {
   BadRequestAppException,
+  ConflictAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
 import { Prisma } from '@prisma/client';
@@ -70,16 +71,28 @@ export class DiscountsService {
     return this.withEffectiveStatus(discount);
   }
 
+  // Operator/abuse-driven states are explicit and must NOT be recomputed
+  // from the date window — only the three date-derived labels
+  // (ACTIVE/SCHEDULED/EXPIRED) are inferred. Phase 243: a PAUSED, ARCHIVED,
+  // or SUSPENDED_FOR_ABUSE discount previously got silently flipped back to
+  // ACTIVE/SCHEDULED/EXPIRED here, so the lifecycle never surfaced.
+  private static readonly STICKY_STATUSES = new Set([
+    'DRAFT',
+    'PAUSED',
+    'ARCHIVED',
+    'SUSPENDED_FOR_ABUSE',
+  ]);
+
   // Derive the current effective status from the date window, so a SCHEDULED
   // discount whose `startsAt` has passed shows as ACTIVE (and one past its
   // `endsAt` shows as EXPIRED) without needing a background job to rewrite
-  // the stored label. DRAFT is preserved — it's the explicit disabled state.
+  // the stored label. Sticky operator states are preserved verbatim.
   private withEffectiveStatus<T extends {
     status: string;
     startsAt: Date | string | null;
     endsAt: Date | string | null;
   }>(d: T): T {
-    if (!d || d.status === 'DRAFT') return d;
+    if (!d || DiscountsService.STICKY_STATUSES.has(d.status)) return d;
     const now = new Date();
     const start = d.startsAt ? new Date(d.startsAt) : null;
     const end = d.endsAt ? new Date(d.endsAt) : null;
@@ -90,7 +103,11 @@ export class DiscountsService {
     return { ...d, status: effective };
   }
 
-  async create(data: any) {
+  async create(
+    data: any,
+    // Phase 243 (#4) — admin actor for attribution + the audit trail.
+    actor?: { actorId?: string | null; actorRole?: string | null },
+  ) {
     const {
       code,
       title,
@@ -112,22 +129,91 @@ export class DiscountsService {
     if (method === 'AUTOMATIC' && !title?.trim())
       throw new BadRequestAppException('Discount title is required');
 
-    // Guard against out-of-bounds values that would silently hand out
-    // more than the product cost. The controller accepts a loose `any`
-    // body (no DTO) so this validation lives here. A PERCENTAGE > 100
-    // would refund the customer more than they paid; any negative would
-    // add to the total instead of subtracting.
+    // PERCENTAGE > 100 would refund more than the customer paid; negative
+    // would add to the total. (The DTO also bounds these — defence in depth.)
     this.validateDiscountValue(rest.valueType, rest.value);
     if (rest.getDiscountValue !== undefined && rest.getDiscountValue !== null) {
       this.validateDiscountValue(rest.getDiscountType, rest.getDiscountValue);
     }
 
-    if (code?.trim()) {
-      const existing = await this.discountRepo.findByCode(
-        code.trim().toUpperCase(),
+    // Phase 243 (#11) — a BOGO whose free-unit count exceeds its per-order
+    // cap is an inconsistent config (the cap silently wins at checkout).
+    if (type === 'BUY_X_GET_Y') {
+      const gq = rest.getQuantity != null ? Number(rest.getQuantity) : null;
+      const mupo =
+        rest.maxUsesPerOrder != null ? Number(rest.maxUsesPerOrder) : null;
+      if (gq != null && mupo != null && gq > mupo) {
+        throw new BadRequestAppException(
+          'getQuantity cannot exceed maxUsesPerOrder',
+        );
+      }
+    }
+
+    // Phase 247 (#11) — a SELLER-funded discount applied to ALL_PRODUCTS
+    // debits every seller in a multi-seller cart, including ones who never
+    // agreed to fund it. Require it to be scoped to specific products.
+    const fundingType = (rest.fundingType as string) || 'PLATFORM';
+    if (
+      fundingType === 'SELLER' &&
+      (rest.appliesTo ?? 'ALL_PRODUCTS') === 'ALL_PRODUCTS'
+    ) {
+      throw new BadRequestAppException(
+        'SELLER-funded discounts must target specific products (a single seller), not ALL_PRODUCTS',
       );
+    }
+
+    if (code?.trim()) {
+      const upper = code.trim().toUpperCase();
+      const existing = await this.discountRepo.findByCode(upper);
       if (existing)
         throw new BadRequestAppException('Discount code already exists');
+      // Phase 244 (#10) — cross-table collision: if an affiliate coupon
+      // owns this code, the Discount path would win at checkout and the
+      // affiliate's code would silently become unreachable.
+      if (await this.affiliatePublicFacade.couponCodeExists(upper)) {
+        throw new BadRequestAppException(
+          'This code is already in use by an affiliate coupon',
+        );
+      }
+    }
+
+    // Phase 243 (#15) — validate the affiliate link exists up front.
+    if (rest.affiliateId) {
+      if (!(await this.affiliatePublicFacade.affiliateExists(rest.affiliateId))) {
+        throw new BadRequestAppException('Affiliate not found');
+      }
+    }
+
+    // Phase 243 (#13) — pre-validate product/collection FK targets so a
+    // stale id surfaces a clean 400 instead of a raw P2003 → 500 mid-write.
+    const allProductIds = [
+      ...new Set<string>([
+        ...((productIds as string[]) ?? []),
+        ...((buyProductIds as string[]) ?? []),
+        ...((getProductIds as string[]) ?? []),
+      ]),
+    ];
+    if (allProductIds.length) {
+      const found = await this.discountRepo.findExistingProductIds(allProductIds);
+      const missing = allProductIds.filter((id) => !found.includes(id));
+      if (missing.length) {
+        throw new BadRequestAppException(
+          `Unknown product id(s): ${missing.slice(0, 10).join(', ')}`,
+        );
+      }
+    }
+    if (collectionIds?.length) {
+      const found = await this.discountRepo.findExistingCollectionIds(
+        collectionIds,
+      );
+      const missing = (collectionIds as string[]).filter(
+        (id) => !found.includes(id),
+      );
+      if (missing.length) {
+        throw new BadRequestAppException(
+          `Unknown collection id(s): ${missing.slice(0, 10).join(', ')}`,
+        );
+      }
     }
 
     const now = new Date();
@@ -138,32 +224,62 @@ export class DiscountsService {
         'endsAt must be after startsAt — an always-expired discount cannot be created',
       );
     }
-    let status: 'ACTIVE' | 'SCHEDULED' | 'EXPIRED' = 'ACTIVE';
-    if (start > now) status = 'SCHEDULED';
-    if (end && end < now) status = 'EXPIRED';
+    // Phase 243 (#18) — honor an explicit "Save as draft"; otherwise derive
+    // the status from the date window.
+    let status: 'ACTIVE' | 'SCHEDULED' | 'EXPIRED' | 'DRAFT';
+    if (rest.status === 'DRAFT') {
+      status = 'DRAFT';
+    } else {
+      status = 'ACTIVE';
+      if (start > now) status = 'SCHEDULED';
+      if (end && end < now) status = 'EXPIRED';
+    }
 
-    // Phase B (P0.5) — funding fields with safe defaults. Validate
+    // Phase B (P0.5) / 247-FB — funding fields with safe defaults. Validate
     // SHARED percentages sum to 100 server-side regardless of UI.
-    const fundingType = (rest.fundingType as string) || 'PLATFORM';
     const platformFundingPercent = Number(rest.platformFundingPercent ?? 100);
     const sellerFundingPercent = Number(rest.sellerFundingPercent ?? 0);
     const brandFundingPercent = Number(rest.brandFundingPercent ?? 0);
+    const franchiseFundingPercent = Number(rest.franchiseFundingPercent ?? 0);
     if (fundingType === 'SHARED') {
-      const sum = platformFundingPercent + sellerFundingPercent + brandFundingPercent;
+      const sum =
+        platformFundingPercent +
+        sellerFundingPercent +
+        brandFundingPercent +
+        franchiseFundingPercent;
       if (Math.abs(sum - 100) > 0.01) {
         throw new BadRequestAppException(
           `SHARED funding percentages must sum to 100% (got ${sum})`,
         );
       }
     }
+    // Phase 247-FB — a BRAND-funded discount (pure or a SHARED brand share)
+    // must name the brand it bills, else the cost is unattributable.
+    if (
+      (fundingType === 'BRAND' ||
+        (fundingType === 'SHARED' && brandFundingPercent > 0)) &&
+      !rest.brandId
+    ) {
+      throw new BadRequestAppException(
+        'BRAND-funded discounts require a brandId (which brand bears the cost)',
+      );
+    }
 
-    const discount = await this.discountRepo.create({
+    const payload = {
       code: code ? code.trim().toUpperCase() : null,
       title: title?.trim() || null,
+      // Phase 243 (#2) — the legacy scalar eligibility is now persisted.
+      eligibility: (rest.eligibility as string) || 'ALL_CUSTOMERS',
+      descriptionLong: rest.descriptionLong?.trim() || null,
       type,
       method: method || 'CODE',
       valueType: rest.valueType || 'PERCENTAGE',
       value: rest.value || 0,
+      // Phase 243 — optional PERCENT cap, stored in paise.
+      maxDiscountAmountInPaise:
+        rest.maxDiscountAmountInPaise != null
+          ? BigInt(rest.maxDiscountAmountInPaise)
+          : null,
       appliesTo: rest.appliesTo || 'ALL_PRODUCTS',
       minRequirement: rest.minRequirement || 'NONE',
       minRequirementValue: rest.minRequirementValue || null,
@@ -183,16 +299,17 @@ export class DiscountsService {
       getDiscountType: rest.getDiscountType || null,
       getDiscountValue: rest.getDiscountValue || null,
       maxUsesPerOrder: rest.maxUsesPerOrder || null,
-      // Phase B (P0.5)
+      // Phase B (P0.5) / 247-FB
       fundingType: fundingType as any,
       platformFundingPercent,
       sellerFundingPercent,
       brandFundingPercent,
+      franchiseFundingPercent,
+      franchiseId: rest.franchiseId || null,
+      brandId: rest.brandId || null,
       commissionBasis: (rest.commissionBasis as any) || 'GROSS',
       fundingNotes: rest.fundingNotes || null,
       discountNature: (rest.discountNature as any) || 'TRANSACTIONAL',
-      // Phase F (P2.3) — affiliate attribution. When set, redemption
-      // writes a ReferralAttribution + sync's the affiliate side counter.
       affiliateId: rest.affiliateId || null,
       affiliateCommissionPercent:
         rest.affiliateCommissionPercent !== undefined &&
@@ -200,35 +317,30 @@ export class DiscountsService {
         rest.affiliateCommissionPercent !== ''
           ? Number(rest.affiliateCommissionPercent)
           : null,
-    } as any);
+      // Phase 243 (#4) — actor attribution.
+      createdById: actor?.actorId ?? null,
+      updatedById: actor?.actorId ?? null,
+    };
 
-    if (productIds?.length) {
-      await this.discountRepo.createProductLinks(
-        discount.id,
+    // Phase 243 (#5) — discount row + scope links written atomically so a
+    // link failure can't leave a half-built discount. P2002 (a concurrent
+    // duplicate code that slipped past the pre-check) becomes a clean 400.
+    let discount: any;
+    try {
+      discount = await this.discountRepo.createWithRelations(payload as any, {
         productIds,
-        'APPLIES',
-      );
-    }
-    if (collectionIds?.length) {
-      await this.discountRepo.createCollectionLinks(
-        discount.id,
         collectionIds,
-        'APPLIES',
-      );
-    }
-    if (buyProductIds?.length) {
-      await this.discountRepo.createProductLinks(
-        discount.id,
         buyProductIds,
-        'BUY',
-      );
-    }
-    if (getProductIds?.length) {
-      await this.discountRepo.createProductLinks(
-        discount.id,
         getProductIds,
-        'GET',
-      );
+      });
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        throw new BadRequestAppException('Discount code already exists');
+      }
+      throw e;
     }
 
     // Phase E (P1.3) — eligibility rules. Replace the rule set in
@@ -237,21 +349,87 @@ export class DiscountsService {
       await this.eligibility.setRules(discount.id, eligibilityRules);
     }
 
-    // Phase E (P1.1) — audit + outbox.
+    // Phase E (P1.1) / 243 (#4) — audit + outbox with the admin actor.
     void this.events.emitDiscountCrud({
       action: 'created',
       discountId: discount.id,
       newValue: discount as Record<string, unknown>,
+      context: { actorId: actor?.actorId, actorRole: actor?.actorRole },
     });
 
     return discount;
   }
 
-  async update(id: string, body: any) {
+  // Phase 243 (#8) — fields that materially change the money math or the
+  // identity of a coupon. Once a discount has been redeemed (usedCount > 0)
+  // these are frozen: an admin bumping 10% → 90% on a live coupon would
+  // silently 9× the discount for everyone mid-checkout. The safe path is
+  // pause + clone a new version.
+  private static readonly LOCKED_ON_LIVE = [
+    'code',
+    'type',
+    'value',
+    'valueType',
+    'maxDiscountAmountInPaise',
+    'fundingType',
+    'platformFundingPercent',
+    'sellerFundingPercent',
+    'brandFundingPercent',
+    'franchiseFundingPercent',
+    'commissionBasis',
+    'buyType',
+    'buyValue',
+    'getDiscountType',
+    'getDiscountValue',
+    'getQuantity',
+  ];
+
+  async update(
+    id: string,
+    body: any,
+    actor?: { actorId?: string | null; actorRole?: string | null },
+  ) {
     const discount = await this.discountRepo.findById(id);
     if (!discount) throw new NotFoundAppException('Discount not found');
 
-    const { productIds, collectionIds, buyProductIds, getProductIds, startsAt, endsAt, eligibilityRules, ...fields } = body;
+    const {
+      productIds,
+      collectionIds,
+      buyProductIds,
+      getProductIds,
+      startsAt,
+      endsAt,
+      eligibilityRules,
+      expectedVersion,
+      ...fields
+    } = body;
+    // `status` is never settable via this path (#7) — it goes through the
+    // dedicated FSM endpoint. Strip it defensively even if it slips through.
+    delete (fields as any).status;
+
+    // Phase 243 (#8 / OCC) — reject a stale two-admin write.
+    if (
+      expectedVersion !== undefined &&
+      expectedVersion !== null &&
+      Number(expectedVersion) !== (discount as any).version
+    ) {
+      throw new ConflictAppException(
+        'This discount was changed by someone else — reload and retry',
+      );
+    }
+
+    // Phase 243 (#8) — freeze money/identity fields on a live discount.
+    if ((discount as any).usedCount > 0) {
+      const attempted = DiscountsService.LOCKED_ON_LIVE.filter(
+        (k) => fields[k] !== undefined,
+      );
+      if (attempted.length) {
+        throw new ConflictAppException(
+          `Cannot change ${attempted.join(', ')} on a discount with ${(discount as any).usedCount} redemption(s). Pause it and create a new version instead.`,
+        );
+      }
+    }
+
     const data: any = {};
 
     // Same bounds guard as create — if the caller is changing the value
@@ -269,11 +447,52 @@ export class DiscountsService {
       this.validateDiscountValue(nextType, fields.getDiscountValue);
     }
 
+    // Phase 247 (#13) — SHARED funding split must still sum to 100 on update.
+    const nextFundingType =
+      fields.fundingType ?? (discount as any).fundingType;
+    if (
+      nextFundingType === 'SHARED' &&
+      (fields.platformFundingPercent !== undefined ||
+        fields.sellerFundingPercent !== undefined ||
+        fields.brandFundingPercent !== undefined ||
+        fields.franchiseFundingPercent !== undefined)
+    ) {
+      const p = Number(
+        fields.platformFundingPercent ?? (discount as any).platformFundingPercent,
+      );
+      const s = Number(
+        fields.sellerFundingPercent ?? (discount as any).sellerFundingPercent,
+      );
+      const b = Number(
+        fields.brandFundingPercent ?? (discount as any).brandFundingPercent,
+      );
+      const f = Number(
+        fields.franchiseFundingPercent ??
+          (discount as any).franchiseFundingPercent ??
+          0,
+      );
+      if (Math.abs(p + s + b + f - 100) > 0.01) {
+        throw new BadRequestAppException(
+          `SHARED funding percentages must sum to 100% (got ${p + s + b + f})`,
+        );
+      }
+    }
+
+    // Phase 243 (#15) — validate a (re)attached affiliate exists.
+    if (fields.affiliateId) {
+      if (!(await this.affiliatePublicFacade.affiliateExists(fields.affiliateId))) {
+        throw new BadRequestAppException('Affiliate not found');
+      }
+    }
+
     for (const key of [
       'code',
       'title',
+      'eligibility',
+      'descriptionLong',
       'valueType',
       'value',
+      'maxDiscountAmountInPaise',
       'appliesTo',
       'minRequirement',
       'minRequirementValue',
@@ -282,7 +501,6 @@ export class DiscountsService {
       'combineProduct',
       'combineOrder',
       'combineShipping',
-      'status',
       'buyType',
       'buyValue',
       'buyItemsFrom',
@@ -291,20 +509,32 @@ export class DiscountsService {
       'getDiscountType',
       'getDiscountValue',
       'maxUsesPerOrder',
+      'fundingType',
+      'platformFundingPercent',
+      'sellerFundingPercent',
+      'brandFundingPercent',
+      'franchiseFundingPercent',
+      'franchiseId',
+      'brandId',
+      'commissionBasis',
+      'fundingNotes',
+      'discountNature',
     ]) {
       if (fields[key] !== undefined) {
-        data[key] =
-          key === 'code' && fields[key]
-            ? fields[key].trim().toUpperCase()
-            : fields[key];
+        if (key === 'code') {
+          data[key] = fields[key] ? fields[key].trim().toUpperCase() : null;
+        } else if (key === 'maxDiscountAmountInPaise') {
+          data[key] = fields[key] != null ? BigInt(fields[key]) : null;
+        } else {
+          data[key] = fields[key];
+        }
       }
     }
     if (startsAt !== undefined) data.startsAt = new Date(startsAt);
     if (endsAt !== undefined) data.endsAt = endsAt ? new Date(endsAt) : null;
 
-    // Phase F (P2.3) — affiliate link can be added, swapped, or cleared
-    // on an existing discount. Commission percent override is independent
-    // and clears with explicit null.
+    // Phase F (P2.3) — affiliate link add/swap/clear; commission override
+    // is independent and clears with explicit null.
     if (fields.affiliateId !== undefined) {
       data.affiliateId = fields.affiliateId || null;
     }
@@ -315,35 +545,60 @@ export class DiscountsService {
           : Number(fields.affiliateCommissionPercent);
     }
 
-    const updated = await this.discountRepo.update(id, data);
-
-    if (productIds !== undefined) {
-      await this.discountRepo.deleteProductLinks(id, 'APPLIES');
-      if (productIds.length) {
-        await this.discountRepo.createProductLinks(id, productIds, 'APPLIES');
-      }
-    }
-    if (collectionIds !== undefined) {
-      await this.discountRepo.deleteCollectionLinks(id, 'APPLIES');
-      if (collectionIds.length) {
-        await this.discountRepo.createCollectionLinks(
-          id,
-          collectionIds,
-          'APPLIES',
+    // Phase 243 (#13) — validate product/collection FK targets being set.
+    const updatedProductIds = [
+      ...new Set<string>([
+        ...((productIds as string[]) ?? []),
+        ...((buyProductIds as string[]) ?? []),
+        ...((getProductIds as string[]) ?? []),
+      ]),
+    ];
+    if (updatedProductIds.length) {
+      const found = await this.discountRepo.findExistingProductIds(
+        updatedProductIds,
+      );
+      const missing = updatedProductIds.filter((pid) => !found.includes(pid));
+      if (missing.length) {
+        throw new BadRequestAppException(
+          `Unknown product id(s): ${missing.slice(0, 10).join(', ')}`,
         );
       }
     }
-    if (buyProductIds !== undefined) {
-      await this.discountRepo.deleteProductLinks(id, 'BUY');
-      if (buyProductIds.length) {
-        await this.discountRepo.createProductLinks(id, buyProductIds, 'BUY');
+    if (collectionIds && collectionIds.length) {
+      const found = await this.discountRepo.findExistingCollectionIds(
+        collectionIds,
+      );
+      const missing = (collectionIds as string[]).filter(
+        (cid) => !found.includes(cid),
+      );
+      if (missing.length) {
+        throw new BadRequestAppException(
+          `Unknown collection id(s): ${missing.slice(0, 10).join(', ')}`,
+        );
       }
     }
-    if (getProductIds !== undefined) {
-      await this.discountRepo.deleteProductLinks(id, 'GET');
-      if (getProductIds.length) {
-        await this.discountRepo.createProductLinks(id, getProductIds, 'GET');
+
+    // Phase 243 (#4/#8) — actor + version bump.
+    data.updatedById = actor?.actorId ?? (discount as any).updatedById ?? null;
+    data.version = { increment: 1 };
+
+    // Phase 243 (#5) — update + scope-link replace written atomically.
+    let updated: any;
+    try {
+      updated = await this.discountRepo.updateWithRelations(id, data, {
+        productIds,
+        collectionIds,
+        buyProductIds,
+        getProductIds,
+      });
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        throw new BadRequestAppException('Discount code already exists');
       }
+      throw e;
     }
 
     // Phase E (P1.3) — eligibility rules. `undefined` = leave alone,
@@ -352,17 +607,97 @@ export class DiscountsService {
       await this.eligibility.setRules(id, Array.isArray(eligibilityRules) ? eligibilityRules : []);
     }
 
-    // Phase E (P1.1) — audit + outbox with old/new diff so admins
-    // can see exactly what changed (especially for risky edits like
-    // bumping value 10% → 90% or flipping fundingType).
+    // Phase E (P1.1) / 243 (#4) — audit + outbox with old/new diff + actor.
     void this.events.emitDiscountCrud({
       action: 'updated',
       discountId: id,
       oldValue: discount as Record<string, unknown>,
       newValue: updated as Record<string, unknown>,
+      context: { actorId: actor?.actorId, actorRole: actor?.actorRole },
     });
 
     return updated;
+  }
+
+  /**
+   * Phase 243 (#6/#7) — explicit status FSM. The generic update path can no
+   * longer touch `status`; operator transitions (Pause/Resume/Archive,
+   * publish-from-DRAFT) go through here with a validated transition + audit.
+   * SUSPENDED_FOR_ABUSE is reachable only via {@link suspendForAbuse}.
+   */
+  private static readonly STATUS_FSM: Record<string, string[]> = {
+    ACTIVE: ['PAUSED', 'ARCHIVED'],
+    SCHEDULED: ['ACTIVE', 'PAUSED', 'ARCHIVED'],
+    EXPIRED: ['ACTIVE', 'ARCHIVED'],
+    DRAFT: ['ACTIVE', 'PAUSED', 'ARCHIVED'],
+    PAUSED: ['ACTIVE', 'ARCHIVED', 'DRAFT'],
+    ARCHIVED: [],
+    SUSPENDED_FOR_ABUSE: [], // only the abuse-action path can move this
+  };
+
+  async setStatus(
+    id: string,
+    newStatus: 'ACTIVE' | 'PAUSED' | 'ARCHIVED' | 'DRAFT',
+    actor?: { actorId?: string | null; actorRole?: string | null },
+    reason?: string,
+  ) {
+    const discount = await this.discountRepo.findById(id);
+    if (!discount) throw new NotFoundAppException('Discount not found');
+    const current = (discount as any).status as string;
+    if (current === newStatus) return this.withEffectiveStatus(discount);
+    const allowed = DiscountsService.STATUS_FSM[current] ?? [];
+    if (!allowed.includes(newStatus)) {
+      throw new ConflictAppException(
+        `Cannot move discount from ${current} to ${newStatus}`,
+      );
+    }
+    const updated = await this.discountRepo.update(id, {
+      status: newStatus as any,
+      updatedById: actor?.actorId ?? null,
+      version: { increment: 1 },
+    });
+    void this.events.emitDiscountCrud({
+      action: newStatus === 'ARCHIVED' ? 'disabled' : 'updated',
+      discountId: id,
+      oldValue: { status: current, reason } as Record<string, unknown>,
+      newValue: updated as Record<string, unknown>,
+      context: { actorId: actor?.actorId, actorRole: actor?.actorRole },
+    });
+    return this.withEffectiveStatus(updated);
+  }
+
+  /**
+   * Phase 245 (abuse-detection audit #15) — kill / un-kill a leaking coupon
+   * from the risk surface. Distinct from the operator FSM: it can suspend
+   * from any non-archived state and only this path (gated by
+   * discounts.abuse.action) can reactivate a SUSPENDED_FOR_ABUSE coupon.
+   */
+  async suspendForAbuse(
+    id: string,
+    suspend: boolean,
+    actor?: { actorId?: string | null; actorRole?: string | null },
+    reason?: string,
+  ) {
+    const discount = await this.discountRepo.findById(id);
+    if (!discount) throw new NotFoundAppException('Discount not found');
+    const current = (discount as any).status as string;
+    if (suspend && current === 'ARCHIVED') {
+      throw new ConflictAppException('Cannot suspend an archived discount');
+    }
+    const target = suspend ? 'SUSPENDED_FOR_ABUSE' : 'ACTIVE';
+    const updated = await this.discountRepo.update(id, {
+      status: target as any,
+      updatedById: actor?.actorId ?? null,
+      version: { increment: 1 },
+    });
+    void this.events.emitDiscountCrud({
+      action: suspend ? 'disabled' : 'activated',
+      discountId: id,
+      oldValue: { status: current, reason } as Record<string, unknown>,
+      newValue: updated as Record<string, unknown>,
+      context: { actorId: actor?.actorId, actorRole: actor?.actorRole },
+    });
+    return this.withEffectiveStatus(updated);
   }
 
   async delete(id: string) {
@@ -449,11 +784,15 @@ export class DiscountsService {
     if (discount.method !== 'CODE') {
       throw new BadRequestAppException('This code cannot be applied manually');
     }
-    // DRAFT is the explicit "disabled" state set by an admin — always reject.
-    // For ACTIVE/SCHEDULED/EXPIRED the stored status can go stale (it's only
-    // snapshotted at create/update time), so trust the date window as the
-    // source of truth instead of the stored label.
-    if (discount.status === 'DRAFT') {
+    // Explicit operator/abuse "disabled" states always reject (Phase 243/245
+    // — PAUSED, ARCHIVED, SUSPENDED_FOR_ABUSE join DRAFT). For
+    // ACTIVE/SCHEDULED/EXPIRED the stored status can go stale (snapshotted at
+    // create/update time), so the date window below is the source of truth.
+    if (
+      ['DRAFT', 'PAUSED', 'ARCHIVED', 'SUSPENDED_FOR_ABUSE'].includes(
+        discount.status,
+      )
+    ) {
       throw new BadRequestAppException('This coupon is no longer available');
     }
     // FREE_SHIPPING is a separate code path — the discount itself reduces
@@ -527,6 +866,14 @@ export class DiscountsService {
       let amount = 0;
       if (valueType === 'PERCENTAGE') {
         amount = (Number(subtotal) * value) / 100;
+        // Phase 243 (key-finding) — "X% off up to ₹Y" ceiling.
+        if (
+          discount.maxDiscountAmountInPaise !== null &&
+          discount.maxDiscountAmountInPaise !== undefined
+        ) {
+          const capRupees = Number(discount.maxDiscountAmountInPaise) / 100;
+          amount = Math.min(amount, capRupees);
+        }
       } else {
         amount = value;
       }
@@ -598,22 +945,40 @@ export class DiscountsService {
     for (const it of items) {
       if (!isGetEligible(it.productId)) continue;
       let availableQty = Number(it.quantity) || 0;
-      if (
-        discount.buyType === 'MIN_QUANTITY' &&
-        isBuyEligible(it.productId) &&
+      const sharesBuyAndGet =
         buyProductIds.size > 0 &&
         getProductIds.size > 0 &&
+        isBuyEligible(it.productId) &&
         buyProductIds.has(it.productId) &&
-        getProductIds.has(it.productId)
-      ) {
+        getProductIds.has(it.productId);
+      // Reserve the buy-side "entry ticket" units so the customer can't get
+      // the same unit they had to buy as the free/discounted GET unit.
+      if (sharesBuyAndGet && discount.buyType === 'MIN_QUANTITY') {
         availableQty = Math.max(0, availableQty - buyValueNum);
+      } else if (
+        sharesBuyAndGet &&
+        discount.buyType === 'MIN_AMOUNT' &&
+        Number(it.unitPrice) > 0
+      ) {
+        // Phase 246 (recon #3) — MIN_AMOUNT was NOT reserving the entry
+        // ticket, so a single ₹2000 item under "buy ₹1000 get 1 free" was
+        // given away free (100% off the only item). Reserve enough units to
+        // cover the buy threshold at this unit's price.
+        const reservedUnits = Math.ceil(buyValueNum / Number(it.unitPrice));
+        availableQty = Math.max(0, availableQty - reservedUnits);
       }
       for (let i = 0; i < availableQty; i++) {
         perUnit.push({ unitPrice: Number(it.unitPrice) || 0, productId: it.productId });
       }
     }
     perUnit.sort((a, b) => a.unitPrice - b.unitPrice);
-    const discounted = perUnit.slice(0, getQuantity);
+    // Phase 243 (#11) — cap discounted units at maxUsesPerOrder when set, so
+    // a BOGO with maxUsesPerOrder=1 doesn't discount every eligible pair.
+    const perOrderCap =
+      discount.maxUsesPerOrder != null && Number(discount.maxUsesPerOrder) > 0
+        ? Math.min(getQuantity, Number(discount.maxUsesPerOrder))
+        : getQuantity;
+    const discounted = perUnit.slice(0, perOrderCap);
     if (discounted.length === 0) {
       throw new BadRequestAppException(
         'Add the free/discounted item to your cart to apply this coupon.',

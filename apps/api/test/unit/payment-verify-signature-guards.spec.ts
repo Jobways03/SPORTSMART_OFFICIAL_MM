@@ -41,10 +41,12 @@ describe('CheckoutService.verifyPayment — signature guards', () => {
   });
 
   it('explicitly fails closed when RAZORPAY_KEY_SECRET is missing', () => {
-    // Must throw (or otherwise abort) inside verifyPayment if the env
-    // var is absent. We look for the narrowly-scoped guard pattern.
+    // Must throw (or otherwise abort) inside verifyPayment if the secret is
+    // absent. Phase 69 moved the secret read from `process.env` to the
+    // injected RazorpayClient (`getKeySecret()`); the fail-closed guard is
+    // the same — secret pulled into a `keySecret` const, then `if (!keySecret)`.
     expect(source).toMatch(
-      /const\s+keySecret\s*=\s*process\.env\.RAZORPAY_KEY_SECRET\s*;?\s*\n\s*if\s*\(\s*!\s*keySecret\s*\)/,
+      /const\s+keySecret\s*=\s*this\.razorpayClient\.getKeySecret\(\)\s*;?\s*\n\s*if\s*\(\s*!\s*keySecret\s*\)/,
     );
   });
 

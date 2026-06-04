@@ -52,6 +52,9 @@ export const TAX_TEMPLATE_KEYS = {
     ewbGenerated:         'tax.seller.ewb_generated.email',
     ewbExpired:           'tax.seller.ewb_expired.email',
     settlementTcs:        'tax.seller.settlement_tcs_collected.email',
+    // Phase 161 (TDS 194-O exempt audit #13) — seller learns their §194-O TDS
+    // exemption was granted / revoked (their next payout's net amount changes).
+    tds194oExemptionChanged: 'tax.seller.tds194o_exemption_changed.email',
   },
   admin: {
     gstr8FilingReminder:  'tax.admin.gstr8_filing_due.email',
@@ -219,6 +222,29 @@ export class TaxNotificationService {
         documentDate: formatIstDate(args.documentDate),
       },
       eventId: args.documentId,
+    });
+  }
+
+  /**
+   * Phase 161 (TDS 194-O exempt audit #13) — seller's §194-O TDS exemption
+   * was granted or revoked. Best-effort; never blocks the exemption mutation.
+   */
+  async sellerTds194OExemptionChanged(args: {
+    sellerId: string;
+    exempt: boolean;
+    reason?: string | null;
+    effectiveFrom?: Date | null;
+  }): Promise<void> {
+    await this.safeNotify({
+      eventClass: 'tax.settlement',
+      templateKey: TAX_TEMPLATE_KEYS.seller.tds194oExemptionChanged,
+      recipientId: args.sellerId,
+      vars: {
+        status: args.exempt ? 'exempt' : 'not exempt',
+        reason: args.reason ?? '',
+        effectiveFrom: args.effectiveFrom ? formatIstDate(args.effectiveFrom) : '',
+      },
+      eventId: `tds194o-exempt:${args.sellerId}:${args.exempt ? 'on' : 'off'}`,
     });
   }
 

@@ -119,6 +119,14 @@ async function bootstrap() {
   app.use(compression({
     threshold: 1024,  // Only compress responses > 1KB
     level: 6,         // Balanced speed vs compression ratio
+    // Never buffer Server-Sent Events: the compression middleware holds
+    // bytes until its buffer fills, which stalls SSE frames until ~64KB
+    // accumulates. Skip text/event-stream so portal streams flush live.
+    filter: (req, res) => {
+      const contentType = String(res.getHeader('Content-Type') ?? '');
+      if (contentType.includes('text/event-stream')) return false;
+      return compression.filter(req, res);
+    },
   }));
 
   // Follow-up #H40 — parse incoming Cookie headers into req.cookies so

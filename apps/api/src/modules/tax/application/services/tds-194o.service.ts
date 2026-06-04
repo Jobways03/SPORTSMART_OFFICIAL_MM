@@ -127,6 +127,9 @@ export class Tds194OService {
         panLast4: true,
         panVerified: true,
         is194OExempt: true,
+        // Phase 161 (audit B1) — effective-dating for the period-window check.
+        exempt194OEffectiveFrom: true,
+        exempt194OEffectiveTo: true,
       },
     });
     if (!seller) {
@@ -135,10 +138,14 @@ export class Tds194OService {
       );
     }
 
-    if (seller.is194OExempt) {
+    // Phase 161 (audit B1/#10) — exempt for THIS filing period only when the
+    // exemption window is active at the period start. Period-keyed (not the
+    // live flag at compute moment), so a mid-cycle admin toggle can't change
+    // an already-started period's treatment — the iteration-order race is gone.
+    if (seller.is194OExempt && isExemptForFilingPeriod(seller, args.filingPeriod)) {
       this.logger.log(
-        `Section 194-O exemption attested for seller ${args.sellerId} — ` +
-          `no TDS ledger row written for period ${args.filingPeriod}.`,
+        `Section 194-O exemption active for seller ${args.sellerId} for period ` +
+          `${args.filingPeriod} — no TDS ledger row written.`,
       );
       return {
         ledger: null,
@@ -453,5 +460,26 @@ function previousQuarter(filingPeriod: string): string | null {
   const q = parseInt(m[2]!, 10);
   if (q === 1) return `${y - 1}-Q4`;
   return `${y}-Q${q - 1}`;
+}
+
+/**
+ * Phase 161 (audit B1/#10) — is the §194-O exemption active for the given
+ * filing period? True when the exemption window covers the period START:
+ *   effectiveFrom (null = no lower bound) ≤ periodStart < effectiveTo
+ *   (null = open-ended).
+ * Period-keyed, so a mid-cycle toggle with effectiveFrom = now does NOT
+ * retro-exempt a period that already began (eliminates the iteration race);
+ * a deliberate back-dated window applies deterministically to all sellers.
+ */
+export function isExemptForFilingPeriod(
+  eff: { exempt194OEffectiveFrom: Date | null; exempt194OEffectiveTo: Date | null },
+  filingPeriod: string,
+): boolean {
+  const { startUtc } = quarterRangeUtc(filingPeriod);
+  const from = eff.exempt194OEffectiveFrom;
+  const to = eff.exempt194OEffectiveTo;
+  if (from && from.getTime() > startUtc.getTime()) return false;
+  if (to && to.getTime() <= startUtc.getTime()) return false;
+  return true;
 }
 

@@ -82,6 +82,15 @@ export class DiscountFraudService {
         ),
       );
     }
+    // Phase 245 (#20) — also limit by device. An attacker rotating IPs via
+    // proxies but reusing the same client was unbounded; a device-stable id
+    // closes that. (Conversely a shared-NAT IP no longer collateral-blocks
+    // everyone, since the device dimension is independent.)
+    if (ctx.deviceId) {
+      filters.push(
+        this.countInvalidSince('deviceId', ctx.deviceId, windowStart),
+      );
+    }
     if (filters.length === 0) return;
 
     const results = await Promise.all(filters);
@@ -184,7 +193,9 @@ export class DiscountFraudService {
         code_attempted,
         COUNT(*) AS invalid_count,
         COUNT(DISTINCT customer_id) AS distinct_customers,
-        COUNT(DISTINCT ip_address) AS distinct_ips
+        -- Phase 245 — ip_address is nulled post-Phase-62; the salted
+        -- ip_hash is the real per-source signal.
+        COUNT(DISTINCT ip_hash) AS distinct_ips
       FROM coupon_attempts
       WHERE result IN ('INVALID', 'BLOCKED', 'NOT_ELIGIBLE', 'EXPIRED')
         AND created_at >= ${range.fromDate}
@@ -247,6 +258,10 @@ export class DiscountFraudService {
     result?: CouponAttemptResult;
     page: number;
     limit: number;
+    // Phase 245 (#13) — full customerId/deviceId are PII. Mask by default;
+    // only a caller holding discounts.abuse.read with an explicit reveal
+    // grant gets the raw values (server-side, not client-truncated).
+    revealPii?: boolean;
   }) {
     const where: any = {};
     if (args.fromDate || args.toDate) {
@@ -265,7 +280,99 @@ export class DiscountFraudService {
       }),
       this.prisma.couponAttempt.count({ where }),
     ]);
-    return { items, total, page: args.page, limit: args.limit };
+    const out = args.revealPii
+      ? items
+      : items.map((it) => ({
+          ...it,
+          customerId: this.maskId(it.customerId),
+          deviceId: this.maskId(it.deviceId),
+        }));
+    return { items: out, total, page: args.page, limit: args.limit };
+  }
+
+  private maskId(id: string | null): string | null {
+    if (!id) return id;
+    return id.length <= 4 ? '***' : `***${id.slice(-4)}`;
+  }
+
+  /**
+   * Phase 245 (abuse-detection audit #1) — per-customer-per-coupon
+   * concentration: the core "coupons used disproportionately by single
+   * accounts" signal the flow is named for. For each coupon, returns the
+   * customers whose REDEEMED share of that coupon's total redemptions is
+   * above `thresholdPct` (default 20%) with at least `minRedemptions`
+   * (default 5) total. Read-only telemetry — the full alert/FSM/scoring
+   * subsystem is surfaced as follow-up; this gives risk the actionable
+   * signal today. Customer ids are masked unless revealPii.
+   */
+  async getCouponConcentration(args: {
+    fromDate: Date;
+    toDate: Date;
+    minRedemptions?: number;
+    thresholdPct?: number;
+    limit?: number;
+    revealPii?: boolean;
+  }): Promise<
+    Array<{
+      discountId: string;
+      discountCode: string | null;
+      customerId: string | null;
+      customerRedemptions: number;
+      totalRedemptions: number;
+      sharePct: number;
+    }>
+  > {
+    const minRedemptions = Math.max(1, args.minRedemptions ?? 5);
+    const thresholdPct = Math.min(100, Math.max(1, args.thresholdPct ?? 20));
+    const limit = Math.min(200, Math.max(1, args.limit ?? 50));
+    type Row = {
+      discount_id: string;
+      discount_code: string | null;
+      customer_id: string;
+      customer_redemptions: bigint;
+      total_redemptions: bigint;
+      share_pct: number;
+    };
+    const rows = await this.prisma.$queryRaw<Row[]>`
+      WITH coupon_totals AS (
+        SELECT discount_id, COUNT(*) AS total
+        FROM discount_redemptions
+        WHERE status = 'REDEEMED'
+          AND created_at >= ${args.fromDate}
+          AND created_at <= ${args.toDate}
+        GROUP BY discount_id
+      ),
+      per_customer AS (
+        SELECT discount_id, customer_id, COUNT(*) AS cust
+        FROM discount_redemptions
+        WHERE status = 'REDEEMED'
+          AND created_at >= ${args.fromDate}
+          AND created_at <= ${args.toDate}
+        GROUP BY discount_id, customer_id
+      )
+      SELECT
+        pc.discount_id,
+        d.code AS discount_code,
+        pc.customer_id,
+        pc.cust AS customer_redemptions,
+        ct.total AS total_redemptions,
+        ROUND(100.0 * pc.cust / NULLIF(ct.total, 0), 2) AS share_pct
+      FROM per_customer pc
+      JOIN coupon_totals ct ON ct.discount_id = pc.discount_id
+      LEFT JOIN discounts d ON d.id = pc.discount_id
+      WHERE ct.total >= ${minRedemptions}
+        AND (100.0 * pc.cust / NULLIF(ct.total, 0)) >= ${thresholdPct}
+      ORDER BY share_pct DESC
+      LIMIT ${limit}
+    `;
+    return rows.map((r) => ({
+      discountId: r.discount_id,
+      discountCode: r.discount_code,
+      customerId: args.revealPii ? r.customer_id : this.maskId(r.customer_id),
+      customerRedemptions: Number(r.customer_redemptions),
+      totalRedemptions: Number(r.total_redemptions),
+      sharePct: Number(r.share_pct),
+    }));
   }
 
   // ────────────────────────────────────────────────────────────
@@ -273,13 +380,14 @@ export class DiscountFraudService {
   // ────────────────────────────────────────────────────────────
 
   private async countInvalidSince(
-    column: 'customerId' | 'ipAddress' | 'ipHash',
+    // Phase 245 (#20) — deviceId joins customerId/ipHash as a rate-limit
+    // dimension. (Single-query count+oldest, audit #21, was rated
+    // acceptable/BY-DESIGN; the tiny skew window is harmless for a limiter,
+    // so we keep the two-read form the indexes already serve well.)
+    column: 'customerId' | 'ipHash' | 'deviceId',
     value: string,
     since: Date,
   ): Promise<{ count: number; oldest?: Date }> {
-    // We need the oldest attempt within the window so retry-after
-    // can be computed accurately. Two queries are cheap given the
-    // composite indexes we created.
     const where: any = {
       result: { in: ['INVALID', 'EXPIRED', 'NOT_ELIGIBLE'] },
       createdAt: { gte: since },

@@ -1,5 +1,8 @@
 import 'reflect-metadata';
-import { EWayBillService } from '../../src/modules/tax/application/services/eway-bill.service';
+import {
+  EWayBillService,
+  EWayBillNotEligibleError,
+} from '../../src/modules/tax/application/services/eway-bill.service';
 
 // Phase 15 GST — EWayBillService tests.
 //
@@ -17,10 +20,20 @@ interface MockPrisma {
   taxDocument: { findFirst: jest.Mock; findUnique: jest.Mock };
   subOrder: { findUnique: jest.Mock };
   orderItem: { findMany: jest.Mock };
+  // Phase 89 — adminOverride/generate/cancel now write an audit-log row and
+  // (for high-value overrides) read prior actors back from it.
+  eWayBillAuditLog: { create: jest.Mock; findFirst: jest.Mock };
+  // Phase 89/160 — generate now takes a SELECT ... FOR UPDATE row lock inside
+  // a $transaction before the provider call.
+  $queryRaw: jest.Mock;
+  $transaction: jest.Mock;
 }
 
 interface MockTaxConfig {
   getNumber: jest.Mock;
+  // Phase 160 — kill switch read via getBoolean('eway_bill_enabled', true).
+  getBoolean: jest.Mock;
+  getString: jest.Mock;
 }
 
 interface MockProvider {
@@ -52,9 +65,22 @@ function makeService(opts: { threshold?: number } = {}): {
     orderItem: {
       findMany: jest.fn().mockResolvedValue([]),
     },
+    eWayBillAuditLog: {
+      create: jest.fn().mockResolvedValue({ id: 'audit-1' }),
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
+    $queryRaw: jest.fn().mockResolvedValue([]),
+    // Default $transaction passes the SAME prisma mock in as `tx`, so the
+    // in-transaction reads/writes (tx.eWayBill.*) resolve through the very
+    // mocks each test already configures.
+    $transaction: jest.fn(),
   };
+  prisma.$transaction.mockImplementation(async (cb: any) => cb(prisma));
   const taxConfig: MockTaxConfig = {
     getNumber: jest.fn().mockResolvedValue(opts.threshold ?? 50_00_00),
+    // Kill switch defaults to enabled so generate/cancel proceed.
+    getBoolean: jest.fn().mockResolvedValue(true),
+    getString: jest.fn().mockResolvedValue(''),
   };
   const provider: MockProvider = {
     name: 'stub',
@@ -208,7 +234,7 @@ describe('EWayBillService.generate', () => {
 
   it('calls provider and persists EWB number on success', async () => {
     const { service, prisma, provider } = makeService();
-    prisma.eWayBill.findFirst.mockResolvedValue({
+    const requiredRow = {
       id: 'ewb-ok',
       status: 'REQUIRED',
       consignmentValueInPaise: 75_00_00n,
@@ -223,7 +249,16 @@ describe('EWayBillService.generate', () => {
       toStateCode: null,
       taxDocumentId: null,
       supplierGstin: '29ABCDE1234F1Z5',
-    });
+    };
+    prisma.eWayBill.findFirst.mockResolvedValue(requiredRow);
+    // Phase 89 — generate re-reads the row under a FOR UPDATE lock inside the
+    // $transaction before minting; serve the same REQUIRED row to that read.
+    prisma.eWayBill.findUnique.mockResolvedValue(requiredRow);
+    // Phase 89 — classifyForSubOrder now RE-derives `required` from the live
+    // consignment value (no invoice → order-item sum), and downgrades a stale
+    // REQUIRED row to NOT_REQUIRED if it computes below threshold. Feed an
+    // above-threshold line sum so the row stays REQUIRED and generate proceeds.
+    prisma.orderItem.findMany.mockResolvedValue([{ totalPriceInPaise: 75_00_00n }]);
     prisma.eWayBill.update
       .mockImplementationOnce(async (args: any) => ({
         // Move-to-PENDING update.
@@ -268,7 +303,7 @@ describe('EWayBillService.generate', () => {
 
   it('marks FAILED + increments retryCount on provider error', async () => {
     const { service, prisma, provider } = makeService();
-    prisma.eWayBill.findFirst.mockResolvedValue({
+    const requiredRow = {
       id: 'ewb-f',
       status: 'REQUIRED',
       consignmentValueInPaise: 75_00_00n,
@@ -284,7 +319,12 @@ describe('EWayBillService.generate', () => {
       taxDocumentId: null,
       supplierGstin: '29ABCDE1234F1Z5',
       retryCount: 0,
-    });
+    };
+    prisma.eWayBill.findFirst.mockResolvedValue(requiredRow);
+    // In-transaction FOR UPDATE re-read serves the same REQUIRED row.
+    prisma.eWayBill.findUnique.mockResolvedValue(requiredRow);
+    // Keep the row REQUIRED through re-classification (see calls-provider test).
+    prisma.orderItem.findMany.mockResolvedValue([{ totalPriceInPaise: 75_00_00n }]);
     prisma.eWayBill.update
       .mockImplementationOnce(async () => ({
         id: 'ewb-f',
@@ -386,8 +426,14 @@ describe('EWayBillService.cancel', () => {
       cancelledAt: new Date('2026-05-13T10:00:00Z'),
       rawResponseJson: {},
     });
+    // Phase 160 two-phase cancel: the CANCELLATION_PENDING update result is
+    // passed forward to driveCancelToCompletion, which reads ewbNumber off it
+    // for the provider call. A real row keeps its untouched columns, so the
+    // mock must carry ewbNumber/ewbDate through every update.
     prisma.eWayBill.update.mockImplementation(async (args: any) => ({
       id: 'ewb-cw',
+      ewbNumber: 'EWB-STUB-cw',
+      ewbDate,
       status: 'CANCELLED',
       ...args.data,
     }));
@@ -446,16 +492,19 @@ describe('EWayBillService.canShip', () => {
     expect(r.reason).toMatch(/generation required/);
   });
 
-  it('allows REQUIRED with admin override', async () => {
+  it('allows OVERRIDDEN (admin override)', async () => {
+    // Phase 160 — adminOverride flips status to OVERRIDDEN (it no longer
+    // leaves status=REQUIRED + an overrideAdminId flag). canShip allows
+    // OVERRIDDEN and surfaces the status itself as the reason.
     const { service, prisma } = makeService();
     prisma.eWayBill.findFirst.mockResolvedValue({
-      status: 'REQUIRED',
+      status: 'OVERRIDDEN',
       overrideAdminId: 'admin-1',
       overrideReason: 'manual EWB email-sent',
     });
     const r = await service.canShip('sub-ovr');
     expect(r.allowed).toBe(true);
-    expect(r.reason).toMatch(/admin override by admin-1/);
+    expect(r.reason).toBe('OVERRIDDEN');
   });
 
   it('blocks FAILED without override', async () => {
@@ -478,23 +527,29 @@ describe('EWayBillService.adminOverride', () => {
         ewbId: 'nope',
         adminId: 'admin-1',
         reason: 'r',
+        reasonCategory: 'URGENT_DISPATCH',
       }),
     ).rejects.toThrow(/not found/);
   });
 
-  it('no-ops on NOT_REQUIRED', async () => {
+  it('rejects on NOT_REQUIRED', async () => {
+    // Phase 160 (audit #13) — overriding a NOT_REQUIRED EWB is meaningless
+    // (no ship-permission to bypass), so it now throws explicitly instead of
+    // silently no-opping (which the UI could misread as success).
     const { service, prisma } = makeService();
     prisma.eWayBill.findUnique.mockResolvedValue({
       id: 'ewb-nr',
       status: 'NOT_REQUIRED',
     });
-    const result = await service.adminOverride({
-      ewbId: 'ewb-nr',
-      adminId: 'admin-1',
-      reason: 'r',
-    });
+    await expect(
+      service.adminOverride({
+        ewbId: 'ewb-nr',
+        adminId: 'admin-1',
+        reason: 'r',
+        reasonCategory: 'URGENT_DISPATCH',
+      }),
+    ).rejects.toBeInstanceOf(EWayBillNotEligibleError);
     expect(prisma.eWayBill.update).not.toHaveBeenCalled();
-    expect(result.id).toBe('ewb-nr');
   });
 
   it('stamps override fields on REQUIRED row', async () => {
@@ -502,6 +557,10 @@ describe('EWayBillService.adminOverride', () => {
     prisma.eWayBill.findUnique.mockResolvedValue({
       id: 'ewb-req',
       status: 'REQUIRED',
+      // Phase 89 — the OVERRIDDEN event payload reads consignmentValueInPaise
+      // off the row (and the high-value separation-of-duty check compares it);
+      // a real REQUIRED row always carries this.
+      consignmentValueInPaise: 75_00_00n,
     });
     prisma.eWayBill.update.mockImplementation(async (args: any) => ({
       id: 'ewb-req',
@@ -513,6 +572,7 @@ describe('EWayBillService.adminOverride', () => {
       ewbId: 'ewb-req',
       adminId: 'admin-1',
       reason: 'manual EWB issued offline',
+      reasonCategory: 'URGENT_DISPATCH',
     });
     expect(result.overrideAdminId).toBe('admin-1');
     expect(result.overrideReason).toBe('manual EWB issued offline');

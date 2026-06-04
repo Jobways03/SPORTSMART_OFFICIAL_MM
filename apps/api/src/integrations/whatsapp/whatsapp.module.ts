@@ -5,6 +5,8 @@ import { WhatsappSessionService } from './services/whatsapp-session.service';
 import { WhatsappWebhookController } from './controllers/whatsapp-webhook.controller';
 import { PrismaModule } from '../../bootstrap/database/prisma.module';
 import { EnvModule } from '../../bootstrap/env/env.module';
+// Phase 191 (#10) — audit signature-failures + opt-out flips.
+import { AuditModule } from '../../modules/audit/module';
 
 /**
  * Phase 6 (2026-05-16) — WhatsApp integration module.
@@ -20,7 +22,7 @@ import { EnvModule } from '../../bootstrap/env/env.module';
  * inherits opt-out + 24h-window enforcement.
  */
 @Module({
-  imports: [PrismaModule, EnvModule],
+  imports: [PrismaModule, EnvModule, AuditModule],
   controllers: [WhatsappWebhookController],
   providers: [WhatsAppClient, WhatsAppAdapter, WhatsappSessionService],
   exports: [WhatsAppClient, WhatsAppAdapter, WhatsappSessionService],

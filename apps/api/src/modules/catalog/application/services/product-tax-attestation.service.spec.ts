@@ -43,6 +43,17 @@ function makeService(initial: FakeProduct) {
       }),
       findMany: jest.fn(async () => logs),
     },
+    // Phase 161 (HSN Master audit B1/B4) — attestation now requires the
+    // product's HSN to be an active master row. Default mock returns a row;
+    // tests override to null to assert the refusal.
+    hsnMaster: {
+      findFirst: jest.fn(async () => ({ id: 'hsn-row-1' })),
+    },
+    // Phase 161 (UQC Master audit B1/B4) — a declared UQC must be an active
+    // master row. Default returns a row; tests override to null.
+    uqcMaster: {
+      findFirst: jest.fn(async () => ({ id: 'uqc-row-1' })),
+    },
   };
   const prisma: any = {
     $transaction: jest.fn(async (fn: (tx: any) => Promise<any>) => fn(txClient)),
@@ -121,6 +132,22 @@ describe('ProductTaxAttestationService.attest', () => {
     await expect(
       service.attest({ productId: 'p1', actorId: 'admin-1', actorRole: 'ADMIN' }),
     ).rejects.toThrow(/gstRateBps/);
+  });
+
+  it('refuses attest when HSN is not an active master row (B1/B4)', async () => {
+    const { service, txClient } = makeService(baseProduct);
+    txClient.hsnMaster.findFirst = jest.fn().mockResolvedValue(null);
+    await expect(
+      service.attest({ productId: 'p1', actorId: 'admin-1', actorRole: 'ADMIN' }),
+    ).rejects.toThrow(/not an active code in the HSN master/);
+  });
+
+  it('refuses attest when the declared UQC is not an active master row (B1/B4)', async () => {
+    const { service, txClient } = makeService(baseProduct);
+    txClient.uqcMaster.findFirst = jest.fn().mockResolvedValue(null);
+    await expect(
+      service.attest({ productId: 'p1', actorId: 'admin-1', actorRole: 'ADMIN' }),
+    ).rejects.toThrow(/not an active code in the UQC master/);
   });
 
   it('accepts EXEMPT product without HSN or rate', async () => {

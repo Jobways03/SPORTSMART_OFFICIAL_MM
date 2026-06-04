@@ -27,12 +27,15 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { computeValidUntil } from '../../domain/eway-bill-validity';
-import type {
-  EWayBillCancelInput,
-  EWayBillCancelResult,
-  EWayBillGenerateInput,
-  EWayBillGenerateResult,
-  EWayBillProvider,
+import {
+  EWayBillProviderError,
+  type EWayBillCancelInput,
+  type EWayBillCancelResult,
+  type EWayBillGenerateInput,
+  type EWayBillGenerateResult,
+  type EWayBillProvider,
+  type EWayBillUpdatePartBInput,
+  type EWayBillUpdatePartBResult,
 } from './eway-bill-provider';
 
 interface CachedAuthToken {
@@ -204,9 +207,7 @@ export class NicEWayBillProvider implements EWayBillProvider {
     });
     const responseJson = (await res.json()) as Record<string, unknown>;
     if (!res.ok || responseJson?.['status_cd'] !== '1') {
-      throw new Error(
-        `NIC generate failed: ${(responseJson?.['error'] as any) ?? res.status}`,
-      );
+      throw this.classifyNicError(res.status, responseJson, 'generate');
     }
     const data = responseJson?.['data'] as Record<string, unknown> | undefined;
     const ewbNumber = String(data?.['ewayBillNo'] ?? '');
@@ -251,15 +252,129 @@ export class NicEWayBillProvider implements EWayBillProvider {
     });
     const responseJson = (await res.json()) as Record<string, unknown>;
     if (!res.ok || responseJson?.['status_cd'] !== '1') {
-      throw new Error(
-        `NIC cancel failed: ${(responseJson?.['error'] as any) ?? res.status}`,
-      );
+      throw this.classifyNicError(res.status, responseJson, 'cancel');
     }
+    const data = responseJson?.['data'] as Record<string, unknown> | undefined;
     return {
-      cancelledAt: new Date(),
+      cancelledAt: data?.['cancelDate']
+        ? parseNicIstDate(String(data['cancelDate']))
+        : new Date(),
+      // Phase 160 (#7) — NIC echoes the EWB number on cancel; that + the
+      // cancel date is the cancellation reference for reconciliation.
+      providerCancelReference: data?.['ewayBillNo']
+        ? String(data['ewayBillNo'])
+        : null,
       rawResponseJson: responseJson as any,
     };
   }
+
+  // Phase 160 (audit #18) — NIC Part-B update via action=UPDATEPARTB. NIC
+  // re-issues the validity; we return the new validUpto.
+  async updatePartB(
+    input: EWayBillUpdatePartBInput,
+  ): Promise<EWayBillUpdatePartBResult> {
+    const token = await this.authToken();
+    const baseUrl = this.env.getString('NIC_API_BASE_URL', '');
+    const res = await fetch(`${baseUrl}/ewaybillapi/v1.03/ewayapi`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authtoken: token,
+        gstin: this.env.getString('NIC_TAXPAYER_GSTIN', ''),
+        action: 'UPDATEPARTB',
+      },
+      body: JSON.stringify({
+        ewbNo: Number(input.ewbNumber),
+        vehicleNo: input.vehicleNumber ?? '',
+        transMode:
+          input.transportMode === 'RAIL'
+            ? '2'
+            : input.transportMode === 'AIR'
+              ? '3'
+              : input.transportMode === 'SHIP'
+                ? '4'
+                : '1',
+        transDocNo: input.transporterId ?? '',
+        transDistance: input.distanceKm ?? 50,
+        reasonCode: '4', // Others — service-side reason in reasonRem
+        reasonRem: input.reason,
+      }),
+    });
+    const responseJson = (await res.json()) as Record<string, unknown>;
+    if (!res.ok || responseJson?.['status_cd'] !== '1') {
+      throw this.classifyNicError(res.status, responseJson, 'updatePartB');
+    }
+    const data = responseJson?.['data'] as Record<string, unknown> | undefined;
+    const validUntil = parseNicIstDate(String(data?.['validUpto'] ?? ''));
+    return {
+      validUntil: Number.isNaN(validUntil.getTime())
+        ? computeValidUntil(new Date(), input.distanceKm ?? 50)
+        : validUntil,
+      rawResponseJson: responseJson as any,
+    };
+  }
+
+  /**
+   * Phase 160 (#11) — map an HTTP status + NIC error payload to a typed,
+   * retry-classified error. NIC returns errors as `error: {errorCodes:"238"}`
+   * or a string. Token expiry clears the auth cache.
+   */
+  private classifyNicError(
+    httpStatus: number,
+    raw: Record<string, unknown>,
+    op: 'generate' | 'cancel' | 'updatePartB',
+  ): EWayBillProviderError {
+    const nicCode = extractNicErrorCode(raw['error']);
+    const detail = JSON.stringify(raw['error'] ?? raw);
+    if (httpStatus === 401) {
+      this.cachedAuth = null;
+      return new EWayBillProviderError(
+        `NIC ${op} auth expired (401); will refresh on retry`,
+        'AUTH',
+        { nicErrorCode: nicCode, httpStatus },
+      );
+    }
+    if (httpStatus === 429) {
+      return new EWayBillProviderError(
+        `NIC ${op} rate-limited (429); back off + retry`,
+        'RATE_LIMIT',
+        { nicErrorCode: nicCode, httpStatus },
+      );
+    }
+    if (httpStatus >= 500) {
+      return new EWayBillProviderError(
+        `NIC ${op} server error (HTTP ${httpStatus}): ${detail}`,
+        'TRANSIENT',
+        { nicErrorCode: nicCode, httpStatus },
+      );
+    }
+    // 4xx / status_cd != 1 = a data/validation error (invalid GSTIN, bad
+    // vehicle format, missing HSN). Retrying the same payload won't help.
+    return new EWayBillProviderError(
+      `NIC ${op} rejected (HTTP ${httpStatus}, code ${nicCode ?? 'n/a'}): ${detail}`,
+      'PERMANENT',
+      { nicErrorCode: nicCode, httpStatus },
+    );
+  }
+}
+
+/**
+ * Phase 160 (#11) — pull the NIC error code from the `error` field. NIC
+ * returns `{ errorCodes: "238" }`, `{ error_cd: "238" }`, or a flat string
+ * like "238 : Invalid vehicle number". Returns null when not parseable.
+ */
+function extractNicErrorCode(err: unknown): string | null {
+  if (!err) return null;
+  if (typeof err === 'object') {
+    const o = err as Record<string, unknown>;
+    const code = o.errorCodes ?? o.error_cd ?? o.errorCode ?? o.code;
+    if (code != null) return String(code).split(',')[0]!.trim();
+  }
+  if (typeof err === 'string') {
+    const m = /(\d{2,4})/.exec(err);
+    if (m) return m[1]!;
+  }
+  return null;
 }
 
 /**

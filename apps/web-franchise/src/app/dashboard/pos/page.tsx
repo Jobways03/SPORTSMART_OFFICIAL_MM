@@ -3,10 +3,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   franchisePosService,
+  PosCashReconciliation,
   PosDailyReconciliation,
   PosPaymentMethod,
   PosRecordSaleItemPayload,
+  PosRefundMethod,
+  PosReturnCondition,
   PosSale,
+  PosSaleItem,
   PosSaleType,
 } from '@/services/pos.service';
 import { useModal } from '@sportsmart/ui';
@@ -1410,29 +1414,34 @@ try {
                         >
                           View
                         </button>
+                        {/* Void only for COMPLETED — you can't void a sale
+                            that's already partly returned. */}
                         {s.status === 'COMPLETED' && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => setVoidSale(s)}
-                              style={{
-                                ...actionBtnStyle,
-                                color: '#991b1b',
-                              }}
-                            >
-                              Void
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => openReturn(s)}
-                              style={{
-                                ...actionBtnStyle,
-                                color: '#92400e',
-                              }}
-                            >
-                              Return
-                            </button>
-                          </>
+                          <button
+                            type="button"
+                            onClick={() => setVoidSale(s)}
+                            style={{
+                              ...actionBtnStyle,
+                              color: '#991b1b',
+                            }}
+                          >
+                            Void
+                          </button>
+                        )}
+                        {/* Return supports cumulative returns, so it stays
+                            available from PARTIALLY_RETURNED too. */}
+                        {(s.status === 'COMPLETED' ||
+                          s.status === 'PARTIALLY_RETURNED') && (
+                          <button
+                            type="button"
+                            onClick={() => openReturn(s)}
+                            style={{
+                              ...actionBtnStyle,
+                              color: '#92400e',
+                            }}
+                          >
+                            Return
+                          </button>
                         )}
                       </div>
                     </td>
@@ -1507,10 +1516,11 @@ try {
 // ══════════════════════════════════════════════════════════════
 
 function DailyReportTab() {
-  const { notify, confirmDialog } = useModal();
-const [date, setDate] = useState(todayIso());
+  const { notify } = useModal();
+  const [date, setDate] = useState(todayIso());
   const [report, setReport] = useState<PosDailyReconciliation | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
 
   const load = async () => {
 setIsLoading(true);
@@ -1525,6 +1535,31 @@ setIsLoading(true);
       }
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Phase 159s — fetch the server-rendered CSV (raw text/csv, not a JSON
+  // envelope) and trigger a browser download.
+  const downloadCsv = async () => {
+    setIsDownloading(true);
+    try {
+      const blob = await franchisePosService.getDailyReportCsv(date);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `pos-report-${date}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        void notify(err.body.message || 'Failed to download CSV');
+      } else {
+        void notify('Failed to download CSV');
+      }
+    } finally {
+      setIsDownloading(false);
     }
   };
 
@@ -1571,6 +1606,14 @@ setIsLoading(true);
           >
             Generate Closure Report
           </button>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={downloadCsv}
+            disabled={!report || isDownloading}
+          >
+            {isDownloading ? 'Downloading...' : 'Download CSV'}
+          </button>
         </div>
       </div>
 
@@ -1592,7 +1635,7 @@ setIsLoading(true);
               color="#2563eb"
             />
             <KpiCard
-              label="Total Net Amount"
+              label="Net (after refunds)"
               value={formatInr(report.totalNetAmount)}
               color="#059669"
             />
@@ -1605,6 +1648,37 @@ setIsLoading(true);
               label="Total Discount"
               value={formatInr(report.totalDiscountAmount)}
               color="#d97706"
+            />
+          </div>
+
+          {/* Phase 159s — refund / void / return KPIs the backend now returns. */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
+              gap: 16,
+              marginBottom: 16,
+            }}
+          >
+            <KpiCard
+              label="Refund Total"
+              value={formatInr(report.refundTotal)}
+              color="#dc2626"
+            />
+            <KpiCard
+              label="Voided Sales"
+              value={`${report.voidedSales.count} · ${formatInr(report.voidedSales.amount)}`}
+              color="#991b1b"
+            />
+            <KpiCard
+              label="Returned Sales"
+              value={String(report.returnedSales.count)}
+              color="#92400e"
+            />
+            <KpiCard
+              label="Total GST"
+              value={formatInr(report.tax.total)}
+              color="#0f766e"
             />
           </div>
 
@@ -1681,6 +1755,35 @@ setIsLoading(true);
             </div>
           </div>
 
+          {/* Phase 159s — GST breakdown (CGST/SGST/IGST/Total). POS sales are
+              intra-state so CGST+SGST populate and IGST is usually 0. */}
+          <div className="card">
+            <h2>GST Breakdown</h2>
+            <div
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+                gap: 16,
+              }}
+            >
+              {(
+                [
+                  { label: 'CGST', value: report.tax.cgst },
+                  { label: 'SGST', value: report.tax.sgst },
+                  { label: 'IGST', value: report.tax.igst },
+                  { label: 'Total GST', value: report.tax.total },
+                ] as Array<{ label: string; value: number }>
+              ).map((row) => (
+                <div key={row.label}>
+                  <div style={labelStyle}>{row.label}</div>
+                  <div style={{ fontSize: 20, fontWeight: 700, marginTop: 4 }}>
+                    {formatInr(row.value)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="card">
             <h2>Inventory Reconciliation</h2>
             <div
@@ -1729,6 +1832,21 @@ setIsLoading(true);
                     textTransform: 'uppercase',
                   }}
                 >
+                  Items Voided
+                </div>
+                <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>
+                  {report.inventoryReconciliation.totalItemsVoided}
+                </div>
+              </div>
+              <div>
+                <div
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: '#6b7280',
+                    textTransform: 'uppercase',
+                  }}
+                >
                   Net Movement
                 </div>
                 <div style={{ fontSize: 22, fontWeight: 700, marginTop: 4 }}>
@@ -1755,11 +1873,303 @@ setIsLoading(true);
               </div>
             </div>
           </div>
+
+          {/* Phase 242 — cash-vs-bank reconciliation. Expected cash is
+              server-computed; a previously-submitted row pre-renders. */}
+          <CashReconciliationForm
+            key={`${date}:${report.cashReconciliation?.id ?? 'new'}`}
+            businessDate={date}
+            expectedCashInPaise={report.expectedCashInPaise}
+            existing={report.cashReconciliation}
+            onSubmitted={load}
+          />
         </>
       ) : (
         <div className="card">No report data available.</div>
       )}
     </>
+  );
+}
+
+// Paise (as a numeric string from the API) → a "₹X,XXX.XX" display string.
+function formatPaise(paise: string | null | undefined): string {
+  if (paise == null) return formatInr(0);
+  const n = Number(paise);
+  return formatInr(isNaN(n) ? 0 : n / 100);
+}
+
+// Phase 242 — cash reconciliation form. The server recomputes expected cash
+// authoritatively, so we only ever SEND actual/bank/reference/notes. Variance
+// is previewed client-side (actual − expected) for immediate feedback, but the
+// authoritative variance + MATCHED/VARIANCE verdict come back from the server.
+function CashReconciliationForm({
+  businessDate,
+  expectedCashInPaise,
+  existing,
+  onSubmitted,
+}: {
+  businessDate: string;
+  expectedCashInPaise: string;
+  existing: PosCashReconciliation | null;
+  onSubmitted: () => void;
+}) {
+  const { notify } = useModal();
+  const expectedRupees = Number(expectedCashInPaise || '0') / 100;
+
+  // Pre-fill from a prior submission (rupee strings for the ₹ inputs).
+  const [actualCash, setActualCash] = useState(
+    existing ? String(Number(existing.actualCashInPaise) / 100) : '',
+  );
+  const [bankDeposit, setBankDeposit] = useState(
+    existing ? String(Number(existing.bankDepositInPaise) / 100) : '',
+  );
+  const [bankReference, setBankReference] = useState(
+    existing?.bankDepositReference ?? '',
+  );
+  const [notes, setNotes] = useState(existing?.notes ?? '');
+  const [isSaving, setIsSaving] = useState(false);
+  const [result, setResult] = useState<PosCashReconciliation | null>(existing);
+
+  const actualRupees = actualCash.trim() === '' ? null : Number(actualCash);
+  const previewVariance =
+    actualRupees == null || isNaN(actualRupees)
+      ? null
+      : actualRupees - expectedRupees;
+
+  const submit = async () => {
+    if (actualRupees == null || isNaN(actualRupees) || actualRupees < 0) {
+      void notify('Enter the actual cash counted (₹)');
+      return;
+    }
+    const bankRupees =
+      bankDeposit.trim() === '' ? 0 : Number(bankDeposit);
+    if (isNaN(bankRupees) || bankRupees < 0) {
+      void notify('Bank deposit must be a non-negative amount');
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const res = await franchisePosService.submitReconciliation({
+        businessDate,
+        actualCashInPaise: Math.round(actualRupees * 100),
+        bankDepositInPaise: Math.round(bankRupees * 100),
+        bankDepositReference: bankReference.trim() || undefined,
+        notes: notes.trim() || undefined,
+      });
+      if (res.data) {
+        setResult(res.data);
+        // Refresh the parent report so the persisted row + expected cash stay
+        // in sync.
+        onSubmitted();
+      }
+    } catch (err) {
+      if (err instanceof ApiError) void notify(err.body.message || (err.body.errors && err.body.errors[0] && err.body.errors[0].message) || 'Request failed.');
+      else void notify('Failed to submit reconciliation');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  return (
+    <div className="card">
+      <h2>Cash Reconciliation</h2>
+      <p style={{ fontSize: 13, color: '#6b7280', marginTop: 4, marginBottom: 16 }}>
+        Count the drawer and record the bank deposit. Expected cash is computed
+        by the system from the day&apos;s cash sales less cash refunds.
+      </p>
+
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: 12,
+          background: '#f9fafb',
+          border: '1px solid #e5e7eb',
+          borderRadius: 8,
+          marginBottom: 16,
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 600, color: '#374151' }}>
+          Expected Cash (system)
+        </span>
+        <span style={{ fontSize: 18, fontWeight: 700 }}>
+          {formatInr(expectedRupees)}
+        </span>
+      </div>
+
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: 12,
+          marginBottom: 12,
+        }}
+      >
+        <div>
+          <label style={labelStyle}>Actual Cash Counted (₹) *</label>
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            value={actualCash}
+            onChange={(e) => setActualCash(e.target.value)}
+            placeholder="0.00"
+            style={{ ...selectStyle, width: '100%', marginTop: 6 }}
+          />
+        </div>
+        <div>
+          <label style={labelStyle}>Bank Deposit (₹)</label>
+          <input
+            type="number"
+            min={0}
+            step="0.01"
+            value={bankDeposit}
+            onChange={(e) => setBankDeposit(e.target.value)}
+            placeholder="0.00"
+            style={{ ...selectStyle, width: '100%', marginTop: 6 }}
+          />
+        </div>
+        <div>
+          <label style={labelStyle}>Bank Reference (optional)</label>
+          <input
+            type="text"
+            value={bankReference}
+            maxLength={64}
+            onChange={(e) => setBankReference(e.target.value)}
+            placeholder="UTR / deposit-slip no."
+            style={{ ...selectStyle, width: '100%', marginTop: 6 }}
+          />
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <label style={labelStyle}>Notes (optional)</label>
+        <textarea
+          value={notes}
+          maxLength={500}
+          rows={2}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="Any explanation for a variance..."
+          style={{
+            width: '100%',
+            padding: 10,
+            border: '1px solid #d1d5db',
+            borderRadius: 6,
+            fontSize: 13,
+            marginTop: 6,
+            fontFamily: 'inherit',
+            resize: 'vertical',
+          }}
+        />
+      </div>
+
+      {/* Live variance preview (actual − expected). */}
+      {previewVariance != null && (
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            padding: 12,
+            borderRadius: 8,
+            marginBottom: 16,
+            background: Math.abs(previewVariance) < 0.005 ? '#f0fdf4' : '#fef2f2',
+            border:
+              Math.abs(previewVariance) < 0.005
+                ? '1px solid #bbf7d0'
+                : '1px solid #fecaca',
+          }}
+        >
+          <span style={{ fontSize: 13, fontWeight: 600 }}>
+            Variance (counted − expected)
+          </span>
+          <span
+            style={{
+              fontSize: 16,
+              fontWeight: 700,
+              color: Math.abs(previewVariance) < 0.005 ? '#166534' : '#991b1b',
+            }}
+          >
+            {previewVariance >= 0 ? '+' : '−'}
+            {formatInr(Math.abs(previewVariance))}
+          </span>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={submit}
+          disabled={isSaving}
+        >
+          {isSaving
+            ? 'Submitting...'
+            : existing
+            ? 'Update Reconciliation'
+            : 'Submit Reconciliation'}
+        </button>
+      </div>
+
+      {/* Server verdict — status badge + authoritative variance. */}
+      {result && (
+        <div
+          style={{
+            marginTop: 16,
+            padding: 12,
+            borderRadius: 8,
+            background: result.status === 'MATCHED' ? '#f0fdf4' : '#fef2f2',
+            border:
+              result.status === 'MATCHED'
+                ? '1px solid #bbf7d0'
+                : '1px solid #fecaca',
+          }}
+        >
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}
+          >
+            <span
+              style={{
+                ...statusBadgeStyle(
+                  result.status === 'MATCHED' ? 'COMPLETED' : 'VOIDED',
+                ),
+              }}
+            >
+              {result.status}
+            </span>
+            <span style={{ fontSize: 13, color: '#374151' }}>
+              Variance:{' '}
+              <strong>{formatPaise(result.varianceInPaise)}</strong>
+            </span>
+          </div>
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+              gap: 8,
+              marginTop: 10,
+              fontSize: 12,
+              color: '#6b7280',
+            }}
+          >
+            <div>
+              Expected: <strong style={{ color: '#111827' }}>{formatPaise(result.expectedCashInPaise)}</strong>
+            </div>
+            <div>
+              Counted: <strong style={{ color: '#111827' }}>{formatPaise(result.actualCashInPaise)}</strong>
+            </div>
+            <div>
+              Deposited: <strong style={{ color: '#111827' }}>{formatPaise(result.bankDepositInPaise)}</strong>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2119,6 +2529,8 @@ if (reason.trim().length < 5 || reason.trim().length > 500) {
   );
 }
 
+const REFUND_METHODS: PosRefundMethod[] = ['CASH', 'UPI', 'CARD', 'MANUAL'];
+
 function ReturnSaleModal({
   sale,
   onClose,
@@ -2129,15 +2541,31 @@ function ReturnSaleModal({
   onDone: () => void;
 }) {
   const { notify, confirmDialog } = useModal();
-const [selected, setSelected] = useState<
-    Record<string, { checked: boolean; qty: number }>
+  // `remaining` per item = quantity − already-returned (cumulative). A fully
+  // returned line (remaining 0) is shown disabled.
+  const remainingFor = (item: PosSaleItem) =>
+    Math.max(0, item.quantity - (item.returnedQty ?? 0));
+
+  const [selected, setSelected] = useState<
+    Record<string, { checked: boolean; qty: number; condition: PosReturnCondition }>
   >(() => {
-    const init: Record<string, { checked: boolean; qty: number }> = {};
+    const init: Record<
+      string,
+      { checked: boolean; qty: number; condition: PosReturnCondition }
+    > = {};
     (sale.items ?? []).forEach((item) => {
-      init[item.id] = { checked: false, qty: item.quantity };
+      const remaining = Math.max(0, item.quantity - (item.returnedQty ?? 0));
+      init[item.id] = {
+        checked: false,
+        qty: Math.max(1, remaining),
+        condition: 'SALEABLE',
+      };
     });
     return init;
   });
+  const [refundMethod, setRefundMethod] = useState<PosRefundMethod>('CASH');
+  const [returnReason, setReturnReason] = useState('');
+  const [refundReference, setRefundReference] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
   const toggleItem = (id: string, checked: boolean) => {
@@ -2155,19 +2583,59 @@ const [selected, setSelected] = useState<
     }));
   };
 
+  const updateCondition = (id: string, condition: PosReturnCondition) => {
+    setSelected((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], condition },
+    }));
+  };
+
+  // Live refund preview: per item, unitNet = lineTotal / quantity, summed over
+  // the selected return quantities. Mirrors how the backend refunds (net per
+  // unit, refunds are inclusive of GST).
+  const refundPreview = useMemo(() => {
+    let total = 0;
+    for (const item of sale.items ?? []) {
+      const s = selected[item.id];
+      if (!s?.checked) continue;
+      const qty = Math.max(1, item.quantity || 1);
+      const unitNet = toNumber(item.lineTotal) / qty;
+      total += unitNet * s.qty;
+    }
+    return Math.max(0, total);
+  }, [sale.items, selected]);
+
   const submit = async () => {
-const items = Object.entries(selected)
+    const items = Object.entries(selected)
       .filter(([, v]) => v.checked)
-      .map(([id, v]) => ({ itemId: id, returnQty: v.qty }));
+      .map(([id, v]) => ({
+        itemId: id,
+        returnQty: v.qty,
+        condition: v.condition,
+      }));
 
     if (items.length === 0) {
       void notify('Select at least one item to return');
       return;
     }
+    if (!refundMethod) {
+      void notify('Select a refund method');
+      return;
+    }
+
+    const ok = await confirmDialog(
+      `Refund ${formatInr(refundPreview)} to customer?`,
+    );
+    if (!ok) return;
 
     setIsSaving(true);
     try {
-      await franchisePosService.returnSale(sale.id, { items });
+      await franchisePosService.returnSale(sale.id, {
+        items,
+        refundMethod,
+        returnReason: returnReason.trim() || undefined,
+        refundReference: refundReference.trim() || undefined,
+      });
       onDone();
     } catch (err) {
       if (err instanceof ApiError) void notify(err.body.message || (err.body.errors && err.body.errors[0] && err.body.errors[0].message) || 'Request failed.');
@@ -2178,7 +2646,7 @@ const items = Object.entries(selected)
   };
 
   return (
-    <Modal onClose={onClose} width={640}>
+    <Modal onClose={onClose} width={680}>
       <h2 style={{ margin: 0, fontSize: 18 }}>
         Return items from {sale.saleNumber}
       </h2>
@@ -2190,8 +2658,8 @@ const items = Object.entries(selected)
           marginBottom: 16,
         }}
       >
-        Select items and enter the return quantity. Returned items will be
-        added back to inventory.
+        Select items and enter the return quantity. Saleable items are added
+        back to sellable stock; damaged items are routed to damaged stock.
       </p>
 
       <div style={{ overflowX: 'auto', marginBottom: 16 }}>
@@ -2200,13 +2668,17 @@ const items = Object.entries(selected)
             <tr>
               <th style={thStyle}>Select</th>
               <th style={thStyle}>Product</th>
-              <th style={thStyle}>Qty</th>
+              <th style={thStyle}>Sold</th>
+              <th style={thStyle}>Returnable</th>
               <th style={thStyle}>Return Qty</th>
+              <th style={thStyle}>Condition</th>
             </tr>
           </thead>
           <tbody>
             {(sale.items ?? []).map((item) => {
               const s = selected[item.id];
+              const remaining = remainingFor(item);
+              const exhausted = remaining <= 0;
               return (
                 <tr
                   key={item.id}
@@ -2216,6 +2688,7 @@ const items = Object.entries(selected)
                     <input
                       type="checkbox"
                       checked={s?.checked ?? false}
+                      disabled={exhausted}
                       onChange={(e) =>
                         toggleItem(item.id, e.target.checked)
                       }
@@ -2231,17 +2704,26 @@ const items = Object.entries(selected)
                   </td>
                   <td style={tdStyle}>{item.quantity}</td>
                   <td style={tdStyle}>
+                    {exhausted ? (
+                      <span style={{ color: '#9ca3af', fontSize: 12 }}>
+                        Fully returned
+                      </span>
+                    ) : (
+                      remaining
+                    )}
+                  </td>
+                  <td style={tdStyle}>
                     <input
                       type="number"
                       min={1}
-                      max={item.quantity}
-                      value={s?.qty ?? item.quantity}
-                      disabled={!s?.checked}
+                      max={remaining}
+                      value={s?.qty ?? remaining}
+                      disabled={!s?.checked || exhausted}
                       onChange={(e) =>
                         updateQty(
                           item.id,
                           parseInt(e.target.value, 10) || 1,
-                          item.quantity,
+                          remaining,
                         )
                       }
                       style={{
@@ -2253,11 +2735,116 @@ const items = Object.entries(selected)
                       }}
                     />
                   </td>
+                  <td style={tdStyle}>
+                    <select
+                      value={s?.condition ?? 'SALEABLE'}
+                      disabled={!s?.checked || exhausted}
+                      onChange={(e) =>
+                        updateCondition(
+                          item.id,
+                          e.target.value as PosReturnCondition,
+                        )
+                      }
+                      style={{
+                        padding: 4,
+                        border: '1px solid #d1d5db',
+                        borderRadius: 4,
+                        fontSize: 12,
+                        background: '#fff',
+                      }}
+                    >
+                      <option value="SALEABLE">Saleable</option>
+                      <option value="DAMAGED">Damaged</option>
+                    </select>
+                  </td>
                 </tr>
               );
             })}
           </tbody>
         </table>
+      </div>
+
+      {/* Refund details — refundMethod is REQUIRED by the backend. */}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+          gap: 12,
+          marginBottom: 12,
+        }}
+      >
+        <div>
+          <label style={labelStyle}>Refund Method *</label>
+          <select
+            value={refundMethod}
+            onChange={(e) =>
+              setRefundMethod(e.target.value as PosRefundMethod)
+            }
+            style={{ ...selectStyle, width: '100%', marginTop: 6 }}
+          >
+            {REFUND_METHODS.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div>
+          <label style={labelStyle}>Refund Reference (optional)</label>
+          <input
+            type="text"
+            value={refundReference}
+            maxLength={120}
+            onChange={(e) => setRefundReference(e.target.value)}
+            placeholder="UPI ref / reversal id / note"
+            style={{ ...selectStyle, width: '100%', marginTop: 6 }}
+          />
+        </div>
+      </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <label style={labelStyle}>Return Reason (optional)</label>
+        <textarea
+          value={returnReason}
+          maxLength={500}
+          rows={2}
+          onChange={(e) => setReturnReason(e.target.value)}
+          placeholder="Reason for the return..."
+          style={{
+            width: '100%',
+            padding: 10,
+            border: '1px solid #d1d5db',
+            borderRadius: 6,
+            fontSize: 13,
+            marginTop: 6,
+            fontFamily: 'inherit',
+            resize: 'vertical',
+          }}
+        />
+        <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
+          {returnReason.length}/500 characters
+        </div>
+      </div>
+
+      {/* Live refund preview. */}
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          padding: 12,
+          background: '#f0fdf4',
+          border: '1px solid #bbf7d0',
+          borderRadius: 8,
+          marginBottom: 16,
+        }}
+      >
+        <span style={{ fontSize: 13, color: '#166534', fontWeight: 600 }}>
+          Customer will be refunded
+        </span>
+        <span style={{ fontSize: 18, fontWeight: 700, color: '#166534' }}>
+          {formatInr(refundPreview)}
+        </span>
       </div>
 
       <div

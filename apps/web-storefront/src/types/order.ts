@@ -105,6 +105,19 @@ export interface OrderDetail {
     igstInPaise: string;
     totalTaxInPaise: string;
   };
+  // Phase 197 (My-Orders audit #16) — when the ONLINE payment window
+  // closes, the Retry CTA must hide. Null for COD / already-paid /
+  // legacy orders.
+  paymentExpiresAt?: string | null;
+  // Phase 197 (My-Orders audit #10) — in-flight returns scoped to THIS
+  // order, embedded by the detail endpoint so the page no longer
+  // over-fetches `/customer/returns?limit=50` and filters client-side.
+  returns?: Array<{
+    id: string;
+    returnNumber: string | null;
+    status: string;
+    createdAt: string;
+  }>;
 }
 
 export interface OrderItemTaxSnapshot {

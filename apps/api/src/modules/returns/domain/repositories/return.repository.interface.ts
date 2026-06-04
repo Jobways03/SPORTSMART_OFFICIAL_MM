@@ -51,6 +51,11 @@ export interface FindAllPaginatedParams {
   fromDate?: Date;
   toDate?: Date;
   search?: string; // search by returnNumber or orderNumber
+  // Phase 174 (audit #228) — server-side risk filter for the risk-review
+  // dashboard (was client-side bucketing over a truncated 100-row page).
+  riskScoreMin?: number;
+  riskScoreMax?: number;
+  hasRiskScore?: boolean;
 }
 
 export interface FindReturnsForFulfillmentNodeParams {
@@ -65,8 +70,18 @@ export interface ReturnRepository {
   // CRUD
   findById(id: string): Promise<any | null>;
   findByIdWithItems(id: string): Promise<any | null>;
+  // Phase 199 (2026-06-02) — customer-safe detail read (strict select
+  // whitelist; no QC internals / risk / liability / internal actor ids /
+  // version). Use this on the customer endpoint instead of
+  // findByIdWithItems (which is the admin/QC full read).
+  findByIdForCustomer(id: string): Promise<any | null>;
   findByReturnNumber(returnNumber: string): Promise<any | null>;
   findByCustomerId(
+    customerId: string,
+    params: FindByCustomerParams,
+  ): Promise<{ returns: any[]; total: number }>;
+  // Phase 199 (2026-06-02) — customer-safe list read (strict select).
+  findByCustomerIdSafe(
     customerId: string,
     params: FindByCustomerParams,
   ): Promise<{ returns: any[]; total: number }>;

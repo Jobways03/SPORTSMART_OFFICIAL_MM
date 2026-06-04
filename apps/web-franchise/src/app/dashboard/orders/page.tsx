@@ -13,6 +13,7 @@ import {
   FranchiseReturn,
 } from '@/services/returns.service';
 import { ApiError } from '@/lib/api-client';
+import { useSseStream } from '@sportsmart/ui';
 
 type Tab = 'orders' | 'returns';
 
@@ -235,6 +236,17 @@ const router = useRouter();
   useEffect(() => {
     fetchKpis();
   }, [fetchKpis]);
+
+  // Live updates over the franchise SSE stream — refetch the active tab's
+  // list + KPIs on any return/dispute change for this franchise's
+  // sub-orders, instead of polling.
+  useSseStream('/portal/streams/franchise-cases', {
+    onMessage: () => {
+      if (tab === 'orders') fetchOrders();
+      else fetchReturns();
+      fetchKpis();
+    },
+  });
 
   const handleSearch = () => {
     setSearchQuery(searchInput);

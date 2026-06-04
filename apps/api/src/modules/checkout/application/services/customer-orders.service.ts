@@ -1,4 +1,4 @@
-import { Injectable, Inject } from '@nestjs/common';
+import { Injectable, Inject, Logger } from '@nestjs/common';
 import {
   CHECKOUT_REPOSITORY,
   ICheckoutRepository,
@@ -7,17 +7,42 @@ import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 
 @Injectable()
 export class CustomerOrdersService {
+  private readonly logger = new Logger(CustomerOrdersService.name);
+
   constructor(
     @Inject(CHECKOUT_REPOSITORY)
     private readonly repo: ICheckoutRepository,
+    // Phase 197 (Checkout audit #11 / My-Orders audit #11) — audit log
+    // on customer-initiated cancel. AuditModule is @Global() so no
+    // module wiring is required.
+    private readonly audit: AuditPublicFacade,
   ) {}
 
   // ── Legacy place-order ─────────────────────────────────────────────────
 
   async placeOrder(userId: string, addressId: string) {
+    // Phase 197 (Checkout audit #20) — the legacy POST /customer/orders
+    // place-order path predates the canonical checkout flow
+    // (POST /customer/checkout/place-order). It has NO price-drift
+    // re-validation, NO GST/tax snapshot, NO idempotency key, NO
+    // moderation gate, and NO Razorpay/wallet integration — i.e. it
+    // bypasses every checkout safety control added since Phase 44.
+    // Neither the web nor mobile storefront calls it. Rather than
+    // hard-delete (and risk an unknown internal caller), it is gated
+    // OFF by default behind LEGACY_PLACE_ORDER_ENABLED; flip to 'true'
+    // only for a deliberate, supervised migration.
+    const legacyEnabled =
+      (process.env.LEGACY_PLACE_ORDER_ENABLED ?? 'false').toLowerCase() ===
+      'true';
+    if (!legacyEnabled) {
+      throw new BadRequestAppException(
+        'This checkout path is no longer supported. Please use the standard checkout.',
+      );
+    }
     if (!addressId) {
       throw new BadRequestAppException('addressId is required');
     }
@@ -76,6 +101,11 @@ export class CustomerOrdersService {
     // audited commission reversal). A previous revision allowed cancel for
     // DELIVERED sub-orders while the return window was still open, which
     // effectively let customers self-return with zero QC.
+    //
+    // This is a CHEAP fail-fast pre-check off the already-loaded snapshot;
+    // the AUTHORITATIVE re-check now runs INSIDE cancelOrderTransaction
+    // under a row lock (My-Orders audit #15) so a sub-order that ships
+    // between this read and the tx commit can't be silently cancelled.
     const blockingStatuses = new Set(['SHIPPED', 'DELIVERED', 'FULFILLED']);
     const hasBlockingSubOrder = order.subOrders.some((so) =>
       blockingStatuses.has(so.fulfillmentStatus as string),
@@ -87,6 +117,28 @@ export class CustomerOrdersService {
     }
 
     await this.repo.cancelOrderTransaction(order);
+
+    // Phase 197 (Checkout audit #11 / My-Orders audit #11) — compliance
+    // audit row for the customer self-cancel. Best-effort: a failed
+    // audit write must never block the cancel confirmation the customer
+    // already earned.
+    await this.audit
+      .writeAuditLog({
+        actorId: userId,
+        actorRole: 'CUSTOMER',
+        action: 'order.cancelled',
+        module: 'checkout',
+        resource: 'MasterOrder',
+        resourceId: order.id,
+        oldValue: { orderStatus: order.orderStatus, paymentStatus: order.paymentStatus },
+        newValue: { orderStatus: 'CANCELLED', paymentStatus: 'CANCELLED' },
+        metadata: { orderNumber: order.orderNumber, subOrderCount: order.subOrders.length },
+      })
+      .catch((err) =>
+        this.logger.warn(
+          `Audit write failed for order.cancelled ${order.id}: ${(err as Error).message}`,
+        ),
+      );
 
     return { success: true };
   }

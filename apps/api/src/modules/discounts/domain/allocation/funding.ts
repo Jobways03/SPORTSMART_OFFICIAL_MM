@@ -10,8 +10,19 @@
 // allocated discount paise (no money disappears between allocation
 // and ledger).
 
-export type FundingType = 'PLATFORM' | 'SELLER' | 'BRAND' | 'SHARED' | 'NONE';
-export type LiabilityParty = 'PLATFORM' | 'SELLER' | 'BRAND' | 'SHARED';
+export type FundingType =
+  | 'PLATFORM'
+  | 'SELLER'
+  | 'BRAND'
+  | 'FRANCHISE'
+  | 'SHARED'
+  | 'NONE';
+export type LiabilityParty =
+  | 'PLATFORM'
+  | 'SELLER'
+  | 'BRAND'
+  | 'FRANCHISE'
+  | 'SHARED';
 
 export interface FundingConfig {
   fundingType: FundingType;
@@ -19,6 +30,15 @@ export interface FundingConfig {
   platformFundingPercent?: number;
   sellerFundingPercent?: number;
   brandFundingPercent?: number;
+  // Phase 247-FB — franchise share of a SHARED split (or implied 100 for a
+  // pure FRANCHISE-funded discount).
+  franchiseFundingPercent?: number;
+  // Phase 247-FB — attribution ids for the funded party. franchiseId NULL on
+  // a FRANCHISE discount → attribute to the fulfilling franchise per item;
+  // brandId identifies the co-marketing brand. Not used by the split math
+  // (percentages drive that) — carried so the ledger row can attribute.
+  franchiseId?: string | null;
+  brandId?: string | null;
 }
 
 export interface FundingShare {
@@ -62,6 +82,10 @@ export function splitFundingShares(
       ];
     case 'BRAND':
       return [{ liabilityParty: 'BRAND', amountInPaise: allocationInPaise }];
+    case 'FRANCHISE':
+      return [
+        { liabilityParty: 'FRANCHISE', amountInPaise: allocationInPaise },
+      ];
     case 'NONE':
       return [];
     case 'SHARED':
@@ -78,7 +102,8 @@ function splitSharedFunding(
   const platformPct = config.platformFundingPercent ?? 0;
   const sellerPct = config.sellerFundingPercent ?? 0;
   const brandPct = config.brandFundingPercent ?? 0;
-  const sum = platformPct + sellerPct + brandPct;
+  const franchisePct = config.franchiseFundingPercent ?? 0;
+  const sum = platformPct + sellerPct + brandPct + franchisePct;
 
   // Allow 0.01% tolerance for floating-point comparisons (admin
   // form accepts decimals up to 2 places).
@@ -91,13 +116,15 @@ function splitSharedFunding(
   const platformBps = BigInt(Math.round(platformPct * 100));
   const sellerBps = BigInt(Math.round(sellerPct * 100));
   const brandBps = BigInt(Math.round(brandPct * 100));
+  const franchiseBps = BigInt(Math.round(franchisePct * 100));
 
   const platformShare = (allocationInPaise * platformBps) / 10_000n;
   const sellerShare = (allocationInPaise * sellerBps) / 10_000n;
   const brandShare = (allocationInPaise * brandBps) / 10_000n;
+  const franchiseShare = (allocationInPaise * franchiseBps) / 10_000n;
 
   // Rounding remainder → PLATFORM (default-decision #1).
-  const assigned = platformShare + sellerShare + brandShare;
+  const assigned = platformShare + sellerShare + brandShare + franchiseShare;
   const remainder = allocationInPaise - assigned;
 
   const shares: FundingShare[] = [];
@@ -112,6 +139,12 @@ function splitSharedFunding(
   }
   if (brandShare > 0n) {
     shares.push({ liabilityParty: 'BRAND', amountInPaise: brandShare });
+  }
+  if (franchiseShare > 0n) {
+    shares.push({
+      liabilityParty: 'FRANCHISE',
+      amountInPaise: franchiseShare,
+    });
   }
 
   return shares;
@@ -139,11 +172,17 @@ export function validateFundingConfig(config: FundingConfig): void {
         throw new Error('BRAND funding requires brandFundingPercent=100');
       }
       break;
+    case 'FRANCHISE':
+      if ((config.franchiseFundingPercent ?? 100) !== 100) {
+        throw new Error('FRANCHISE funding requires franchiseFundingPercent=100');
+      }
+      break;
     case 'SHARED': {
       const sum =
         (config.platformFundingPercent ?? 0) +
         (config.sellerFundingPercent ?? 0) +
-        (config.brandFundingPercent ?? 0);
+        (config.brandFundingPercent ?? 0) +
+        (config.franchiseFundingPercent ?? 0);
       if (Math.abs(sum - 100) > 0.01) {
         throw new Error(`SHARED funding percentages must sum to 100 (got ${sum})`);
       }

@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import type {
   PaymentAttemptKind,
   PaymentAttemptStatus,
   PaymentMismatchKind,
+  PaymentMismatchSource,
 } from '@prisma/client';
 import { PaymentOpsService } from '../services/payment-ops.service';
 
@@ -23,7 +25,9 @@ export class PaymentOpsFacade {
     providerOrderId?: string | null;
     providerPaymentId?: string | null;
     providerRefundId?: string | null;
-    amountInPaise?: number | null;
+    // Phase 165 (#11/#12) — accept bigint so callers pass the paise sibling
+    // column directly without a lossy Number() coercion above ~₹90L.
+    amountInPaise?: number | bigint | null;
     currency?: string;
     responseSummary?: string | null;
     failureReason?: string | null;
@@ -47,6 +51,10 @@ export class PaymentOpsFacade {
     actualInPaise?: number | bigint | string | null;
     description: string;
     severity?: number;
+    // Phase 169 (#13) — provenance so a forged/surprising alert is traceable.
+    sourceType?: PaymentMismatchSource;
+    sourceContext?: Prisma.InputJsonValue | null;
+    provider?: string;
   }) {
     return this.service.createMismatchAlert(args);
   }

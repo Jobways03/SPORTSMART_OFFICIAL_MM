@@ -1,4 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { EnvService } from '../../../bootstrap/env/env.service';
 
 const WRITE_TIMEOUT_MS = 10_000;
 const SEARCH_TIMEOUT_MS = 5_000;
@@ -16,9 +17,34 @@ const SEARCH_TIMEOUT_MS = 5_000;
 export class OpenSearchClient implements OnModuleInit {
   private readonly logger = new Logger(OpenSearchClient.name);
   private nodeUrl: string = '';
+  private authHeader: string | undefined;
+  private indexProducts = 'sportsmart_products';
+
+  constructor(private readonly env: EnvService) {}
 
   onModuleInit() {
-    this.nodeUrl = process.env.OPENSEARCH_NODE || '';
+    // Phase 195 (#17) — read through EnvService (Zod-validated) instead of
+    // raw process.env, validate the URL scheme, and build the basic-auth
+    // header up front. A bad scheme is ignored (treated as unconfigured →
+    // Prisma fallback) rather than silently issuing plaintext requests.
+    const raw = (this.env.getOptional('OPENSEARCH_NODE') ?? '').trim().replace(/\/+$/, '');
+    if (raw && !/^https?:\/\//i.test(raw)) {
+      this.logger.error(`OPENSEARCH_NODE must start with http:// or https:// — got "${raw}". Treating as unconfigured.`);
+      this.nodeUrl = '';
+    } else {
+      this.nodeUrl = raw;
+    }
+    if (this.nodeUrl.startsWith('http://')) {
+      this.logger.warn('OPENSEARCH_NODE uses plaintext http:// — credentials would transit unencrypted; use https:// in production.');
+    }
+
+    const user = this.env.getOptional('OPENSEARCH_USERNAME');
+    const pass = this.env.getOptional('OPENSEARCH_PASSWORD');
+    if (user && pass) {
+      this.authHeader = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
+    }
+    this.indexProducts = this.env.getOptional('OPENSEARCH_INDEX_PRODUCTS') ?? 'sportsmart_products';
+
     if (!this.nodeUrl) {
       this.logger.warn('OpenSearch node not configured — search will fall back to Prisma');
     }
@@ -26,6 +52,11 @@ export class OpenSearchClient implements OnModuleInit {
 
   get isConfigured(): boolean {
     return !!this.nodeUrl;
+  }
+
+  /** Phase 195 (#17) — configurable products index name. */
+  get productsIndex(): string {
+    return this.indexProducts;
   }
 
   private async request(
@@ -37,8 +68,14 @@ export class OpenSearchClient implements OnModuleInit {
     ignoreStatuses: number[] = [],
   ): Promise<Response | null> {
     try {
+      // Phase 195 (#17) — attach basic-auth on every call when configured.
+      const headers = {
+        ...(init.headers as Record<string, string> | undefined),
+        ...(this.authHeader ? { Authorization: this.authHeader } : {}),
+      };
       const res = await fetch(url, {
         ...init,
+        headers,
         signal: AbortSignal.timeout(timeoutMs),
       });
       if (!res.ok && !ignoreStatuses.includes(res.status)) {

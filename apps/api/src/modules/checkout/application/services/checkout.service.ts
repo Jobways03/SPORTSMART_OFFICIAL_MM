@@ -1135,6 +1135,12 @@ export class CheckoutService {
     // Wallet preflight — clamp to chargedTotal (can't pay more than the
     // order is for) and verify the user has the balance. Done BEFORE the
     // order transaction so we fail fast without an orphan order.
+    //
+    // Phase 184 (#14) — STACKING ORDER (documented): chargedTotal already =
+    // item subtotal − coupon discount + shipping (+ GST is folded into the line
+    // totals upstream). Wallet then applies LAST, against that full post-discount,
+    // post-shipping, post-tax payable. So: discount → (shipping + tax) → wallet.
+    // Razorpay/COD collect only `payableInRupees` = chargedTotal − wallet.
     const walletDebitInPaise = Math.max(
       0,
       Math.min(
@@ -1260,8 +1266,16 @@ export class CheckoutService {
         // conflict only fires when a row with that key exists). Fall
         // through to the generic handler.
       }
-      // Compensating action: release franchise reservations on failure
-      // (Seller reservations have a TTL via StockReservation table and will auto-expire)
+      // Compensating action: release reservations on failure.
+      // Phase 197 (Checkout audit #12) — release BOTH franchise AND
+      // seller reservations explicitly. Pre-Phase-197 only franchise
+      // holds were released here; seller StockReservation rows were
+      // left to their 15-min TTL, so a failed place-order kept seller
+      // stock locked for up to 15 minutes (a customer could see
+      // "out of stock" on an item nobody actually bought). We now
+      // release the seller reservation immediately via the catalog
+      // facade; the TTL sweep stays as the backstop for the rare case
+      // where this best-effort release itself fails.
       for (const item of session.items) {
         if (item.allocatedNodeType === 'FRANCHISE' && item.allocatedSellerId) {
           try {
@@ -1276,6 +1290,16 @@ export class CheckoutService {
             );
           } catch {
             // Best-effort release; FranchiseReservationCleanupService will catch stragglers
+          }
+        } else if (item.allocatedNodeType !== 'FRANCHISE' && item.reservationId) {
+          // Seller path — release the StockReservation row now instead
+          // of waiting out the TTL. Guarded on NOT-franchise so a
+          // franchise ledger hold (no StockReservation entity) never
+          // reaches releaseReservation.
+          try {
+            await this.catalogFacade.releaseReservation(item.reservationId);
+          } catch {
+            // Best-effort; ReservationExpirySweepCron is the TTL backstop.
           }
         }
       }
@@ -1432,14 +1456,33 @@ export class CheckoutService {
     // restore the stock that was just confirmed above. Pre-Follow-up
     // #H8, the cancel happened but the stock stayed deducted, leaving
     // the catalog ledger short until manual cleanup.
+    let walletTransactionId: string | null = null;
     if (walletDebitInPaise > 0) {
       try {
-        await this.walletFacade.debitForCheckout({
+        const debitResult = await this.walletFacade.debitForCheckout({
           userId,
           amountInPaise: walletDebitInPaise,
           orderId: result.masterOrderId,
+          orderNumber: result.orderNumber,
           description: `Order ${result.orderNumber} — wallet portion`,
         });
+        walletTransactionId = debitResult.transaction.id;
+        // Phase 184 (#2/#3) — snapshot the authoritative wallet portion + the
+        // linked ledger row on the order. Non-fatal if it fails (the refund
+        // calculator falls back to the ledger query); log loudly.
+        await this.prisma.masterOrder
+          .update({
+            where: { id: result.masterOrderId },
+            data: {
+              walletAmountUsedInPaise: BigInt(walletDebitInPaise),
+              walletTransactionId,
+            },
+          })
+          .catch((snapErr) =>
+            this.logger.warn(
+              `Wallet-usage snapshot failed for order ${result.masterOrderId}: ${(snapErr as Error).message}`,
+            ),
+          );
       } catch (err) {
         // Follow-up #H8 — flip the order status + restore stock atomically.
         // Seller reservations were CONFIRMED above (lines 963-970), so
@@ -1536,17 +1579,43 @@ export class CheckoutService {
           // allocation rows + ledger entries carry the right tag
           // (audit Gap #16). Re-read here because the reservation
           // branch's local var is out of scope.
-          source: await (async () => {
+          // Phase 247-FB — ALSO read the discount's ACTUAL funding config.
+          // Previously this hardcoded `{ fundingType: 'PLATFORM' }`, so a
+          // SELLER/BRAND/SHARED/FRANCHISE-funded campaign was silently
+          // booked as PLATFORM at allocation — the funding the admin set
+          // never reached the liability ledger (a real cost-attribution
+          // leak). We now thread the real split + franchise/brand ids.
+          ...(await (async () => {
             const d = await this.prisma.discount.findUnique({
               where: { id: discountId },
-              select: { affiliateId: true },
+              select: {
+                affiliateId: true,
+                fundingType: true,
+                platformFundingPercent: true,
+                sellerFundingPercent: true,
+                brandFundingPercent: true,
+                franchiseFundingPercent: true,
+                franchiseId: true,
+                brandId: true,
+              },
             });
-            return d?.affiliateId ? 'AFFILIATE' as const : 'CODE' as const;
-          })(),
-          // Default to PLATFORM funding for any existing discounts;
-          // admin-discount form changes (Phase D) will let admins set
-          // SELLER / SHARED before this is reached for new campaigns.
-          funding: { fundingType: 'PLATFORM' },
+            return {
+              source: d?.affiliateId
+                ? ('AFFILIATE' as const)
+                : ('CODE' as const),
+              funding: {
+                fundingType: (d?.fundingType as any) ?? 'PLATFORM',
+                platformFundingPercent: Number(d?.platformFundingPercent ?? 100),
+                sellerFundingPercent: Number(d?.sellerFundingPercent ?? 0),
+                brandFundingPercent: Number(d?.brandFundingPercent ?? 0),
+                franchiseFundingPercent: Number(
+                  d?.franchiseFundingPercent ?? 0,
+                ),
+                franchiseId: d?.franchiseId ?? null,
+                brandId: d?.brandId ?? null,
+              },
+            };
+          })()),
         });
       } catch (err) {
         // Order is committed and customer was charged correctly.
@@ -1692,6 +1761,7 @@ export class CheckoutService {
           orderNumber: result.orderNumber,
           totalAmount: result.totalAmount,
           walletPaidAmount: walletDebitInRupees,
+          walletTransactionId, // Phase 184 (#11)
           itemCount: result.itemCount,
           paymentMethod: 'ONLINE' as const,
           payment: { fullyCoveredByWallet: true as const },
@@ -1806,6 +1876,7 @@ export class CheckoutService {
           orderNumber: result.orderNumber,
           totalAmount: result.totalAmount,
           walletPaidAmount: walletDebitInRupees,
+          walletTransactionId, // Phase 184 (#11)
           itemCount: result.itemCount,
           paymentMethod: 'ONLINE' as const,
           payment: {
@@ -1865,6 +1936,25 @@ export class CheckoutService {
             orderStatus: 'CANCELLED',
             paymentStatus: 'CANCELLED',
           }),
+        });
+        // Phase 197 (Checkout audit #25) — cascade the cancel to the
+        // sub-orders. Pre-Phase-197 the master flipped CANCELLED on a
+        // Razorpay createOrder failure but the SubOrders stayed
+        // PENDING/UNFULFILLED, so the admin queue + settlement sweep
+        // still saw "live" sub-orders for a dead order, and the
+        // acceptStatus stayed OPEN (a seller could "accept" a cancelled
+        // order). Mirror the customer-cancel terminal shape.
+        await this.prisma.subOrder.updateMany({
+          where: { masterOrderId: result.masterOrderId },
+          data: {
+            paymentStatus: 'CANCELLED',
+            fulfillmentStatus: 'CANCELLED',
+            acceptStatus: 'REJECTED',
+            // Keep the settlement sweep from picking these up; no
+            // commission is due on a payment that never initialised.
+            commissionProcessed: true,
+            commissionDecision: 'NOT_APPLICABLE' as any,
+          },
         });
         // Phase 70 — shadow Payment row flips to CANCELLED.
         await this.paymentLifecycle.markTerminal({
@@ -2030,7 +2120,7 @@ export class CheckoutService {
           status: 'FAILURE',
           providerOrderId: input.razorpayOrderId,
           providerPaymentId: input.razorpayPaymentId,
-          amountInPaise: Math.round(Number(order.totalAmount) * 100),
+          amountInPaise: BigInt(order.totalAmountInPaise),
           failureReason: 'HMAC signature mismatch',
         })
         .catch(() => undefined);
@@ -2075,7 +2165,7 @@ export class CheckoutService {
           status: 'FAILURE',
           providerOrderId: input.razorpayOrderId,
           providerPaymentId: input.razorpayPaymentId,
-          amountInPaise: Math.round(Number(order.totalAmount) * 100),
+          amountInPaise: BigInt(order.totalAmountInPaise),
           failureReason: `fetchPayment failed: ${err?.message ?? 'unknown'}`,
         })
         .catch(() => undefined);
@@ -2110,7 +2200,10 @@ export class CheckoutService {
           masterOrderId: order.id,
           orderNumber: order.orderNumber,
           providerPaymentId: input.razorpayPaymentId,
-          expectedInPaise: Number(order.totalAmountInPaise),
+          // Phase 165 (#12) — pass BigInt paise directly; the facade accepts
+          // number | bigint | string, so we avoid the lossy Number() coercion
+          // that truncated amounts above ~₹90L.
+          expectedInPaise: BigInt(order.totalAmountInPaise),
           actualInPaise: gatewayPayment.amount,
           severity: 95,
           description:
@@ -2141,8 +2234,20 @@ export class CheckoutService {
       Date.now() + verificationSlaMinutes * 60 * 1000,
     );
 
-    await this.prisma.masterOrder.update({
-      where: { id: order.id },
+    // Phase 165 (#4/#18) — CAS flip. The findFirst + assertTransition above
+    // is a read-time check; a concurrent verify (e.g. the orphan-recovery
+    // event handler firing the same payment) or an admin cancellation can
+    // land between the read and this write. Guard the flip on the still-PENDING
+    // state so EXACTLY ONE caller flips PLACED+PAID; the loser is a no-op.
+    const flip = await this.prisma.masterOrder.updateMany({
+      where: {
+        id: order.id,
+        orderStatus: 'PENDING_PAYMENT',
+        // Cast mirrors OrdersPublicFacade.flipPaymentStatusIfFrom — the
+        // OrderPaymentStatus enum is the canonical type; the string union
+        // is widened at the Prisma boundary.
+        paymentStatus: { in: ['PENDING', 'FAILED'] as any },
+      },
       data: this.moneyDualWrite.applyPaise('masterOrder', {
         orderStatus: 'PLACED',
         paymentStatus: 'PAID',
@@ -2150,6 +2255,28 @@ export class CheckoutService {
         verificationDeadlineAt,
       }),
     });
+    if (flip.count === 0) {
+      // Lost the race or the order moved out of PENDING_PAYMENT. If it's
+      // already PAID (concurrent verify / webhook won), this verify is
+      // idempotent — return success. Otherwise it was cancelled/rejected
+      // between read and write — refuse to resurrect it.
+      const fresh = await this.prisma.masterOrder.findUnique({
+        where: { id: order.id },
+        select: { paymentStatus: true, razorpayPaymentId: true },
+      });
+      if (fresh?.paymentStatus === 'PAID') {
+        return {
+          verified: true,
+          orderNumber: order.orderNumber,
+          totalAmount: Number(order.totalAmount),
+          paymentId: fresh.razorpayPaymentId ?? input.razorpayPaymentId,
+        };
+      }
+      throw new BadRequestAppException(
+        'Order can no longer be marked paid (it may have been cancelled). ' +
+          'If you were charged, the orphan-recovery process will reconcile it.',
+      );
+    }
 
     await this.prisma.subOrder.updateMany({
       where: { masterOrderId: order.id },
@@ -2162,7 +2289,8 @@ export class CheckoutService {
       providerPaymentId: input.razorpayPaymentId,
     });
 
-    // Payment-ops: SUCCESS verify-signature attempt.
+    // Payment-ops: SUCCESS verify-signature attempt. Phase 165 (#12) —
+    // pass BigInt paise directly (no lossy Number coercion).
     this.paymentOpsFacade
       .recordAttempt({
         masterOrderId: order.id,
@@ -2171,7 +2299,7 @@ export class CheckoutService {
         status: 'SUCCESS',
         providerOrderId: input.razorpayOrderId,
         providerPaymentId: input.razorpayPaymentId,
-        amountInPaise: Math.round(Number(order.totalAmount) * 100),
+        amountInPaise: BigInt(order.totalAmountInPaise),
       })
       .catch(() => undefined);
 
@@ -2190,6 +2318,25 @@ export class CheckoutService {
         },
       })
       .catch(() => {});
+
+    // Phase 165 (#15) — compliance audit on a successful payment verification
+    // (PaymentAttempt is observability; this is the actor-attributed ledger).
+    this.auditFacade
+      .writeAuditLog({
+        actorId: userId,
+        actorRole: 'CUSTOMER',
+        action: 'payments.verify.succeeded',
+        module: 'payments',
+        resource: 'master_order',
+        resourceId: order.id,
+        metadata: {
+          orderNumber: order.orderNumber,
+          razorpayOrderId: input.razorpayOrderId,
+          razorpayPaymentId: input.razorpayPaymentId,
+          amountInPaise: order.totalAmountInPaise.toString(),
+        },
+      })
+      .catch(() => undefined);
 
     return {
       verified: true,
@@ -2226,10 +2373,19 @@ export class CheckoutService {
       );
     }
 
+    // Phase 165 (#1) — deterministic idempotency key. retryPayment previously
+    // passed NO key, so a double-click (or a network blip + retry) minted two
+    // Razorpay orders for the same MasterOrder. Keyed on the order + the retry
+    // index (count of prior ONLINE Payment rows): rapid double-clicks compute
+    // the SAME index → same key → Razorpay dedupes and returns the same order;
+    // a genuine later retry gets a fresh index → a new order.
+    const retryIndex = await this.prisma.payment.count({
+      where: { masterOrderId: order.id, method: 'ONLINE' },
+    });
+    const idempotencyKey = `checkout-order-${order.id}-retry-${retryIndex}`;
+
     // Create a new Razorpay order (previous one may have expired on Razorpay side).
-    // Phase 0 (PR 0.5) — pass paise from the order's BigInt column
-    // directly. This call site is now precision-safe end-to-end: the
-    // value never enters a JS Number.
+    // Phase 0 (PR 0.5) — pass paise from the order's BigInt column directly.
     const razorpayOrder = await this.razorpayAdapter.createOrder({
       amountInPaise: BigInt(order.totalAmountInPaise),
       receipt: order.orderNumber,
@@ -2238,6 +2394,7 @@ export class CheckoutService {
         orderNumber: order.orderNumber,
         retry: 'true',
       },
+      idempotencyKey,
     });
 
     // Extend the payment window
@@ -2252,6 +2409,29 @@ export class CheckoutService {
         paymentExpiresAt: newExpiry,
       }),
     });
+
+    // Phase 165 (#2) — preserve the retry trail in the Payment table. The
+    // MasterOrder.razorpayOrderId column is overwritten (one slot), but a new
+    // Payment row records EACH gateway order id; orphan recovery scans all of
+    // them, so a payment captured against a PRIOR order id is still recovered
+    // (previously invisible — a real money-loss blind spot).
+    await this.paymentLifecycle.recordOnlinePaymentCreated({
+      masterOrderId: order.id,
+      amountInPaise: BigInt(order.totalAmountInPaise),
+      providerOrderId: razorpayOrder.providerOrderId,
+      idempotencyKey,
+      expiresAt: newExpiry,
+    });
+    this.paymentOpsFacade
+      .recordAttempt({
+        masterOrderId: order.id,
+        orderNumber: order.orderNumber,
+        kind: 'CREATE_ORDER',
+        status: 'SUCCESS',
+        providerOrderId: razorpayOrder.providerOrderId,
+        amountInPaise: BigInt(order.totalAmountInPaise),
+      })
+      .catch(() => undefined);
 
     return {
       orderNumber: order.orderNumber,

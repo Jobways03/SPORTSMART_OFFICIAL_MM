@@ -17,6 +17,7 @@ import { EnvService } from '../../../../bootstrap/env/env.service';
 import { DiscountReservationService } from '../services/discount-reservation.service';
 import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
 import { CronInstrumentationService } from '../../../../core/cron-observability/cron-instrumentation.service';
+import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 
 @Injectable()
 export class ReleaseExpiredRedemptionsCron {
@@ -32,6 +33,9 @@ export class ReleaseExpiredRedemptionsCron {
     // void-returning today; the wrap captures `{ ran: true }` plus
     // the per-tick duration as the structured metric.
     private readonly instr: CronInstrumentationService,
+    // Cluster E (#222) — one best-effort summary audit row per tick so
+    // bulk releases leave a queryable forensic trail (who/when/how many).
+    private readonly audit: AuditPublicFacade,
   ) {}
 
   @Cron(CronExpression.EVERY_MINUTE)
@@ -40,16 +44,41 @@ export class ReleaseExpiredRedemptionsCron {
     // 2-minute lock (2× tick interval).
     await this.leader.run('release-expired-redemptions', 2 * 60, async () => {
       try {
-        await this.instr.wrap('release-expired-redemptions', async () => {
-          await this.reservation.releaseExpired();
-          return { ran: true };
-        });
+        const released = await this.instr.wrap(
+          'release-expired-redemptions',
+          async () => {
+            const count = await this.reservation.releaseExpired(
+              new Date(),
+              this.batchSize(),
+            );
+            return { ran: true, released: count };
+          },
+        );
+        // Best-effort summary audit row, OUTSIDE the per-row work and
+        // never able to abort the sweep. Only write when we actually
+        // freed slots so idle ticks don't spam the audit log.
+        const count = released?.released ?? 0;
+        if (count > 0) {
+          await this.audit
+            .writeAuditLog({
+              actorType: 'SYSTEM',
+              action: 'discount.redemption.expired_swept',
+              module: 'discounts',
+              resource: 'discount_redemption',
+              metadata: { releasedCount: count },
+            })
+            .catch(() => undefined);
+        }
       } catch (err) {
         // Never rethrow — keep the cron alive. instr.wrap already
         // recorded the failure; log here for stdout visibility.
         this.logger.error('Failed to release expired redemptions', err as Error);
       }
     });
+  }
+
+  private batchSize(): number {
+    return this.env.getNumber('DISCOUNT_RELEASE_EXPIRED_BATCH_SIZE', 500);
   }
 
   private enabled(): boolean {

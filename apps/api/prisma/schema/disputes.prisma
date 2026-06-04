@@ -133,6 +133,16 @@ model Dispute {
   liabilityParty LiabilityParty? @map("liability_party")
   customerRemedy CustomerRemedy? @map("customer_remedy")
 
+  // Phase 171 (Refund Approve/Reject audit #1/#14) — finance rejected the
+  // refund for this decided dispute; the case is re-opened (RESOLVED_* →
+  // UNDER_REVIEW) for re-decision. The overruled decision is snapshotted here
+  // before the live decision columns are cleared; rerouteDueBy is the re-decision SLA.
+  previousDecisionAt        DateTime? @map("previous_decision_at")
+  previousDecisionRationale String?   @map("previous_decision_rationale") @db.Text
+  financeRejectionReason    String?   @map("finance_rejection_reason") @db.Text
+  financeRejectedAt         DateTime? @map("finance_rejected_at")
+  rerouteDueBy              DateTime? @map("reroute_due_by")
+
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 

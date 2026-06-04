@@ -1,4 +1,7 @@
 // Phase 93 (2026-05-23) — evidence URL allowlist coverage.
+// Media now lives at the R2 public delivery base; the default trusted host
+// is the dev-stub host (placehold.co) when R2 isn't configured, and callers
+// supply the real R2 host via resolveTrustedMediaHosts() / allowedHosts.
 
 import {
   isValidEvidenceUrl,
@@ -6,22 +9,20 @@ import {
 } from './evidence-url-validator';
 
 describe('isValidEvidenceUrl (Phase 93)', () => {
-  it('accepts a Cloudinary CDN URL', () => {
-    const r = isValidEvidenceUrl(
-      'https://res.cloudinary.com/sportsmart/image/upload/v1/test.jpg',
-    );
+  it('accepts the default (dev-stub) media host', () => {
+    const r = isValidEvidenceUrl('https://placehold.co/600x400/test.jpg');
     expect(r).toEqual({ valid: true });
   });
 
-  it('accepts cloudinary.com subdomain', () => {
-    const r = isValidEvidenceUrl(
-      'https://api.cloudinary.com/v1/something.jpg',
-    );
+  it('accepts a subdomain of a configured allowed host', () => {
+    const r = isValidEvidenceUrl('https://cdn.media.example.com/v1/x.jpg', {
+      allowedHosts: ['media.example.com'],
+    });
     expect(r).toEqual({ valid: true });
   });
 
   it('rejects http://', () => {
-    const r = isValidEvidenceUrl('http://res.cloudinary.com/test.jpg');
+    const r = isValidEvidenceUrl('http://placehold.co/test.jpg');
     expect(r.valid).toBe(false);
     if (!r.valid) expect(r.reason).toMatch(/https/);
   });
@@ -65,7 +66,7 @@ describe('isValidEvidenceUrl (Phase 93)', () => {
   });
 
   it('rejects URLs longer than max length', () => {
-    const long = 'https://res.cloudinary.com/' + 'a'.repeat(3000);
+    const long = 'https://placehold.co/' + 'a'.repeat(3000);
     const r = isValidEvidenceUrl(long);
     expect(r.valid).toBe(false);
   });
@@ -79,17 +80,17 @@ describe('isValidEvidenceUrl (Phase 93)', () => {
 
   it('validateEvidenceUrls returns first failing index', () => {
     const result = validateEvidenceUrls([
-      'https://res.cloudinary.com/ok.jpg',
+      'https://placehold.co/ok.jpg',
       'https://evil.example.com/bad.jpg',
-      'https://res.cloudinary.com/also-ok.jpg',
+      'https://placehold.co/also-ok.jpg',
     ]);
     expect(result?.index).toBe(1);
   });
 
   it('validateEvidenceUrls returns null when all valid', () => {
     const result = validateEvidenceUrls([
-      'https://res.cloudinary.com/a.jpg',
-      'https://res.cloudinary.com/b.jpg',
+      'https://placehold.co/a.jpg',
+      'https://placehold.co/b.jpg',
     ]);
     expect(result).toBeNull();
   });

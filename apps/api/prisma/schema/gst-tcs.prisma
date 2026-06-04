@@ -29,7 +29,30 @@ enum TcsStatus {
   FILED
   // TCS amount remitted to government (admin marked-paid).
   PAID_TO_GOVT
+  // Phase 160 (§52 lifecycle audit B1) — TCS certificate furnished to
+  // the supplier per GST §52(5). Terminal stage of the lifecycle; the
+  // statutory promise of the §52 flow is only kept once we reach here.
+  CERTIFICATE_ISSUED
   // Reversed via correction; `correctionOfId` chain replays history.
+  REVERSED
+}
+
+// Phase 160 (§52 lifecycle audit #6 + #8) — append-only lifecycle
+// history. Every status transition (and the reversal reason) writes one
+// immutable row here instead of overloading the ledger's
+// `computedReason` text (which the audit flagged as truncating at 500
+// chars on repeated reverses) or relying solely on the cross-module
+// audit_logs (which is best-effort + can be pruned by retention policy).
+//
+// The audit_logs row stays (forensic, cross-module) AND this table is
+// the in-domain, query-by-ledger source of truth for "show me the full
+// status history of this TCS row".
+enum TcsLedgerEventType {
+  COMPUTED
+  COLLECTED
+  FILED
+  PAID_TO_GOVT
+  CERTIFICATE_ISSUED
   REVERSED
 }
 
@@ -98,10 +121,46 @@ model GstTcsSettlementLedger {
   paidToGovtAt     DateTime? @map("paid_to_govt_at")
   paidBy           String?   @map("paid_by")
   paymentReference String?   @map("payment_reference")
+  // Phase 160 (§52 lifecycle audit #11) — optional proof-of-payment
+  // file (the bank challan PDF). References file_metadata so a CBIC
+  // audit can pull the challan, not just the reference string. Nullable
+  // because the reference string alone is the minimum and ops may
+  // digitise the challan after the status flip.
+  paymentProofFileId String? @map("payment_proof_file_id")
+
+  // Phase 160 (§52 lifecycle audit B1 + #12) — certificate stage. GST
+  // §52(5) requires the operator to furnish a TCS certificate to each
+  // supplier within 5 days of GSTR-8 filing. The lifecycle previously
+  // stopped at PAID_TO_GOVT; these columns + the CERTIFICATE_ISSUED
+  // status close the final stage. Mirrors Section194OTdsLedger's
+  // certificate columns.
+  certificateNumber    String?   @map("certificate_number")
+  certificateIssuedAt  DateTime? @map("certificate_issued_at")
+  certificateIssuedBy  String?   @map("certificate_issued_by")
+  // Reserved for the stored-PDF pipeline (parallel to TaxDocumentPdf).
+  // Today the certificate is rendered on demand as HTML; when the PDF
+  // store lands these hold the persisted artefact's handle so a
+  // re-issue doesn't silently overwrite the prior version.
+  certificateStorageKey String? @map("certificate_storage_key")
+  certificateUrl        String? @map("certificate_url")
+
+  // Phase 160 (§52 lifecycle audit #9 + #10) — non-fatal compute
+  // warnings surfaced to the CA without blocking the row. Shape:
+  //   [{ code: 'MULTI_GSTIN', message, detail? }, ...]
+  // MULTI_GSTIN  — the seller's invoices in this period span more than
+  //                one supplier GSTIN; the row snapshots the first but
+  //                flags the spread so the CA can split for review.
+  computeWarningsJson Json @default("[]") @map("compute_warnings_json")
 
   // Correction lineage. A REVERSED row is paired with a corrected
   // replacement whose `correctionOfId` points back to this row.
   correctionOfId String? @map("correction_of_id")
+  // Phase 160 (§52 lifecycle audit #8) — structured reversal metadata.
+  // The reason no longer overloads (and truncates) `computedReason`;
+  // it lives here + in the append-only event log.
+  reversedAt     DateTime? @map("reversed_at")
+  reversedBy     String?   @map("reversed_by")
+  reversalReason String?   @map("reversal_reason")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -112,6 +171,8 @@ model GstTcsSettlementLedger {
   // schema allows N to keep the correction-flow flexibility (a
   // REVERSED row's predecessor settlement still points back).
   sellerSettlements SellerSettlement[]
+  // Phase 160 (§52 lifecycle audit #6 + #8) — append-only status history.
+  events            GstTcsLedgerEvent[]
 
   @@index([filingPeriod])
   // Phase 159z (GSTR-8 audit #5) — supports the "active row" lookup in
@@ -120,6 +181,41 @@ model GstTcsSettlementLedger {
   // (Prisma's @@unique doesn't support WHERE clauses).
   @@index([sellerId, filingPeriod])
   @@index([status])
+  // Phase 163 (Tax Audit Readiness audit #7) — the readiness TCS-unfiled
+  // scan selects `status IN (COMPUTED, COLLECTED) AND filingPeriod <= cutoff`;
+  // this composite serves it without a status-only scan + filter.
+  @@index([status, filingPeriod])
   @@index([supplierGstin])
   @@map("gst_tcs_settlement_ledger")
+}
+
+// Phase 160 (§52 lifecycle audit #6 + #8) — append-only lifecycle event
+// log for a TCS ledger row. One row per transition. Never updated or
+// deleted (the ledger-immutability convention used by the franchise
+// inventory ledger). Drives the per-row "status history" timeline in
+// the admin + seller UIs and gives a CA a queryable trail of who flipped
+// what, when, and why — including the full (untruncated) reversal reason.
+model GstTcsLedgerEvent {
+  id       String             @id @default(uuid())
+  ledgerId String             @map("ledger_id")
+  eventType TcsLedgerEventType @map("event_type")
+  // Status before/after the transition. `fromStatus` is null for the
+  // initial COMPUTED event.
+  fromStatus TcsStatus? @map("from_status")
+  toStatus   TcsStatus  @map("to_status")
+  // Who triggered it (admin id, or 'system'/'settlement' for hooks).
+  actorId String? @map("actor_id")
+  // Free-text reason (reversal reason, correction note). NOT truncated.
+  reason String? @map("reason")
+  // Transition-specific payload: { nicArn?, paymentReference?,
+  // certificateNumber?, settlementId?, ... }. JSON-safe.
+  metadataJson Json @default("{}") @map("metadata_json")
+
+  createdAt DateTime @default(now()) @map("created_at")
+
+  ledger GstTcsSettlementLedger @relation(fields: [ledgerId], references: [id], onDelete: Cascade)
+
+  @@index([ledgerId, createdAt])
+  @@index([eventType])
+  @@map("gst_tcs_ledger_event")
 }

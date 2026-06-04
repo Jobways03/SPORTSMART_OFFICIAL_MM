@@ -28,7 +28,7 @@ export interface ICollectionRepository {
    * Phase 37 (2026-05-21) — soft-delete. Stamps deletedAt; the
    * storefront query filters it out. Cascade-detaches all map rows
    * in the same tx so a restore doesn't bring back stale links.
-   * Returns the deleted row's image fields for Cloudinary cleanup.
+   * Returns the deleted row's image fields for media cleanup.
    */
   softDelete(id: string): Promise<{
     imageUrl: string | null;

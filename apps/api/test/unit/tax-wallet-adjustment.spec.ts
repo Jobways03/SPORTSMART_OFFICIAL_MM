@@ -22,7 +22,10 @@ interface MockPrisma {
     findUnique: jest.Mock;
     create: jest.Mock;
     update: jest.Mock;
+    updateMany: jest.Mock;
+    findUniqueOrThrow: jest.Mock;
   };
+  walletAdjustmentHistory: { create: jest.Mock };
   admin: { findUnique: jest.Mock };
   adminRoleAssignment: { findFirst: jest.Mock };
   platformExpense: { create: jest.Mock };
@@ -44,6 +47,9 @@ function makeService(
   prisma: MockPrisma;
   wallet: MockWallet;
 } {
+  // Captures the data passed to walletAdjustment.updateMany (reject CAS) so
+  // findUniqueOrThrow can echo it back as the "rejected" row.
+  let rejectCaptured: any = {};
   const prisma: MockPrisma = {
     return: { findUnique: jest.fn(), update: jest.fn().mockResolvedValue({}) },
     platformExpense: { create: jest.fn().mockResolvedValue({}) },
@@ -54,7 +60,16 @@ function makeService(
       findUnique: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
+      // Phase 162 — reject() now uses a CAS updateMany + re-read. The stateful
+      // pair captures the update data so findUniqueOrThrow returns the rejected
+      // row (incl. the :rejected-<ts> idempotencyKey suffix) the tests assert on.
+      updateMany: jest.fn(async (a: any) => {
+        rejectCaptured = a.data ?? {};
+        return { count: 1 };
+      }),
+      findUniqueOrThrow: jest.fn(async () => ({ id: 'mock', ...rejectCaptured })),
     },
+    walletAdjustmentHistory: { create: jest.fn().mockResolvedValue({}) },
     // Default role lookups → "not a Super Admin, not a TaxMgr" so single-
     // approval tests that don't care about roles pass through unchanged.
     // Dual-approval tests override these per-case.
@@ -76,10 +91,13 @@ function makeService(
     getBoolean: (_k: string, fb: boolean) =>
       envOverrides.autoApprove !== undefined ? envOverrides.autoApprove : fb,
   };
+  const audit: any = { writeAuditLog: jest.fn().mockResolvedValue(undefined) };
   const service = new WalletAdjustmentService(
     prisma as any,
     env,
     wallet as any,
+    audit,
+    // eventBus + notifications are @Optional — omitted (no-op in tests).
   );
   return { service, prisma, wallet };
 }

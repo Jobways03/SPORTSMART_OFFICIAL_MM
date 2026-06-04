@@ -75,6 +75,10 @@ describe('ProcurementService.approveRequest — write-back variant.costPrice', (
       },
       // Phase 159p — approveRequest now runs in a tx + writes a history row.
       procurementRequestEvent: { create: jest.fn().mockResolvedValue({}) },
+      // Phase 236 — approve flips the header via a CAS updateMany now.
+      procurementRequest: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
     };
     prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
 

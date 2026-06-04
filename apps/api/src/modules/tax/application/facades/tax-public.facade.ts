@@ -94,4 +94,48 @@ export class TaxPublicFacade {
       return false;
     }
   }
+
+  /**
+   * Phase 200 (audit #6) — richer companion to customerOwnsTaxProfile.
+   *
+   * Ownership alone does NOT mean a profile is safe to invoice against: an
+   * unverified, legal-name-mismatched, or portal-SUSPENDED/CANCELLED GSTIN
+   * issues a B2B invoice the buyer can't reconcile (GSTR-2A / ITC break).
+   * Checkout uses this to decide whether to allow, warn, or block (the latter
+   * only when the tax mode is STRICT — enforced by the caller / TaxModeService).
+   *
+   * Never throws — a missing/foreign profile returns ownedByCustomer:false.
+   * Returns:
+   *   ownedByCustomer — the row exists and belongs to this customer
+   *   usable          — ownedByCustomer && verified && !mismatch && portal OK
+   *   reason          — machine code: OK | NOT_OWNED | UNVERIFIED |
+   *                     LEGAL_NAME_MISMATCH | PORTAL_INACTIVE
+   */
+  async getTaxProfileUsability(
+    customerId: string,
+    profileId: string,
+  ): Promise<{
+    ownedByCustomer: boolean;
+    usable: boolean;
+    reason: string;
+    isVerified: boolean;
+    legalNameMismatch: boolean;
+    portalStatus: string | null;
+  }> {
+    try {
+      return await this.customerProfiles.getUsability(customerId, profileId);
+    } catch (err) {
+      this.logger.warn(
+        `Tax-profile usability check failed for ${profileId}: ${(err as Error).message}`,
+      );
+      return {
+        ownedByCustomer: false,
+        usable: false,
+        reason: 'NOT_OWNED',
+        isVerified: false,
+        legalNameMismatch: false,
+        portalStatus: null,
+      };
+    }
+  }
 }

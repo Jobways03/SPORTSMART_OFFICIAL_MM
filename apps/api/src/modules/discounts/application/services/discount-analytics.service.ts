@@ -17,8 +17,22 @@
 //   - Remaining budget: requires the budget columns on Discount
 //     (P2.1 approval/budget). Stub returned (null per row).
 
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+
+// Phase 246 (#9) — "committed spend" excludes orders whose discount never
+// stuck: customer-cancelled, verifier-rejected, or never-paid-online. COD /
+// placed orders (paymentStatus still PENDING but the order is live) are kept.
+// Without this filter, cancelled-cart and abandoned-checkout discounts inflate
+// every spend / funding / top-coupon figure and break finance reconciliation.
+const NON_COMMITTED_ORDER_STATUSES = [
+  'CANCELLED',
+  'REJECTED',
+  'PENDING_PAYMENT',
+];
+const COMMITTED_ORDER_FILTER = {
+  masterOrder: { orderStatus: { notIn: NON_COMMITTED_ORDER_STATUSES as any } },
+};
 
 export interface DateRange {
   fromDate?: Date | null;
@@ -81,10 +95,18 @@ export interface DiscountAnalyticsSummary {
     attemptCount: number;
     blockedCount: number;
   };
+  /**
+   * Phase 246 (#12) — when a single sub-query fails, the dashboard renders
+   * the cards that succeeded and lists the ones that didn't here, instead of
+   * 500-ing the whole page.
+   */
+  _errors?: string[];
 }
 
 @Injectable()
 export class DiscountAnalyticsService {
+  private readonly logger = new Logger(DiscountAnalyticsService.name);
+
   constructor(private readonly prisma: PrismaService) {}
 
   /**
@@ -96,28 +118,24 @@ export class DiscountAnalyticsService {
     const fromDate =
       range.fromDate ?? new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    const [
-      redemptionsByStatus,
-      orderDiscountAgg,
-      orderDiscountByFunding,
-      liabilityByParty,
-      reversalAgg,
-      topByRevenue,
-      topByLoss,
-    ] = await Promise.all([
+    // Phase 246 (#12) — allSettled (not all): one slow/locked table can't
+    // take down the whole dashboard. Each card falls back to a safe empty
+    // value and the failure is surfaced in `_errors`.
+    const settled: PromiseSettledResult<any>[] = await Promise.allSettled([
       this.prisma.discountRedemption.groupBy({
         by: ['status'],
         where: { createdAt: { gte: fromDate, lte: toDate } },
         _count: true,
       }),
       this.prisma.orderDiscount.aggregate({
-        where: { createdAt: { gte: fromDate, lte: toDate } },
+        // #9 — committed spend only.
+        where: { createdAt: { gte: fromDate, lte: toDate }, ...COMMITTED_ORDER_FILTER },
         _sum: { discountAmountInPaise: true },
         _count: true,
       }),
       this.prisma.orderDiscount.groupBy({
         by: ['fundingType'],
-        where: { createdAt: { gte: fromDate, lte: toDate } },
+        where: { createdAt: { gte: fromDate, lte: toDate }, ...COMMITTED_ORDER_FILTER },
         _sum: { discountAmountInPaise: true },
         _count: true,
       }),
@@ -140,18 +158,75 @@ export class DiscountAnalyticsService {
       }),
       this.prisma.orderDiscount.groupBy({
         by: ['discountId', 'discountCode'],
-        where: { createdAt: { gte: fromDate, lte: toDate } },
+        where: { createdAt: { gte: fromDate, lte: toDate }, ...COMMITTED_ORDER_FILTER },
         _sum: { discountAmountInPaise: true },
         _count: true,
         orderBy: { _sum: { discountAmountInPaise: 'desc' } },
         take: 10,
       }),
-      // "Top by loss" = top discounts by reversed amount. We join
-      // through orderItemId → orderDiscount to find the discountId
-      // since return_tax_reversal_lines doesn't carry it directly.
-      // For simplicity we use a raw query.
+      // "Top by loss" = top discounts by reversed amount. Joined through
+      // orderItemId → order_item_discounts; #10 splits the reversal
+      // proportionally across stacked discounts so a 2-discount item isn't
+      // double-counted.
       this.topCouponsByLoss(fromDate, toDate),
     ]);
+
+    const errors: string[] = [];
+    const labels = [
+      'redemptions',
+      'spend',
+      'spendByFunding',
+      'liability',
+      'refundImpact',
+      'topByRevenue',
+      'topByLoss',
+    ];
+    const pick = <T>(i: number, fallback: T): T => {
+      const r = settled[i];
+      if (r && r.status === 'fulfilled') return r.value as T;
+      const label = labels[i] ?? `query${i}`;
+      errors.push(label);
+      if (r && r.status === 'rejected') {
+        this.logger.warn(
+          `Discount analytics query "${label}" failed: ${
+            (r.reason as Error)?.message ?? r.reason
+          }`,
+        );
+      }
+      return fallback;
+    };
+
+    const redemptionsByStatus = pick<Array<{ status: string; _count: number }>>(
+      0,
+      [],
+    );
+    const orderDiscountAgg = pick<{
+      _sum: { discountAmountInPaise: bigint | null };
+      _count: number;
+    }>(1, { _sum: { discountAmountInPaise: 0n }, _count: 0 });
+    const orderDiscountByFunding = pick<
+      Array<{ fundingType: string; _sum: { discountAmountInPaise: bigint | null }; _count: number }>
+    >(2, []);
+    const liabilityByParty = pick<
+      Array<{ liabilityParty: string; _sum: { amountInPaise: bigint | null }; _count: number }>
+    >(3, []);
+    const reversalAgg = pick<{
+      _sum: {
+        discountReversalInPaise: bigint | null;
+        totalCreditNoteAmountInPaise: bigint | null;
+      };
+      _count: number;
+    }>(4, {
+      _sum: { discountReversalInPaise: 0n, totalCreditNoteAmountInPaise: 0n },
+      _count: 0,
+    });
+    const topByRevenue = pick<
+      Array<{ discountId: string; discountCode: string | null; _sum: { discountAmountInPaise: bigint | null }; _count: number }>
+    >(5, []);
+    const topByLoss = pick<DiscountAnalyticsSummary['topCoupons']['byLoss']>(
+      6,
+      [],
+    );
 
     const redeemed =
       redemptionsByStatus.find((r) => r.status === 'REDEEMED')?._count ?? 0;
@@ -209,6 +284,56 @@ export class DiscountAnalyticsService {
         attemptCount: 0,
         blockedCount: 0,
       },
+      ...(errors.length ? { _errors: errors } : {}),
+    };
+  }
+
+  /**
+   * Phase 247-FB — funding-party receivables. Nets the discount liability
+   * ledger by party + attributed franchise/brand so finance can see who owes
+   * what: FRANCHISE rows are auto-deducted in the franchise settlement (this
+   * is the cross-check); BRAND rows have no automated recovery yet, so this
+   * report IS the manual-billing surface (sum each brand owes). Signed net
+   * (APPLIED + SETTLED + REVERSED) so returns credit back.
+   */
+  async getFundingReceivables(range: DateRange = {}): Promise<{
+    range: { fromDate: string; toDate: string };
+    franchise: Array<{ franchiseId: string; netInPaise: string }>;
+    brand: Array<{ brandId: string; netInPaise: string }>;
+  }> {
+    const toDate = range.toDate ?? new Date();
+    const fromDate =
+      range.fromDate ?? new Date(toDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const whereBase = {
+      createdAt: { gte: fromDate, lte: toDate },
+      status: { in: ['APPLIED', 'SETTLED', 'REVERSED'] as any },
+    };
+    const [franchiseRows, brandRows] = await Promise.all([
+      this.prisma.discountLiabilityLedger.groupBy({
+        by: ['franchiseId'],
+        where: { ...whereBase, liabilityParty: 'FRANCHISE' as any },
+        _sum: { amountInPaise: true },
+      }),
+      this.prisma.discountLiabilityLedger.groupBy({
+        by: ['brandId'],
+        where: { ...whereBase, liabilityParty: 'BRAND' as any },
+        _sum: { amountInPaise: true },
+      }),
+    ]);
+    return {
+      range: { fromDate: fromDate.toISOString(), toDate: toDate.toISOString() },
+      franchise: franchiseRows
+        .filter((r) => r.franchiseId)
+        .map((r) => ({
+          franchiseId: r.franchiseId as string,
+          netInPaise: (r._sum.amountInPaise ?? 0n).toString(),
+        })),
+      brand: brandRows
+        .filter((r) => r.brandId)
+        .map((r) => ({
+          brandId: r.brandId as string,
+          netInPaise: (r._sum.amountInPaise ?? 0n).toString(),
+        })),
     };
   }
 
@@ -227,15 +352,36 @@ export class DiscountAnalyticsService {
       reversal_count: bigint;
       total_reversal_in_paise: bigint;
     };
+    // Phase 246 (#10) — an order item with N stacked discounts produces N
+    // order_item_discounts rows, so a naive join fan-out summed each
+    // reversal line N times. We split each reversal proportionally across
+    // the discounts on the item (by each discount's share of the item's
+    // total discount), so the amounts sum to the true reversal once.
+    // reversal_count uses COUNT(DISTINCT rtrl.id) to avoid the same inflation.
     const rows = await this.prisma.$queryRaw<Row[]>`
       SELECT
         oid.discount_id,
         oid.discount_code,
-        COUNT(rtrl.id) AS reversal_count,
-        COALESCE(SUM(rtrl.total_credit_note_amount_in_paise), 0) AS total_reversal_in_paise
+        COUNT(DISTINCT rtrl.id) AS reversal_count,
+        COALESCE(
+          ROUND(
+            SUM(
+              rtrl.total_credit_note_amount_in_paise::numeric
+                * oid.discount_amount_in_paise::numeric
+                / NULLIF(item_totals.total_disc, 0)
+            )
+          ),
+          0
+        )::bigint AS total_reversal_in_paise
       FROM return_tax_reversal_lines rtrl
       INNER JOIN order_item_discounts oid
         ON oid.order_item_id = rtrl.order_item_id
+      INNER JOIN (
+        SELECT order_item_id, SUM(discount_amount_in_paise) AS total_disc
+        FROM order_item_discounts
+        GROUP BY order_item_id
+      ) item_totals
+        ON item_totals.order_item_id = rtrl.order_item_id
       WHERE rtrl.created_at >= ${fromDate}
         AND rtrl.created_at <= ${toDate}
       GROUP BY oid.discount_id, oid.discount_code

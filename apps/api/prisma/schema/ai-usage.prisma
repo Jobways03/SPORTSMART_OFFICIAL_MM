@@ -40,3 +40,45 @@ model AiUsageQuota {
   @@index([day])
   @@map("ai_usage_quotas")
 }
+
+// Phase 249 (#3) — per-generation log (was: only the aggregate quota
+// counter). One row per call to the AI content generator captures who
+// asked, with what hints + prompt version + provider, the produced JSON,
+// and the lifecycle: GENERATED on success → ACCEPTED when the seller saves
+// a product carrying it (or DISCARDED if they don't) → FAILED on a provider
+// error. Lets compliance answer "what did the AI tell this seller / which
+// products carry AI copy" and reproduce a hallucination report.
+enum AiGenerationStatus {
+  GENERATED
+  ACCEPTED
+  DISCARDED
+  FAILED
+}
+
+model AiGenerationLog {
+  id          String  @id @default(uuid())
+  subject     String
+  subjectType String? @map("subject_type")
+  // Set once the generation is accepted onto a product (ACCEPTED).
+  productId   String? @map("product_id")
+  // Inputs that flavoured the prompt (hints, not the real product record).
+  titleHint    String? @map("title_hint")
+  categoryHint String? @map("category_hint")
+  brandHint    String? @map("brand_hint")
+  promptVersion String @map("prompt_version")
+  provider     String?
+  model        String?
+  // The produced { description, slug, metaTitle, metaDescription }.
+  generatedJson Json?  @map("generated_json")
+  status       AiGenerationStatus @default(GENERATED)
+  durationMs   Int?    @map("duration_ms")
+  errorMessage String? @map("error_message")
+  acceptedAt   DateTime? @map("accepted_at")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  @@index([subject, createdAt])
+  @@index([productId])
+  @@index([status, createdAt])
+  @@map("ai_generation_logs")
+}

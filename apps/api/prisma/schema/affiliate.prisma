@@ -3,9 +3,18 @@
 // ============================================
 // Implements SRS v2.0 — referral tracking, commission lifecycle
 // (PENDING → HOLD → CONFIRMED → PAID/CANCELLED/REVERSED), KYC,
-// payouts with TDS (Section 194H, 10%, ₹15k FY threshold), and
-// fraud flags. Customer-facing UI never surfaces affiliate state —
-// this is admin/affiliate-only.
+// payouts with TDS, and fraud flags. Customer-facing UI never
+// surfaces affiliate state — this is admin/affiliate-only.
+//
+// TDS section is finance-configurable (AffiliateSettings.tdsSection):
+//   - DEFAULT '194O' (e-commerce participant, §194-O of the IT Act):
+//     per-payout, PAN-aware — 1% with PAN on file, 5% without
+//     (§194-O(4)); quarterly Form 26Q + Form 16A lifecycle.
+//   - Switchable to '194H' (commission/brokerage): 10% on the FY
+//     cumulative slice above ₹15,000; §206AA escalates a PAN-less
+//     deductee to 20%.
+// The §194H-vs-§194-O determination is a tax-law decision for finance,
+// so it lives in config — not hardcoded.
 //
 // State machine is intentionally PARALLEL to seller-commission
 // states (PENDING/ON_HOLD/SETTLED/REFUNDED). Mixing them would
@@ -366,6 +375,15 @@ model AffiliateCouponCode {
   // can distinguish system-generated from hand-added codes.
   couponSource     AffiliateCouponSource @default(REGISTRATION_AUTO) @map("coupon_source")
   createdByAdminId String?               @map("created_by_admin_id")
+
+  // Phase 244 (coupon-codes audit #13) — revocation provenance. A
+  // deactivation (isActive=false) for fraud vs. "out of season" was
+  // indistinguishable; these capture who killed the code, when, and
+  // why directly on the row (the audit_log already records the action,
+  // but reporting/forensics needs it queryable here).
+  revokedByAdminId String?   @map("revoked_by_admin_id")
+  revokedAt        DateTime? @map("revoked_at")
+  revocationReason String?   @map("revocation_reason")
 
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
@@ -805,6 +823,14 @@ model AffiliateTds194OLedger {
   certificateIssuedBy String?   @map("certificate_issued_by")
   certificateNumber   String?   @map("certificate_number")
   filedAt    DateTime? @map("filed_at")
+  // Phase 160 (§194-O affiliate audit #16) — correction flow. A row may be
+  // REVERSED from any non-REVERSED state (e.g. a wrong deduction discovered
+  // after deposit); reversed rows drop out of the Form 26Q / quarterly report
+  // (which only count WITHHELD/DEPOSITED/CERTIFICATE_ISSUED). Reason is on a
+  // dedicated column (NOT overloaded onto another field) + the audit log.
+  reversedAt     DateTime? @map("reversed_at")
+  reversedBy     String?   @map("reversed_by")
+  reversalReason String?   @map("reversal_reason")
   updatedAt  DateTime  @updatedAt @map("updated_at")
 
   affiliate     Affiliate              @relation(fields: [affiliateId], references: [id], onDelete: Cascade)

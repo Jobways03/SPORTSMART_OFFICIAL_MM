@@ -12,8 +12,8 @@
 // Returns the detected MIME or null if no signature matches. Caller
 // rejects the upload if the result doesn't match the user-supplied
 // Content-Type — closes the "PNG header on a .exe" attack vector
-// because Cloudinary's allowed_formats only validates after we've
-// already transmitted.
+// because the storage provider's own format validation only runs
+// after we've already transmitted.
 
 export type DetectedImageMime =
   | 'image/jpeg'

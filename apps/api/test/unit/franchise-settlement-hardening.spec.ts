@@ -45,6 +45,7 @@ function buildCreateService(entries: any[]) {
         })),
       ),
     },
+    discountLiabilityLedger: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountInPaise: null } }) },
   };
   const prisma: any = { $transaction: (cb: any) => cb(tx) };
   const financeRepo: any = {};
@@ -100,6 +101,7 @@ describe('FranchiseSettlementService.markSettlementPaid — B3 / #16 (atomic CAS
         findUnique: jest.fn().mockResolvedValue({ id: 's1', status: 'PAID' }),
       },
       franchiseFinanceLedger: { updateMany: ledgerUpdate },
+      discountLiabilityLedger: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountInPaise: null } }) },
     };
     const prisma: any = { $transaction: (cb: any) => cb(tx) };
     const financeRepo: any = {
@@ -162,6 +164,7 @@ describe('FranchiseSettlementService.createSettlementCycle — #13 overlap', () 
       },
       franchiseSettlement: { count: jest.fn().mockResolvedValue(1) },
       franchiseFinanceLedger: { updateMany: jest.fn(), findMany: jest.fn() },
+      discountLiabilityLedger: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountInPaise: null } }) },
     };
     const prisma: any = { $transaction: (cb: any) => cb(tx) };
     const logger: any = { setContext: jest.fn(), log: jest.fn() };

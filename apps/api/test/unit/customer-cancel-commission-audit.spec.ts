@@ -26,6 +26,12 @@ describe('PrismaCheckoutRepository.cancelOrderTransaction — commission audit',
       : null;
 
     const tx: any = {
+      // Phase 197 (My-Orders audit #15) — cancelOrderTransaction now
+      // takes a FOR UPDATE row lock and re-reads sub-order fulfillment
+      // statuses via $queryRaw before mutating. Returning [] means no
+      // sub-order is in a blocking (SHIPPED/DELIVERED/FULFILLED) state,
+      // so the cancel proceeds into the commission path under test.
+      $queryRaw: jest.fn().mockResolvedValue([]),
       masterOrder: { update: jest.fn().mockResolvedValue({}) },
       subOrder: { update: jest.fn().mockResolvedValue({}) },
       productVariant: { update: jest.fn().mockResolvedValue({}) },

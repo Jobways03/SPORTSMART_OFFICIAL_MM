@@ -92,6 +92,43 @@ model StockReservation {
 // Allocation Audit Log — records every allocation decision
 // ============================================
 
+// Phase 233 (Allocation Analytics audit) — where this allocation row came
+// from. Pre-233 the table mixed real checkout decisions (LIVE), admin
+// browse-only listings (eligible-nodes), admin dry-run previews, authenticated
+// storefront cart serviceability checks, and system re-allocations into one
+// undistinguished pile — so "how many allocations did we make this week" was
+// inflated by preview/listing/scrape traffic. Analytics now filters to LIVE +
+// REALLOCATION + MANUAL_REASSIGNMENT (the rows that represent a real routing
+// outcome); LISTING / PREVIEW / STOREFRONT are kept for forensics but excluded
+// from business metrics. Default LIVE so every legacy + checkout row is counted.
+enum AllocationEventSource {
+  LIVE // real checkout allocation (counts in analytics)
+  REALLOCATION // system fallback after a failed mapping (counts)
+  MANUAL_REASSIGNMENT // admin manual reassign (counts)
+  LISTING // admin eligible-nodes/sellers browse (excluded from analytics)
+  PREVIEW // admin routing dry-run (excluded)
+  STOREFRONT // authenticated customer cart serviceability check (excluded)
+}
+
+// Phase 233 — the routing outcome, so the dashboard's four counters
+// (primary-serviceable / fallback / unserviceable / reassigned) are answerable
+// with a GROUP BY instead of being absent. Nullable for pre-233 rows.
+enum AllocationOutcome {
+  PRIMARY_SERVICEABLE // a node was chosen on the first attempt
+  FALLBACK_SERVICEABLE // chosen via re-allocation after a failed mapping
+  UNSERVICEABLE // no eligible node
+  REASSIGNED // admin manually moved the order to another node
+}
+
+// Phase 233 — structured reason code alongside the human-readable
+// allocationReason text, so failures can be grouped/filtered.
+enum AllocationReasonCode {
+  PRIMARY_HIGHEST_SCORE
+  REALLOCATED_FROM_FAILED
+  NO_SERVICEABLE_NODE
+  MANUAL_REASSIGN
+}
+
 model AllocationLog {
   id                   String   @id @default(uuid())
   productId            String   @map("product_id")
@@ -106,6 +143,10 @@ model AllocationLog {
   // Null = pincode had no mapping (distance-based discovery / seller node).
   allocatedPincodeMappingId String? @map("allocated_pincode_mapping_id")
   allocationReason     String?  @map("allocation_reason")
+  // Phase 233 — provenance + outcome + structured reason (see enums above).
+  eventSource          AllocationEventSource  @default(LIVE) @map("event_source")
+  outcome              AllocationOutcome?     @map("outcome")
+  reasonCode           AllocationReasonCode?  @map("reason_code")
   distanceKm           Decimal? @map("distance_km") @db.Decimal(10, 2)
   score                Decimal? @db.Decimal(10, 4)
   isReallocated        Boolean  @default(false) @map("is_reallocated")
@@ -118,6 +159,14 @@ model AllocationLog {
   @@index([allocatedSellerId])
   @@index([allocatedFranchiseId])
   @@index([orderId])
+  // Phase 233 — date-bounded analytics scans (the dashboard filters by
+  // fromDate/toDate); the (outcome, createdAt) + (eventSource, createdAt)
+  // composites back the GROUP-BY-outcome and LIVE-only filters.
+  @@index([createdAt])
+  @@index([outcome, createdAt])
+  @@index([eventSource, createdAt])
+  @@index([allocatedNodeType])
+  @@index([isReallocated])
   @@map("allocation_logs")
 }
 

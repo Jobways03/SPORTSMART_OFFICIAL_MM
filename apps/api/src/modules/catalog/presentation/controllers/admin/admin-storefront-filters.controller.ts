@@ -19,6 +19,8 @@ import {
 } from '../../../../../core/exceptions';
 import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
 import { Permissions } from '../../../../../core/decorators/permissions.decorator';
+import { CurrentAdmin } from '../../../../../core/decorators/current-actor.decorator';
+import { AuditPublicFacade } from '../../../../audit/application/facades/audit-public.facade';
 import { CatalogCacheService } from '../../../application/services/catalog-cache.service';
 import { STOREFRONT_REPOSITORY, IStorefrontRepository } from '../../../domain/repositories/storefront.repository.interface';
 import { METAFIELD_REPOSITORY, IMetafieldRepository } from '../../../domain/repositories/metafield.repository.interface';
@@ -57,7 +59,39 @@ export class AdminStorefrontFiltersController {
     @Inject(CATEGORY_REPOSITORY) private readonly categoryRepo: ICategoryRepository,
     @Inject(COLLECTION_REPOSITORY) private readonly collectionRepo: ICollectionRepository,
     private readonly cache: CatalogCacheService,
+    private readonly audit: AuditPublicFacade,
   ) {}
+
+  /**
+   * Phase 194 (#14) — write a tamper-evident audit row for every filter
+   * config mutation. Pre-194 these mutations were silent — there was no
+   * queryable trail of who created/edited/reordered/deleted a storefront
+   * filter, the sibling admin-metafield-definitions controller having had
+   * audit since Phase 40 (#7). Best-effort: an audit-store outage must not
+   * roll back an otherwise-successful admin change.
+   */
+  private async audited(
+    adminId: string | undefined,
+    action: string,
+    resourceId: string | undefined,
+    oldValue: unknown,
+    newValue: unknown,
+  ): Promise<void> {
+    try {
+      await this.audit.writeAuditLog({
+        actorId: adminId,
+        actorRole: 'ADMIN',
+        action,
+        module: 'catalog',
+        resource: 'StorefrontFilter',
+        resourceId,
+        oldValue,
+        newValue,
+      });
+    } catch {
+      // audit-store outage — the mutation already succeeded; swallow.
+    }
+  }
 
   /**
    * Phase 40 — flush the storefront filter cache. Best-effort: a Redis
@@ -128,9 +162,10 @@ export class AdminStorefrontFiltersController {
   @HttpCode(HttpStatus.OK)
   @Permissions('catalog.write')
   @ApiOperation({ summary: 'Reorder storefront filters' })
-  async reorder(@Body() dto: ReorderStorefrontFiltersDto) {
+  async reorder(@CurrentAdmin() adminId: string, @Body() dto: ReorderStorefrontFiltersDto) {
     const { updated } = await this.storefrontRepo.reorderFilterConfigs(dto.ids);
     await this.invalidateFilterCache();
+    await this.audited(adminId, 'STOREFRONT_FILTER_REORDERED', undefined, null, { ids: dto.ids, updated });
     return { success: true, message: `Reordered ${updated} filters`, data: { updated } };
   }
 
@@ -140,7 +175,7 @@ export class AdminStorefrontFiltersController {
   @HttpCode(HttpStatus.CREATED)
   @Permissions('catalog.write')
   @ApiOperation({ summary: 'Create a storefront filter configuration' })
-  async create(@Body() dto: CreateStorefrontFilterDto) {
+  async create(@CurrentAdmin() adminId: string, @Body() dto: CreateStorefrontFilterDto) {
     // Exactly one of metafieldDefinitionId or builtInType must be set.
     if (!dto.metafieldDefinitionId && !dto.builtInType) {
       throw new BadRequestAppException('Either metafieldDefinitionId or builtInType is required');
@@ -169,6 +204,14 @@ export class AdminStorefrontFiltersController {
     });
 
     await this.invalidateFilterCache();
+    await this.audited(adminId, 'STOREFRONT_FILTER_CREATED', filter.id, null, {
+      metafieldDefinitionId: filter.metafieldDefinitionId,
+      builtInType: filter.builtInType,
+      label: filter.label,
+      filterType: filter.filterType,
+      scopeType: filter.scopeType,
+      scopeId: filter.scopeId,
+    });
     return { success: true, message: 'Storefront filter created', data: { filter } };
   }
 
@@ -177,7 +220,7 @@ export class AdminStorefrontFiltersController {
   @Patch(':id')
   @HttpCode(HttpStatus.OK)
   @Permissions('catalog.write')
-  async update(@Param('id') id: string, @Body() dto: UpdateStorefrontFilterDto) {
+  async update(@CurrentAdmin() adminId: string, @Param('id') id: string, @Body() dto: UpdateStorefrontFilterDto) {
     const existing = await this.storefrontRepo.findFilterConfigById(id);
     if (!existing) throw new NotFoundAppException('Storefront filter not found');
 
@@ -200,6 +243,7 @@ export class AdminStorefrontFiltersController {
 
     const filter = await this.storefrontRepo.updateFilterConfig(id, updateData as any);
     await this.invalidateFilterCache();
+    await this.audited(adminId, 'STOREFRONT_FILTER_UPDATED', id, existing, updateData);
     return { success: true, message: 'Storefront filter updated', data: { filter } };
   }
 
@@ -208,12 +252,13 @@ export class AdminStorefrontFiltersController {
   @Delete(':id')
   @HttpCode(HttpStatus.OK)
   @Permissions('catalog.write')
-  async remove(@Param('id') id: string) {
+  async remove(@CurrentAdmin() adminId: string, @Param('id') id: string) {
     const existing = await this.storefrontRepo.findFilterConfigById(id);
     if (!existing) throw new NotFoundAppException('Storefront filter not found');
 
     await this.storefrontRepo.deleteFilterConfig(id);
     await this.invalidateFilterCache();
+    await this.audited(adminId, 'STOREFRONT_FILTER_DELETED', id, existing, null);
     return { success: true, message: 'Storefront filter deleted' };
   }
 }

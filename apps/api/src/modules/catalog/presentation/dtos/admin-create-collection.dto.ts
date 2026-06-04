@@ -13,7 +13,7 @@ import { Transform } from 'class-transformer';
 /**
  * Phase 37 (2026-05-21) — explicit allowlist DTO. Mirrors the brand
  * + category DTO patterns. `imageUrl` and `imagePublicId` are NOT
- * here — set server-side from the Cloudinary upload response.
+ * here — set server-side from the media upload response.
  */
 export class AdminCreateCollectionDto {
   @IsString()

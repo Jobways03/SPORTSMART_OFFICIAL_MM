@@ -72,6 +72,7 @@ describe('FranchiseSettlementService.createSettlementCycle — atomic claim', ()
           return { id: 'settle-fr-A', ...args.data };
         }),
       },
+      discountLiabilityLedger: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountInPaise: null } }) },
     };
     const prisma: any = {
       $transaction: (cb: any) => cb(tx),

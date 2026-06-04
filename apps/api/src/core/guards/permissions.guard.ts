@@ -11,6 +11,7 @@ import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { ForbiddenAppException } from '../exceptions';
 import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 import { AuthorizationAuditService } from '../authorization/authorization-audit.service';
+import { AuthzModeService } from '../authorization/authz-mode.service';
 import { AuditPublicFacade } from '../../modules/audit/application/facades/audit-public.facade';
 import { PERMISSION_RISK } from '../authorization/permission-registry';
 import { REQUIRES_STEP_UP_METADATA_KEY } from '../step-up/requires-step-up.decorator';
@@ -58,6 +59,8 @@ export class PermissionsGuard implements CanActivate {
     // Phase 24 (2026-05-20) — needed for the CRITICAL auto-step-up
     // check. Looks up AdminSession.stepUpVerifiedAt by req.sessionId.
     private readonly prisma: PrismaService,
+    // Resolves effective strict mode (env OR tighten-only runtime override).
+    private readonly authzMode: AuthzModeService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -303,7 +306,7 @@ export class PermissionsGuard implements CanActivate {
   }
 
   private strict(): boolean {
-    return this.env.getBoolean('PERMISSIONS_GUARD_STRICT', false);
+    return this.authzMode.isStrict();
   }
 
   private routeLabel(ctx: ExecutionContext): string {

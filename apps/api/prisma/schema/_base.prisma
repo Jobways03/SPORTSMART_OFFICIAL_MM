@@ -196,6 +196,9 @@ enum FranchiseSettlementStatus {
   APPROVED
   PAID
   FAILED
+  // Phase 178 (Outstanding Payables audit #4) — frozen from payout + partial pay.
+  ON_HOLD
+  PARTIALLY_PAID
 }
 
 enum PosSaleStatus {
@@ -236,6 +239,24 @@ enum PosTaxInvoiceStatus {
   PENDING
   ISSUED
   FAILED
+  // Phase 238/239 (POS void/return audits) — the §31 invoice is marked CANCELLED
+  // when the sale is voided or fully returned, so a voided/returned sale no
+  // longer carries a live tax invoice. (Issuing the actual NIC credit-note via
+  // CreditNoteService is marketplace-coupled and tracked as a separate build.)
+  CANCELLED
+}
+
+// Phase 242 (POS Reconciliation audit) — end-of-day cash-vs-bank reconciliation
+// state. A bounded core: the franchise SUBMITs counted cash + bank deposit; the
+// server computes expected cash authoritatively and flags MATCHED vs VARIANCE.
+// The admin approve/reject/resolve workflow + deposit-proof upload +
+// bank-statement auto-match + ledger adjustment are the surfaced follow-on.
+enum PosReconciliationStatus {
+  SUBMITTED // franchise recorded counted cash + deposit
+  MATCHED // |variance| within tolerance
+  VARIANCE // out of tolerance — needs review
+  APPROVED // admin signed off (follow-on workflow)
+  REJECTED // admin rejected (follow-on workflow)
 }
 
 // Phase 159r (POS void/return audit #12) — how a refund was paid back.

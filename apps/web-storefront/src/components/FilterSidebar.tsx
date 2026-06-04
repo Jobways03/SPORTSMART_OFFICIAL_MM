@@ -20,7 +20,10 @@ interface FilterGroup {
   collapsed: boolean;
   showCounts: boolean;
   values?: FilterValue[];
-  range?: { min: number; max: number };
+  // Phase 194 (#13) — price bounds arrive as Decimal-precise strings (money
+  // on the wire); numeric metafield ranges still arrive as numbers. Accept
+  // both and coerce with Number() only at the format/placeholder boundary.
+  range?: { min: number | string; max: number | string };
   counts?: { true: number; false: number };
 }
 
@@ -54,19 +57,31 @@ export default function FilterSidebar({
   const [priceMin, setPriceMin] = useState(minPrice || '');
   const [priceMax, setPriceMax] = useState(maxPrice || '');
 
+  // Phase 194 (#17) — the facet endpoint is re-queried whenever the page
+  // search term changes. Without debounce, typing "running shoes" fired one
+  // /storefront/filters request per keystroke (11 round-trips, each a fan-out
+  // of raw-SQL aggregates). Lag the search by 350ms so only the settled term
+  // reloads the facets. categoryId/collectionId change discretely (nav), so
+  // they drive the reload immediately.
+  const [debouncedSearch, setDebouncedSearch] = useState(search);
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 350);
+    return () => clearTimeout(t);
+  }, [search]);
+
   const loadFilters = useCallback(async () => {
     try {
       const params = new URLSearchParams();
       if (categoryId) params.set('categoryId', categoryId);
       if (collectionId) params.set('collectionId', collectionId);
-      if (search) params.set('search', search);
+      if (debouncedSearch) params.set('search', debouncedSearch);
       const res = await apiClient<{ filters: FilterGroup[] }>(`/storefront/filters?${params}`);
       setFilterGroups(res.data?.filters || []);
     } catch {
       setFilterGroups([]);
     }
     setLoading(false);
-  }, [categoryId, collectionId, search]);
+  }, [categoryId, collectionId, debouncedSearch]);
 
   useEffect(() => { loadFilters(); }, [loadFilters]);
 
@@ -353,8 +368,8 @@ export default function FilterSidebar({
                     <div>
                       {(group.range.min != null && group.range.max != null) && (
                         <div className="flex items-center justify-between text-[11px] text-ink-500 mb-2 tabular">
-                          <span>₹{group.range.min.toLocaleString('en-IN')}</span>
-                          <span>₹{group.range.max.toLocaleString('en-IN')}</span>
+                          <span>₹{Number(group.range.min).toLocaleString('en-IN')}</span>
+                          <span>₹{Number(group.range.max).toLocaleString('en-IN')}</span>
                         </div>
                       )}
                       <div className="flex items-center gap-2">

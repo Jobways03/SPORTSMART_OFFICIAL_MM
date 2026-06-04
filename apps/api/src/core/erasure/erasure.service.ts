@@ -51,7 +51,7 @@ export class ErasureService {
     private readonly taxRetention: TaxDocumentRetentionService,
     // Phase 14 (2026-05-16) — emits identity.user.erased once the
     // User row's PII has been redacted. Downstream subscribers
-    // (Cloudinary cleanup, mailing-list opt-out, partner webhook
+    // (media cleanup, mailing-list opt-out, partner webhook
     // delivery) can react asynchronously without coupling them to
     // the erasure cron.
     private readonly eventBus: EventBusService,
@@ -174,7 +174,7 @@ export class ErasureService {
     });
 
     // Phase 14 (2026-05-16) — broadcast erasure completion so
-    // downstream integrations (Cloudinary asset deletion, email
+    // downstream integrations (media asset deletion, email
     // list opt-out, partner webhook delivery) can react. Audit
     // requirement: a row in `domain_event_log` ties the in-DB
     // redaction to the side effects that followed it. Fire-and-

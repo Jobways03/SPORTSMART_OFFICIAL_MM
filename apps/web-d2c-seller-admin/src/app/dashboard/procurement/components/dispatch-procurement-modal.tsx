@@ -14,12 +14,28 @@ interface Props {
 export default function DispatchProcurementModal({ request, onClose, onSuccess }: Props) {
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  // Prefill so re-dispatching an already-shipped request shows the
+  // existing shipment details rather than blank fields. All optional —
+  // an admin may mark dispatched before a tracking number is known.
+  const [trackingNumber, setTrackingNumber] = useState(request.trackingNumber ?? '');
+  const [carrierName, setCarrierName] = useState(request.carrierName ?? '');
+  const [expectedDeliveryAt, setExpectedDeliveryAt] = useState(
+    request.expectedDeliveryAt
+      ? new Date(request.expectedDeliveryAt).toISOString().slice(0, 10)
+      : '',
+  );
 
   const handleSubmit = async () => {
     setSubmitting(true);
     setError('');
     try {
-      await adminProcurementService.dispatch(request.id);
+      await adminProcurementService.dispatch(request.id, {
+        trackingNumber: trackingNumber.trim() || undefined,
+        carrierName: carrierName.trim() || undefined,
+        expectedDeliveryAt: expectedDeliveryAt
+          ? new Date(expectedDeliveryAt).toISOString()
+          : undefined,
+      });
       onSuccess();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to mark as dispatched');
@@ -47,8 +63,40 @@ export default function DispatchProcurementModal({ request, onClose, onSuccess }
           </div>
 
           <p style={{ fontSize: 14, color: 'var(--color-text)', lineHeight: 1.5, marginBottom: 16 }}>
-            Are you sure you want to mark this procurement as <strong>dispatched</strong>? This will notify the franchise that goods are on the way.
+            Mark this procurement as <strong>dispatched</strong> and notify the franchise that goods are on the way. Add shipment tracking so they can follow the goods — all fields are optional.
           </p>
+
+          <div className="modal-form-group">
+            <label htmlFor="dispatch-tracking">Tracking Number</label>
+            <input
+              id="dispatch-tracking"
+              type="text"
+              value={trackingNumber}
+              onChange={e => setTrackingNumber(e.target.value)}
+              placeholder="e.g. SR-AWB-12345"
+            />
+          </div>
+
+          <div className="modal-form-group">
+            <label htmlFor="dispatch-carrier">Carrier Name</label>
+            <input
+              id="dispatch-carrier"
+              type="text"
+              value={carrierName}
+              onChange={e => setCarrierName(e.target.value)}
+              placeholder="e.g. Shiprocket / BlueDart"
+            />
+          </div>
+
+          <div className="modal-form-group">
+            <label htmlFor="dispatch-eta">Expected Delivery</label>
+            <input
+              id="dispatch-eta"
+              type="date"
+              value={expectedDeliveryAt}
+              onChange={e => setExpectedDeliveryAt(e.target.value)}
+            />
+          </div>
 
           {error && <div className="modal-alert modal-alert-error">{error}</div>}
         </div>

@@ -629,6 +629,18 @@ export default function OrderDetailPage() {
   const [cancelling, setCancelling] = useState(false);
   const [cancelError, setCancelError] = useState('');
 
+  // Phase 168 (COD Mark-Paid audit #19) — cash-collection confirmation modal.
+  // A bare "Mark as Paid" click is an unrecoverable money-state flip; the modal
+  // forces the operator to confirm the cash amount + record a receipt reference,
+  // and to explain any variance before the PATCH fires.
+  const [codModalOpen, setCodModalOpen] = useState(false);
+  const [codAmount, setCodAmount] = useState(''); // rupees, as typed
+  const [codReference, setCodReference] = useState('');
+  const [codNotes, setCodNotes] = useState('');
+  const [codVarianceReason, setCodVarianceReason] = useState('');
+  const [codSubmitting, setCodSubmitting] = useState(false);
+  const [codError, setCodError] = useState('');
+
   const fetchOrder = useCallback(() => {
     apiClient<OrderDetail>(`/admin/orders/${id}`)
       .then((res) => { if (res.data) setOrder(res.data); })
@@ -673,6 +685,62 @@ export default function OrderDetailPage() {
   };
 
   useEffect(() => { fetchOrder(); }, [fetchOrder]);
+
+  // Phase 168 (#19) — open the COD cash-collection modal pre-filled with the
+  // full payable so the common "collected exactly the total" case is one click.
+  const openCodModal = () => {
+    if (!order) return;
+    setCodAmount(Number(order.totalAmount).toFixed(2));
+    setCodReference('');
+    setCodNotes('');
+    setCodVarianceReason('');
+    setCodError('');
+    setCodModalOpen(true);
+  };
+
+  const submitMarkCodPaid = async () => {
+    if (!order || codSubmitting) return;
+    const rupees = Number(codAmount);
+    if (!Number.isFinite(rupees) || rupees < 0) {
+      setCodError('Enter a valid collected amount.');
+      return;
+    }
+    const collectedPaise = Math.round(rupees * 100);
+    const expectedPaise = Math.round(Number(order.totalAmount) * 100);
+    if (collectedPaise !== expectedPaise && !codVarianceReason.trim()) {
+      setCodError('Collected amount differs from the payable — a variance reason is required.');
+      return;
+    }
+    // Charset guard mirrors the server DTO (#18) so the admin sees it instantly.
+    if (codReference && !/^[A-Za-z0-9\-/.: ]+$/.test(codReference)) {
+      setCodError('Reference may only contain letters, digits, space, and - / . :');
+      return;
+    }
+    setCodError('');
+    setCodSubmitting(true);
+    try {
+      await apiClient(`/admin/orders/${order.id}/mark-paid`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          collectedAmountInPaise: String(collectedPaise),
+          collectionReference: codReference.trim() || undefined,
+          notes: codNotes.trim() || undefined,
+          varianceReason: codVarianceReason.trim() || undefined,
+        }),
+        headers: {
+          // @Idempotent on the controller — guard the double-click while the
+          // spinner is up so the captured-event fan-out fires once.
+          'X-Idempotency-Key': `cod-mark-paid-${order.id}`,
+        },
+      });
+      setCodModalOpen(false);
+      fetchOrder();
+    } catch (err: any) {
+      setCodError(err?.body?.message || err?.message || 'Mark-paid failed');
+    } finally {
+      setCodSubmitting(false);
+    }
+  };
 
   const handleAction = async (endpoint: string, label: string) => {
     setActionLoading(label);
@@ -924,15 +992,22 @@ export default function OrderDetailPage() {
                 Awaiting Payment Confirmation
               </div>
               <div style={{ fontSize: 13, color: '#6d28d9', marginBottom: 12 }}>
-                All sub-orders have been delivered. Mark the order as paid to complete it.
+                All sub-orders have been delivered.{' '}
+                {order.paymentMethod === 'COD'
+                  ? 'Record the cash collected to mark the order paid.'
+                  : 'This order settles online via the payment gateway.'}
               </div>
-              <button
-                onClick={() => handleAction(`/admin/orders/${order.id}/mark-paid`, 'mark-paid')}
-                disabled={!!actionLoading}
-                style={{ padding: '10px 24px', fontSize: 13, fontWeight: 700, border: 'none', background: '#16a34a', color: '#fff', borderRadius: 8, cursor: 'pointer' }}
-              >
-                {actionLoading === 'mark-paid' ? 'Updating...' : 'Mark as Paid'}
-              </button>
+              {/* Phase 168 (#20) — only COD orders can be cash-collected here;
+                  online orders settle via the Razorpay verify/webhook path. */}
+              {order.paymentMethod === 'COD' && (
+                <button
+                  onClick={openCodModal}
+                  disabled={!!actionLoading}
+                  style={{ padding: '10px 24px', fontSize: 13, fontWeight: 700, border: 'none', background: '#16a34a', color: '#fff', borderRadius: 8, cursor: 'pointer' }}
+                >
+                  Mark as Paid
+                </button>
+              )}
             </div>
           );
         }
@@ -1405,14 +1480,18 @@ export default function OrderDetailPage() {
 
             {/* Payment actions — only show Mark as Paid when all sub-orders are DELIVERED */}
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16, paddingTop: 12, borderTop: '1px solid #f3f4f6' }}>
-              {order.verified && allDelivered && order.paymentStatus !== 'PAID' && order.paymentStatus !== 'CANCELLED' && (
+              {/* Phase 168 (#20) — COD-only; online orders settle via gateway. */}
+              {order.verified && allDelivered && order.paymentMethod === 'COD' && order.paymentStatus !== 'PAID' && order.paymentStatus !== 'CANCELLED' && (
                 <button
-                  onClick={() => handleAction(`/admin/orders/${order.id}/mark-paid`, 'mark-paid')}
+                  onClick={openCodModal}
                   disabled={!!actionLoading}
                   style={{ ...btnDark, background: '#16a34a' }}
                 >
-                  {actionLoading === 'mark-paid' ? 'Updating...' : 'Mark as Paid'}
+                  Mark as Paid
                 </button>
+              )}
+              {order.verified && allDelivered && order.paymentMethod !== 'COD' && order.paymentStatus !== 'PAID' && order.paymentStatus !== 'CANCELLED' && (
+                <span style={{ fontSize: 12, color: '#6b7280' }}>Online order — settles via the payment gateway</span>
               )}
               {order.verified && !allDelivered && order.paymentStatus !== 'PAID' && order.paymentStatus !== 'CANCELLED' && (
                 <span style={{ fontSize: 12, color: '#6b7280' }}>Payment can be marked after all sub-orders are delivered</span>
@@ -2087,6 +2166,142 @@ export default function OrderDetailPage() {
       )}
 
       {/* ── Cancel sub-order modal ── */}
+      {/* Phase 168 (#19) — COD cash-collection confirmation modal. */}
+      {codModalOpen && order && (
+        <div
+          style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            zIndex: 1000, padding: 16,
+          }}
+          onClick={() => { if (!codSubmitting) setCodModalOpen(false); }}
+        >
+          <div
+            style={{
+              background: '#fff', borderRadius: 16, padding: 24,
+              width: '100%', maxWidth: 480,
+              boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0, marginBottom: 6 }}>
+              Confirm COD payment
+            </h2>
+            <p style={{ margin: 0, fontSize: 13, color: '#525A65', lineHeight: 1.5, marginBottom: 14 }}>
+              Confirm the cash collected from the customer for order{' '}
+              <strong>{order.orderNumber}</strong>. Payable:{' '}
+              <strong>{fmt(Number(order.totalAmount))}</strong>. This marks the
+              order PAID and triggers settlement — it cannot be undone.
+            </p>
+
+            <label style={{ display: 'block', fontSize: 12, color: '#525A65', fontWeight: 600, marginBottom: 4 }}>
+              Cash collected (₹) <span style={{ color: '#dc2626' }}>*</span>
+            </label>
+            <input
+              type="number"
+              inputMode="decimal"
+              min={0}
+              step="0.01"
+              value={codAmount}
+              onChange={(e) => setCodAmount(e.target.value)}
+              disabled={codSubmitting}
+              style={{
+                width: '100%', padding: 10, border: '1px solid #D2D6DC',
+                borderRadius: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit',
+              }}
+            />
+
+            {Math.round(Number(codAmount) * 100) !== Math.round(Number(order.totalAmount) * 100) && (
+              <div style={{ marginTop: 10 }}>
+                <label style={{ display: 'block', fontSize: 12, color: '#b45309', fontWeight: 600, marginBottom: 4 }}>
+                  Variance reason <span style={{ color: '#dc2626' }}>*</span>
+                </label>
+                <input
+                  type="text"
+                  value={codVarianceReason}
+                  onChange={(e) => setCodVarianceReason(e.target.value)}
+                  disabled={codSubmitting}
+                  placeholder="e.g. customer short by ₹100, agreed write-off"
+                  style={{
+                    width: '100%', padding: 10, border: '1px solid #fcd34d',
+                    borderRadius: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit',
+                  }}
+                />
+              </div>
+            )}
+
+            <label style={{ display: 'block', fontSize: 12, color: '#525A65', fontWeight: 600, margin: '10px 0 4px' }}>
+              Collection reference (cash receipt #)
+            </label>
+            <input
+              type="text"
+              value={codReference}
+              onChange={(e) => setCodReference(e.target.value)}
+              disabled={codSubmitting}
+              placeholder="optional — e.g. RCPT-2026-0142"
+              style={{
+                width: '100%', padding: 10, border: '1px solid #D2D6DC',
+                borderRadius: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit',
+              }}
+            />
+
+            <label style={{ display: 'block', fontSize: 12, color: '#525A65', fontWeight: 600, margin: '10px 0 4px' }}>
+              Notes
+            </label>
+            <textarea
+              value={codNotes}
+              onChange={(e) => setCodNotes(e.target.value)}
+              rows={2}
+              disabled={codSubmitting}
+              placeholder="optional"
+              style={{
+                width: '100%', padding: 10, border: '1px solid #D2D6DC',
+                borderRadius: 8, fontSize: 13, boxSizing: 'border-box', fontFamily: 'inherit', resize: 'vertical',
+              }}
+            />
+
+            {codError && (
+              <div style={{
+                marginTop: 10, padding: '8px 12px',
+                background: '#fef2f2', border: '1px solid #fecaca',
+                color: '#991b1b', borderRadius: 8, fontSize: 13,
+              }}>
+                {codError}
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+              <button
+                type="button"
+                onClick={() => setCodModalOpen(false)}
+                disabled={codSubmitting}
+                style={{
+                  height: 36, padding: '0 16px', border: '1px solid #D2D6DC',
+                  background: '#fff', color: '#0F1115',
+                  borderRadius: 9999, fontSize: 13, fontWeight: 600, cursor: 'pointer',
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={submitMarkCodPaid}
+                disabled={codSubmitting}
+                style={{
+                  height: 36, padding: '0 16px', border: 'none',
+                  background: '#16a34a', color: '#fff',
+                  borderRadius: 9999, fontSize: 13, fontWeight: 700,
+                  cursor: codSubmitting ? 'not-allowed' : 'pointer',
+                  opacity: codSubmitting ? 0.5 : 1,
+                }}
+              >
+                {codSubmitting ? 'Recording...' : 'Confirm payment'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {cancelSubOrderId && (
         <div
           style={{

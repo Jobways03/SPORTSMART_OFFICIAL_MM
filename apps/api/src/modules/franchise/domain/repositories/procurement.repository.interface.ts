@@ -24,11 +24,16 @@ export interface ProcurementRepository {
     search?: string;
   }): Promise<{ requests: any[]; total: number }>;
 
-  create(data: {
-    franchiseId: string;
-    requestNumber: string;
-    procurementFeeRate: number;
-  }): Promise<any>;
+  create(
+    data: {
+      franchiseId: string;
+      requestNumber: string;
+      procurementFeeRate: number;
+      notes?: string | null;
+      requestedByStaffId?: string | null;
+    },
+    tx?: Prisma.TransactionClient,
+  ): Promise<any>;
   update(id: string, data: Record<string, unknown>, tx?: Prisma.TransactionClient): Promise<any>;
 
   // Items
@@ -41,13 +46,18 @@ export interface ProcurementRepository {
       productTitle: string;
       variantTitle?: string;
       requestedQty: number;
+      mrpSnapshot?: number | null;
     }>,
+    tx?: Prisma.TransactionClient,
   ): Promise<any[]>;
   updateItem(itemId: string, data: Record<string, unknown>, tx?: Prisma.TransactionClient): Promise<any>;
   findItemById(itemId: string, tx?: Prisma.TransactionClient): Promise<any | null>;
 
   // Sequence
   generateNextRequestNumber(): Promise<string>;
+  // Phase 235 — tx-aware allocation so the number is allocated inside the create
+  // tx (a failed create rolls it back instead of burning it).
+  nextRequestNumberInTx(tx: Prisma.TransactionClient): Promise<string>;
 
   // Aggregation. Returns Prisma.Decimal so money math stays exact end-to-end
   // (audit #13); callers store the values straight onto the Decimal columns.

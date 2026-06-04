@@ -9,11 +9,20 @@ import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { AuditPublicFacade } from '../audit/application/facades/audit-public.facade';
 import { MoneyDualWriteHelper } from '../../core/money/money-dual-write.helper';
 import { toPaise } from '../../core/money/money-field-registry';
+// Phase 178 (Outstanding Payables audit #1/#10) — derive the settlement payout
+// due-date (cycle periodEnd + SLA business days) for SLA / aging tracking.
+import { addBusinessDays, parseHolidaySet } from '../../core/util/business-days';
 // Phase 148 — formula-injection-safe CSV (the shared util neutralises
 // =/+/-/@-leading cells); replaces the inline csvQuote (RFC-4180 only).
 import { toCsv } from '../../core/utils';
 import { SettlementTcsHookService } from '../tax/application/services/settlement-tcs-hook.service';
 import { SettlementTds194OHookService } from '../tax/application/services/settlement-tds-194o-hook.service';
+// Phase 159aa — at cycle-approval time the marketplace also issues a
+// commission tax invoice per SellerSettlement (closes audit B1 + B2
+// from the marketplace-commission-gstr flow audit). Same hook pattern
+// as TCS / TDS — runs after the APPROVED cascade, errors don't roll
+// back the cycle.
+import { CommissionInvoiceService } from '../tax/application/services/commission-invoice.service';
 import { computeCommissionGst } from '../tax/domain/commission-gst-calculator';
 
 // Phase 142 — the per-seller aggregation shape shared by createCycle (writes)
@@ -48,6 +57,10 @@ export class SettlementService {
     // withholding at mark-paid. Independent of TCS — both stamp
     // their own ledger row and denorm columns on SellerSettlement.
     private readonly tdsHook: SettlementTds194OHookService,
+    // Phase 159aa — commission tax-invoice snapshot per settlement so
+    // the marketplace GSTR-1 can emit one §4 B2B row per invoice (CBIC
+    // contract) instead of a per-(seller, period) rollup.
+    private readonly commissionInvoice: CommissionInvoiceService,
   ) {}
 
   /**
@@ -176,6 +189,16 @@ export class SettlementService {
     // Create cycle in a transaction. cycleTotalAmount / cycleTotalMargin come
     // from the shared aggregator above (same numbers the preview returned).
     const cycle = await this.prisma.$transaction(async (tx) => {
+      // Phase 178 (#1/#10) — payout SLA: periodEnd + N business days (env
+      // SETTLEMENT_SLA_BUSINESS_DAYS, default 7; BANK_HOLIDAYS skipped). The
+      // cycle carries it; each settlement inherits it as its payoutDueBy.
+      const slaDays = parseInt(process.env.SETTLEMENT_SLA_BUSINESS_DAYS || '7', 10) || 7;
+      const cyclePayoutDueBy = addBusinessDays(
+        periodEnd,
+        slaDays,
+        parseHolidaySet(process.env.BANK_HOLIDAYS),
+      );
+
       const newCycle = await tx.settlementCycle.create({
         data: this.moneyDualWrite.applyPaise('settlementCycle', {
           periodStart,
@@ -190,6 +213,7 @@ export class SettlementService {
           // rejects (PR 0.4 contract).
           totalAmount: cycleTotalAmount.toFixed(2),
           totalMargin: cycleTotalMargin.toFixed(2),
+          payoutDueBy: cyclePayoutDueBy,
         }),
       });
 
@@ -292,6 +316,8 @@ export class SettlementService {
               marketplaceStateCode || null,
             commissionGstSellerStateCode:
               data.sellerStateCode || null,
+            // Phase 178 (#1) — inherit the cycle's payout due-date for SLA/aging.
+            payoutDueBy: cyclePayoutDueBy,
           }),
         });
 
@@ -682,7 +708,13 @@ export class SettlementService {
     // breakdown.
     const sellerIds = (cycle.sellerSettlements ?? []).map((s: any) => s.sellerId);
     let discountDeductionsBySeller: Record<string, {
+      // Net of returns: gross APPLIED/SETTLED (positive) + REVERSED (negative).
       totalAmountInPaise: string;
+      // Phase 247 (#17) — surface the gross / reversed / net split so the UI
+      // can show "₹X discount absorbed, ₹Y credited back on returns, ₹Z net".
+      grossAmountInPaise: string;
+      reversedAmountInPaise: string;
+      netAmountInPaise: string;
       entries: Array<{
         masterOrderId: string;
         subOrderId: string | null;
@@ -697,11 +729,17 @@ export class SettlementService {
       }>;
     }> = {};
     if (sellerIds.length > 0) {
+      // Phase 247 (liability audit #17) — include REVERSED rows. A return
+      // writes a NEW ledger row with a NEGATIVE amount_in_paise (status
+      // REVERSED) and leaves the original APPLIED row intact. Filtering to
+      // only APPLIED/SETTLED excluded that credit, so the seller kept eating
+      // the full discount on returned items. Summing the SIGNED amount across
+      // APPLIED + SETTLED + REVERSED nets the credit back correctly.
       const rows = await this.prisma.discountLiabilityLedger.findMany({
         where: {
           sellerId: { in: sellerIds },
           liabilityParty: 'SELLER',
-          status: { in: ['APPLIED', 'SETTLED'] },
+          status: { in: ['APPLIED', 'SETTLED', 'REVERSED'] },
         },
         orderBy: { createdAt: 'desc' },
       });
@@ -709,11 +747,25 @@ export class SettlementService {
         if (!row.sellerId) continue;
         const bucket = (discountDeductionsBySeller[row.sellerId] ??= {
           totalAmountInPaise: '0',
+          grossAmountInPaise: '0',
+          reversedAmountInPaise: '0',
+          netAmountInPaise: '0',
           entries: [],
         });
-        bucket.totalAmountInPaise = (
-          BigInt(bucket.totalAmountInPaise) + BigInt(row.amountInPaise)
-        ).toString();
+        const signed = BigInt(row.amountInPaise);
+        // Signed net (do NOT abs() — REVERSED amounts are stored negative).
+        const net = BigInt(bucket.netAmountInPaise) + signed;
+        bucket.netAmountInPaise = net.toString();
+        bucket.totalAmountInPaise = net.toString();
+        if (row.status === 'REVERSED') {
+          bucket.reversedAmountInPaise = (
+            BigInt(bucket.reversedAmountInPaise) + signed
+          ).toString();
+        } else {
+          bucket.grossAmountInPaise = (
+            BigInt(bucket.grossAmountInPaise) + signed
+          ).toString();
+        }
         bucket.entries.push({
           masterOrderId: row.masterOrderId,
           subOrderId: row.subOrderId,
@@ -858,6 +910,41 @@ export class SettlementService {
         where: { cycleId, status: 'PENDING' },
         data: { status: 'APPROVED' },
       });
+
+      // Phase 247 (liability audit #18) — revive the dead SETTLED lifecycle.
+      // DiscountLiabilityLedger SELLER rows were written APPLIED and never
+      // advanced; nothing linked a row to the cycle that consumed it. At the
+      // commit point that finalises a cycle's seller payouts, flip the
+      // consumed SELLER rows APPLIED→SETTLED and stamp settlementCycleId, in
+      // THIS transaction so it's atomic with the cycle approval.
+      //
+      // Scope: the sellers in this cycle + the cycle's settlement window on
+      // the ledger row's createdAt + liabilityParty=SELLER + status=APPLIED.
+      // (REVERSED/already-SETTLED rows are untouched — REVERSED carries the
+      // negative return credit-back and must stay distinct from the gross.)
+      // We only run when the window is known; periodStart/periodEnd are
+      // nullable on the cycle.
+      const ledgerSellerIds = cycle.sellerSettlements
+        .map((s) => s.sellerId)
+        .filter((id): id is string => !!id);
+      if (
+        ledgerSellerIds.length > 0 &&
+        cycle.periodStart &&
+        cycle.periodEnd
+      ) {
+        await tx.discountLiabilityLedger.updateMany({
+          where: {
+            sellerId: { in: ledgerSellerIds },
+            liabilityParty: 'SELLER',
+            status: 'APPLIED',
+            createdAt: { gte: cycle.periodStart, lte: cycle.periodEnd },
+          },
+          data: {
+            status: 'SETTLED',
+            settlementCycleId: cycleId,
+          },
+        });
+      }
       return true;
     });
     if (!claimed) {
@@ -916,11 +1003,31 @@ export class SettlementService {
       );
     }
 
+    // Phase 159aa — issue the per-settlement commission tax invoice
+    // (CBIC §31 obligation on the marketplace's commission supply to
+    // each seller). Same fault-tolerance as TCS/TDS: per-row failures
+    // are logged and surfaced in the response; the cycle stays APPROVED
+    // so finance can re-run targeted issuance via the admin endpoint
+    // without unwinding payouts.
+    let commissionInvoiceResult;
+    try {
+      commissionInvoiceResult =
+        await this.commissionInvoice.applyToCycleOnApprove({
+          cycleId,
+          actorId,
+        });
+    } catch (err) {
+      this.logger.warn(
+        `Commission invoice apply-on-approve failed for cycle ${cycleId}: ${(err as Error).message}`,
+      );
+    }
+
     return {
       success: true,
       message: 'Settlement cycle approved',
       tcs: tcsResult,
       tds: tdsResult,
+      commissionInvoice: commissionInvoiceResult,
     };
   }
 
@@ -1197,11 +1304,17 @@ export class SettlementService {
     // ledger entries with liability_party=SELLER for this seller.
     // These are amounts the seller has agreed to absorb (reducing
     // their settlement); platform-funded discounts do NOT show here.
+    //
+    // Phase 247 (liability audit #17) — include REVERSED rows so the
+    // negative credit-back from returns nets against the gross APPLIED/
+    // SETTLED amount (REVERSED rows carry a negative amount_in_paise).
+    // The _sum is over the SIGNED column, so APPLIED(+) + REVERSED(-)
+    // yields the true net the seller still absorbs after returns.
     const discountDeductionAgg = await this.prisma.discountLiabilityLedger.aggregate({
       where: {
         sellerId,
         liabilityParty: 'SELLER',
-        status: { in: ['APPLIED', 'SETTLED'] },
+        status: { in: ['APPLIED', 'SETTLED', 'REVERSED'] },
       },
       _sum: { amountInPaise: true },
       _count: true,
@@ -1239,12 +1352,16 @@ export class SettlementService {
     limit: number,
   ) {
     const skip = (page - 1) * limit;
+    // Phase 247 (liability audit #17) — include REVERSED rows so the
+    // returned-item credit-backs (negative amount_in_paise) are visible in
+    // the seller's deduction list and net against the gross APPLIED/SETTLED
+    // rows. The displayed `amountInPaise` is signed (negative for REVERSED).
     const [rows, total] = await Promise.all([
       this.prisma.discountLiabilityLedger.findMany({
         where: {
           sellerId,
           liabilityParty: 'SELLER',
-          status: { in: ['APPLIED', 'SETTLED'] },
+          status: { in: ['APPLIED', 'SETTLED', 'REVERSED'] },
         },
         orderBy: { createdAt: 'desc' },
         skip,
@@ -1254,15 +1371,27 @@ export class SettlementService {
         where: {
           sellerId,
           liabilityParty: 'SELLER',
-          status: { in: ['APPLIED', 'SETTLED'] },
+          status: { in: ['APPLIED', 'SETTLED', 'REVERSED'] },
         },
       }),
     ]);
+    // Phase 247 (#17) — net deduction across this seller's full ledger
+    // (signed sum, not abs) so the page can show the true after-returns total
+    // alongside the paginated rows.
+    const netAgg = await this.prisma.discountLiabilityLedger.aggregate({
+      where: {
+        sellerId,
+        liabilityParty: 'SELLER',
+        status: { in: ['APPLIED', 'SETTLED', 'REVERSED'] },
+      },
+      _sum: { amountInPaise: true },
+    });
     return {
       items: rows.map((r) => ({
         ...r,
         amountInPaise: r.amountInPaise.toString(),
       })),
+      netDeductionInPaise: (netAgg._sum?.amountInPaise ?? 0n).toString(),
       total,
       page,
       limit,

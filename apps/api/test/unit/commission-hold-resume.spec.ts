@@ -33,6 +33,7 @@ function build(record: any, opts: { claimCount?: number } = {}) {
     {} as any, // moneyDualWrite
     {} as any, // env
     audit as any,
+    { wrap: jest.fn((_n: string, fn: () => unknown) => fn()) } as any, // instr (Phase 174 @Cron migration)
   );
   return { svc, eventBus, audit, updateMany, holdHistoryCreate };
 }

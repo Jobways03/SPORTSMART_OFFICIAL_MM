@@ -150,7 +150,7 @@ export class PrismaCategoryRepository implements ICategoryRepository {
    * created between the controller's pre-check and the delete is
    * now caught (the inner check throws, and the entire tx rolls back).
    * Returns the deleted row's image fields so the caller can fire
-   * Cloudinary cleanup on the publicIds.
+   * media cleanup on the publicIds.
    */
   async deleteTransactional(
     id: string,
