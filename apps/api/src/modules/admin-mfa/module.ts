@@ -3,6 +3,8 @@ import { AdminAuthGuard } from '../../core/guards';
 import { StepUpGuard } from '../../core/step-up/step-up.guard';
 import { AdminModule } from '../admin/module';
 import { NotificationsModule } from '../notifications/module';
+import { EmailModule } from '../../integrations/email/email.module';
+import { EmailOtpAdapter } from '../../integrations/email/adapters/email-otp.adapter';
 import { AdminMfaService } from './application/services/admin-mfa.service';
 import { BackupCodesService } from './application/services/backup-codes.service';
 import { MfaSecretCipher } from './application/services/mfa-secret-cipher.service';
@@ -38,13 +40,15 @@ import { MfaPendingSecretSweepCron } from './application/jobs/mfa-pending-secret
  *     without each module re-declaring it.
  */
 @Module({
-  imports: [AdminModule, NotificationsModule],
+  imports: [AdminModule, NotificationsModule, EmailModule],
   controllers: [AdminMfaController, AdminMfaAuthController],
   providers: [
     MfaSecretCipher,
     BackupCodesService,
     AdminMfaService,
     AdminMfaVerifyChallengeUseCase,
+    // Email-OTP MFA alternative — sends the 6-digit login code by email.
+    EmailOtpAdapter,
     AdminAuthGuard,
     StepUpGuard,
     AdminMfaNotificationHandler,

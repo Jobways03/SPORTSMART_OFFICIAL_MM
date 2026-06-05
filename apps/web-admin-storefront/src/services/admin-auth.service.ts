@@ -57,6 +57,28 @@ export const adminAuthService = {
     });
   },
 
+  // Email-OTP MFA alternative to the authenticator. requestMfaEmailOtp
+  // emails a 6-digit code; verifyMfaEmailOtp redeems it (separate from
+  // verifyMfaChallenge because an email OTP and a TOTP code are both
+  // 6 digits and the backend can't tell them apart by shape).
+  requestMfaEmailOtp(
+    challengeToken: string,
+  ): Promise<ApiResponse<{ otpExpiresIn: number }>> {
+    return apiClient<{ otpExpiresIn: number }>('/admin/auth/mfa-email/request', {
+      method: 'POST',
+      body: JSON.stringify({ challengeToken }),
+    });
+  },
+
+  verifyMfaEmailOtp(
+    input: MfaVerifyChallengeInput,
+  ): Promise<ApiResponse<MfaVerifyChallengeResponse>> {
+    return apiClient<MfaVerifyChallengeResponse>('/admin/auth/mfa-email/verify', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+  },
+
   logout(): Promise<ApiResponse> {
     return apiClient('/admin/auth/logout', { method: 'POST' });
   },

@@ -119,8 +119,14 @@ import { ShipmentEvidenceService } from '../shipping/application/services/shipme
     // Phase 88 (2026-05-23) — exported so ShippingModule's webhook
     // POD capture path can consume the typed-evidence orchestrator.
     ShipmentEvidenceService,
+<<<<<<< Updated upstream
     // Exported so ShippingModule's RtoSideEffectsHandler (and CheckoutModule)
     // can inject the canonical stock-restore writer instead of owning a copy.
+=======
+    // Exported so ShippingModule's RtoSideEffectsHandler can inject the
+    // canonical stock-restore writer (provider here but previously not
+    // exported, so the RTO handler failed dependency resolution at boot).
+>>>>>>> Stashed changes
     StockRestoreService,
   ],
 })

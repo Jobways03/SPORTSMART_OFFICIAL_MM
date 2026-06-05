@@ -33,6 +33,12 @@ function LoginInner() {
   // password if the admin has MFA enrolled.
   const [mfa, setMfa] = useState<MfaState | null>(null);
   const [mfaCode, setMfaCode] = useState('');
+  // Email-OTP alternative to the authenticator. emailMode=true once the
+  // admin has requested a code by email; the verify then targets the
+  // email-OTP endpoint instead of the TOTP one.
+  const [emailMode, setEmailMode] = useState(false);
+  const [emailRequesting, setEmailRequesting] = useState(false);
+  const [emailInfo, setEmailInfo] = useState('');
   const [, setTick] = useState(0);
   const mfaInputRef = useRef<HTMLInputElement>(null);
 
@@ -62,6 +68,9 @@ function LoginInner() {
               Date.now() + (res.data.challengeExpiresIn ?? 300) * 1000,
           });
           setPassword('');
+          setEmailMode(false);
+          setEmailInfo('');
+          setMfaCode('');
           return;
         }
         // Phase 23 (2026-05-20) — tokens are still written to
@@ -94,17 +103,27 @@ function LoginInner() {
     e.preventDefault();
     if (!mfa) return;
     const code = mfaCode.replace(/\s+/g, '');
-    if (!/^[0-9]{6}$/.test(code) && !/^[A-Z0-9-]{8,16}$/i.test(code)) {
+    if (emailMode) {
+      if (!/^[0-9]{6}$/.test(code)) {
+        setError('Enter the 6-digit code from your email.');
+        return;
+      }
+    } else if (!/^[0-9]{6}$/.test(code) && !/^[A-Z0-9-]{8,16}$/i.test(code)) {
       setError('Enter the 6-digit code or a backup code.');
       return;
     }
     setError('');
     setLoading(true);
     try {
-      const res = await adminAuthService.verifyMfaChallenge({
-        challengeToken: mfa.challengeToken,
-        code,
-      });
+      const res = await (emailMode
+        ? adminAuthService.verifyMfaEmailOtp({
+            challengeToken: mfa.challengeToken,
+            code,
+          })
+        : adminAuthService.verifyMfaChallenge({
+            challengeToken: mfa.challengeToken,
+            code,
+          }));
       if (res.data) {
         // Phase 23 (2026-05-20) — tokens are still written to
         // sessionStorage for backward compatibility with the
@@ -135,6 +154,8 @@ function LoginInner() {
           );
           setMfa(null);
           setMfaCode('');
+          setEmailMode(false);
+          setEmailInfo('');
         } else {
           setError(err.body?.message || 'Invalid code, please try again.');
           setMfaCode('');
@@ -144,6 +165,44 @@ function LoginInner() {
       }
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Email-OTP: ask the API to email a 6-digit code, then switch the
+  // form into email-verify mode (the same code box, but submit targets
+  // the email-OTP endpoint).
+  const handleRequestEmailOtp = async () => {
+    if (!mfa) return;
+    setError('');
+    setEmailRequesting(true);
+    try {
+      await adminAuthService.requestMfaEmailOtp(mfa.challengeToken);
+      setEmailMode(true);
+      setMfaCode('');
+      setEmailInfo(`We emailed a 6-digit code to ${mfa.email}. Enter it below.`);
+      if (mfaInputRef.current) mfaInputRef.current.focus();
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.status === 403) {
+          setError(
+            err.body?.message ||
+              'Your sign-in challenge expired. Please enter your password again.',
+          );
+          setMfa(null);
+          setMfaCode('');
+          setEmailMode(false);
+          setEmailInfo('');
+        } else {
+          setError(
+            err.body?.message ||
+              'Could not send the email code. Please try again.',
+          );
+        }
+      } else {
+        setError('Could not send the email code. Please try again.');
+      }
+    } finally {
+      setEmailRequesting(false);
     }
   };
 
@@ -169,7 +228,9 @@ function LoginInner() {
           />
           <p className="login-subtitle" id="login-title">
             {mfa
-              ? 'Enter the code from your authenticator app to continue.'
+              ? emailMode
+                ? 'Enter the 6-digit code we emailed you.'
+                : 'Enter the code from your authenticator app — or get one by email.'
               : 'Sign in to the marketplace control center.'}
           </p>
         </header>
@@ -261,8 +322,26 @@ function LoginInner() {
               )}
             </div>
 
+            {emailMode && emailInfo && (
+              <div
+                role="status"
+                style={{
+                  background: '#ecfdf5',
+                  border: '1px solid #a7f3d0',
+                  color: '#065f46',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  fontSize: 13,
+                }}
+              >
+                {emailInfo}
+              </div>
+            )}
+
             <div className="login-field">
-              <label htmlFor="mfa-code">Verification code</label>
+              <label htmlFor="mfa-code">
+                {emailMode ? 'Email code' : 'Verification code'}
+              </label>
               <input
                 id="mfa-code"
                 ref={mfaInputRef}
@@ -272,13 +351,15 @@ function LoginInner() {
                 value={mfaCode}
                 onChange={(e) =>
                   setMfaCode(
-                    e.target.value
-                      .toUpperCase()
-                      .replace(/[^0-9A-Z-]/g, '')
-                      .slice(0, 16),
+                    emailMode
+                      ? e.target.value.replace(/[^0-9]/g, '').slice(0, 6)
+                      : e.target.value
+                          .toUpperCase()
+                          .replace(/[^0-9A-Z-]/g, '')
+                          .slice(0, 16),
                   )
                 }
-                placeholder="123456 or XXXXX-XXXXX"
+                placeholder={emailMode ? '123456' : '123456 or XXXXX-XXXXX'}
                 disabled={loading || mfaExpired}
                 style={{
                   fontFamily: 'ui-monospace, monospace',
@@ -304,12 +385,80 @@ function LoginInner() {
               )}
             </button>
 
+            {!emailMode ? (
+              <button
+                type="button"
+                onClick={handleRequestEmailOtp}
+                disabled={emailRequesting || mfaExpired}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: 13,
+                  color: '#2563eb',
+                  cursor:
+                    emailRequesting || mfaExpired ? 'default' : 'pointer',
+                  textDecoration: 'underline',
+                  marginTop: 6,
+                  alignSelf: 'center',
+                }}
+              >
+                {emailRequesting ? 'Sending code…' : 'Email me a code instead'}
+              </button>
+            ) : (
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 16,
+                  justifyContent: 'center',
+                  marginTop: 6,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={handleRequestEmailOtp}
+                  disabled={emailRequesting || mfaExpired}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: 13,
+                    color: '#2563eb',
+                    cursor:
+                      emailRequesting || mfaExpired ? 'default' : 'pointer',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  {emailRequesting ? 'Sending…' : 'Resend code'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmailMode(false);
+                    setEmailInfo('');
+                    setMfaCode('');
+                    setError('');
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: 13,
+                    color: '#2563eb',
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  Use authenticator instead
+                </button>
+              </div>
+            )}
+
             <button
               type="button"
               onClick={() => {
                 setMfa(null);
                 setMfaCode('');
                 setError('');
+                setEmailMode(false);
+                setEmailInfo('');
               }}
               style={{
                 background: 'none',

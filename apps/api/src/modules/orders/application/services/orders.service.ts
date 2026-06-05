@@ -104,10 +104,16 @@ export class OrdersService {
     private readonly orderRepo: OrderRepository,
     private readonly eventBus: EventBusService,
     private readonly catalogFacade: CatalogPublicFacade,
+<<<<<<< Updated upstream
     // Orders↔Franchise is a constructor-level circular provider dependency
     // (FranchiseOrdersService injects OrdersService via the same param-level
     // forwardRef). Mirror it here so this facade resolves regardless of
     // module init order.
+=======
+    // forwardRef: Orders↔Franchise is a circular module pair; resolve the
+    // facade lazily so OrdersService can instantiate before FranchiseModule
+    // finishes (merge-broken module-init order exposed this at bootstrap).
+>>>>>>> Stashed changes
     @Inject(forwardRef(() => FranchisePublicFacade))
     private readonly franchiseFacade: FranchisePublicFacade,
     private readonly prisma: PrismaService,
