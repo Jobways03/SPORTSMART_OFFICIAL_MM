@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
-import { randomUUID } from 'crypto';
+import { randomUUID, randomInt, createHash, timingSafeEqual } from 'crypto';
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
@@ -26,6 +26,7 @@ import { isBackupCodeFormat } from '../../domain/backup-codes';
 import { verifyTotpCode } from '../../domain/totp-verify';
 import { BackupCodesService } from '../services/backup-codes.service';
 import { MfaSecretCipher } from '../services/mfa-secret-cipher.service';
+import { EmailOtpAdapter } from '../../../../integrations/email/adapters/email-otp.adapter';
 
 interface AdminMfaVerifyChallengeInput {
   challengeToken: string;
@@ -43,6 +44,13 @@ const MFA_AUDIT_RESOURCE = 'AdminSession';
 // per-IP-throttle bypass via NAT / rotating proxies.
 const MFA_MAX_FAILED_ATTEMPTS = 5;
 const MFA_LOCK_DURATION_MS = 15 * 60 * 1000;
+
+// Email-OTP MFA alternative (admin can request a 6-digit code by email
+// instead of using their authenticator). The code lives in Redis keyed
+// by the challenge `jti` so it's scoped to one login attempt.
+const EMAIL_OTP_TTL_SECONDS = 300; // matches the 5-min challenge window
+const EMAIL_OTP_COOLDOWN_SECONDS = 60; // min gap between sends per challenge
+const EMAIL_OTP_MAX_ATTEMPTS = 5;
 
 interface AdminMfaChallengeClaims {
   sub: string;
@@ -107,6 +115,8 @@ export class AdminMfaVerifyChallengeUseCase {
     // Phase 26 — one-time-use enforcement for challenge JTI. SET NX
     // EX on the challenge consume path: first verify wins; replay 401s.
     private readonly redis: RedisService,
+    // Email-OTP MFA alternative — sends the 6-digit login code by email.
+    private readonly emailOtp: EmailOtpAdapter,
   ) {}
 
   async execute(input: AdminMfaVerifyChallengeInput): Promise<AdminLoginSession> {
@@ -450,6 +460,327 @@ export class AdminMfaVerifyChallengeUseCase {
       expiresIn: accessTtlSeconds,
       admin: {
         adminId: claims.sub,
+        name: admin.name ?? '',
+        email: admin.email ?? '',
+        role: admin.role ?? '',
+      },
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Email-OTP MFA path — an ALTERNATIVE second factor to TOTP/backup at
+  // the same challenge step. The admin requests a 6-digit code by email
+  // and submits it. The OTP is stored in Redis keyed by the challenge
+  // `jti` (scoped to a single login attempt, expires with the window).
+  // On success the challenge JTI is consumed and the SAME session shape
+  // as the TOTP path is minted (mintSession).
+  // ──────────────────────────────────────────────────────────────────
+
+  /**
+   * Step A — generate a 6-digit OTP, stash its SHA-256 hash in Redis
+   * keyed by the challenge jti, and email it to the admin. Requires a
+   * valid (un-consumed) challenge; does NOT consume the jti (that
+   * happens on successful verify so the admin can retry the code).
+   */
+  async requestEmailOtp(input: {
+    challengeToken: string;
+    ipAddress?: string;
+    userAgent?: string;
+  }): Promise<{ otpExpiresIn: number }> {
+    const claims = this.verifyChallengeToken(input.challengeToken);
+    if (!claims.jti) {
+      throw new BadRequestAppException(
+        'This challenge does not support email codes; re-authenticate to obtain a fresh challenge.',
+      );
+    }
+    const admin = await this.adminRepo.findAdminById(claims.sub, {
+      email: true,
+      role: true,
+      status: true,
+      mfaEnabledAt: true,
+      mfaLockUntil: true,
+    } as any);
+    if (!admin) throw new UnauthorizedAppException('Admin not found');
+    if (admin.status !== 'ACTIVE') {
+      throw new UnauthorizedAppException('Admin account is not active');
+    }
+    if (!admin.mfaEnabledAt) {
+      throw new BadRequestAppException(
+        'Admin no longer has MFA enrolled; re-authenticate to obtain a fresh session.',
+      );
+    }
+    const lockUntil = (admin as any).mfaLockUntil as Date | null | undefined;
+    if (lockUntil && lockUntil.getTime() > Date.now()) {
+      throw new UnauthorizedAppException(
+        'MFA verification is temporarily locked for this account after too many failed attempts. Try again later.',
+      );
+    }
+    if (!admin.email) {
+      throw new BadRequestAppException('Admin has no email on record.');
+    }
+
+    // Per-challenge cooldown so the "email me a code" button can't spam.
+    const cooled = await this.redis.acquireLock(
+      `admin:mfa:emailotp:cooldown:${claims.jti}`,
+      EMAIL_OTP_COOLDOWN_SECONDS,
+    );
+    if (!cooled) {
+      throw new BadRequestAppException(
+        'A code was just sent. Please wait a moment before requesting another.',
+      );
+    }
+
+    const otp = String(randomInt(100000, 1000000));
+    const otpHash = createHash('sha256').update(otp).digest('hex');
+    await this.redis.set(
+      `admin:mfa:emailotp:${claims.jti}`,
+      { otpHash, attempts: 0 },
+      EMAIL_OTP_TTL_SECONDS,
+    );
+
+    const sent = await this.emailOtp.sendOtp(admin.email, otp).catch((err) => {
+      this.logger.error(
+        `Failed to send admin MFA email OTP: ${(err as Error)?.message}`,
+      );
+      return false;
+    });
+    if (!sent) {
+      throw new BadRequestAppException(
+        'Could not send the email code right now. Please try again shortly.',
+      );
+    }
+
+    this.writeAudit(claims.sub, admin.role ?? null, 'ADMIN_MFA_EMAIL_OTP_SENT', {
+      ipAddress: input.ipAddress,
+      userAgent: input.userAgent,
+    });
+    return { otpExpiresIn: EMAIL_OTP_TTL_SECONDS };
+  }
+
+  /**
+   * Step B — verify the emailed 6-digit code. Allows up to
+   * EMAIL_OTP_MAX_ATTEMPTS tries against the same code (the challenge
+   * jti is only consumed on success, so a mistype doesn't force a
+   * re-login — unlike the TOTP path which is single-shot per challenge).
+   */
+  async verifyEmailOtp(input: {
+    challengeToken: string;
+    code: string;
+    ipAddress?: string;
+    userAgent?: string;
+  }): Promise<AdminLoginSession> {
+    const { code, ipAddress, userAgent } = input;
+    const claims = this.verifyChallengeToken(input.challengeToken);
+    if (!claims.jti) {
+      throw new UnauthorizedAppException(
+        'This MFA challenge is invalid; re-authenticate to obtain a fresh challenge.',
+      );
+    }
+    const otpKey = `admin:mfa:emailotp:${claims.jti}`;
+    const rec = await this.redis.get<{ otpHash: string; attempts: number }>(
+      otpKey,
+    );
+    if (!rec) {
+      throw new UnauthorizedAppException(
+        'No email code was found or it has expired. Request a new code.',
+      );
+    }
+
+    const admin = await this.adminRepo.findAdminById(claims.sub, {
+      name: true,
+      email: true,
+      role: true,
+      status: true,
+      mfaEnabledAt: true,
+      failedMfaAttempts: true,
+      mfaLockUntil: true,
+    } as any);
+    if (!admin) throw new UnauthorizedAppException('Admin not found');
+    if (admin.status !== 'ACTIVE') {
+      throw new UnauthorizedAppException('Admin account is not active');
+    }
+    if (!admin.mfaEnabledAt) {
+      throw new BadRequestAppException(
+        'Admin no longer has MFA enrolled; re-authenticate to obtain a fresh session.',
+      );
+    }
+    const lockUntil = (admin as any).mfaLockUntil as Date | null | undefined;
+    if (lockUntil && lockUntil.getTime() > Date.now()) {
+      throw new UnauthorizedAppException(
+        'MFA verification is temporarily locked for this account after too many failed attempts. Try again later.',
+      );
+    }
+
+    const attempts = (rec.attempts ?? 0) + 1;
+    if (attempts > EMAIL_OTP_MAX_ATTEMPTS) {
+      await this.redis.del(otpKey);
+      await this.bumpFailedAttempts(
+        claims.sub,
+        (admin as any).failedMfaAttempts as number | undefined,
+        admin.role ?? null,
+        'email_otp_max_attempts',
+        ipAddress,
+        userAgent,
+      );
+      throw new UnauthorizedAppException(
+        'Too many incorrect attempts. Request a new email code.',
+      );
+    }
+
+    const candidate = createHash('sha256').update(code).digest('hex');
+    const matches =
+      candidate.length === rec.otpHash.length &&
+      timingSafeEqual(Buffer.from(candidate), Buffer.from(rec.otpHash));
+    if (!matches) {
+      await this.redis.set(
+        otpKey,
+        { otpHash: rec.otpHash, attempts },
+        EMAIL_OTP_TTL_SECONDS,
+      );
+      await this.bumpFailedAttempts(
+        claims.sub,
+        (admin as any).failedMfaAttempts as number | undefined,
+        admin.role ?? null,
+        'invalid_email_otp',
+        ipAddress,
+        userAgent,
+      );
+      throw new UnauthorizedAppException(
+        'Invalid email code. Check the code sent to your email and try again.',
+      );
+    }
+
+    // Success — consume the challenge JTI (single-use, mirrors the TOTP
+    // path) and delete the OTP so neither token can be replayed.
+    const consumed = await this.redis.acquireLock(
+      `admin:mfa:challenge:${claims.jti}`,
+      15 * 60,
+    );
+    if (!consumed) {
+      this.writeAudit(
+        claims.sub,
+        admin.role ?? null,
+        'ADMIN_MFA_CHALLENGE_REPLAY',
+        { jti: claims.jti, ipAddress, userAgent },
+      );
+      throw new UnauthorizedAppException(
+        'This MFA challenge has already been used. Re-authenticate to obtain a fresh challenge.',
+      );
+    }
+    await this.redis.del(otpKey);
+
+    return this.mintSession(claims.sub, admin, ipAddress, userAgent, 'EMAIL');
+  }
+
+  /** Verify the short-lived challenge JWT (signature, audience, expiry). */
+  private verifyChallengeToken(
+    challengeToken: string,
+  ): AdminMfaChallengeClaims {
+    try {
+      return jwt.verify(
+        challengeToken,
+        this.envService.getString('JWT_ADMIN_SECRET'),
+        { algorithms: [JWT_ALGORITHM], audience: ADMIN_MFA_CHALLENGE_AUD },
+      ) as AdminMfaChallengeClaims;
+    } catch {
+      throw new UnauthorizedAppException(
+        'MFA challenge token is invalid or expired. Re-authenticate to obtain a new challenge.',
+      );
+    }
+  }
+
+  /**
+   * Mint the admin session after a second factor passes. Mirrors the
+   * tail of execute() (TOTP/backup path) so the email-OTP path issues
+   * an identical session. Kept in lockstep with execute()'s success
+   * block by intent.
+   */
+  private async mintSession(
+    adminId: string,
+    admin: {
+      email?: string | null;
+      name?: string | null;
+      role?: string | null;
+    },
+    ipAddress: string | undefined,
+    userAgent: string | undefined,
+    method: 'EMAIL',
+  ): Promise<AdminLoginSession> {
+    await this.adminRepo.updateAdmin(adminId, {
+      lastLoginAt: new Date(),
+      failedMfaAttempts: 0,
+      mfaLockUntil: null,
+    });
+
+    const refreshToken = randomUUID();
+    const refreshTtl = this.parseTimeToMs(
+      this.envService.getString('JWT_REFRESH_TTL', '30d'),
+    );
+    const session = await this.adminRepo.createAdminSession({
+      adminId,
+      refreshToken,
+      userAgent: userAgent || null,
+      ipAddress: ipAddress || null,
+      expiresAt: new Date(Date.now() + refreshTtl),
+    });
+
+    const accessTtl = this.envService.getString('JWT_ACCESS_TTL', '15m');
+    const accessTtlSeconds = Math.floor(this.parseTimeToMs(accessTtl) / 1000);
+    const accessToken = jwt.sign(
+      {
+        sub: adminId,
+        email: admin.email,
+        role: admin.role,
+        sessionId: session.id,
+      },
+      this.envService.getString('JWT_ADMIN_SECRET'),
+      {
+        expiresIn: accessTtlSeconds,
+        algorithm: JWT_ALGORITHM,
+        audience: JWT_AUDIENCE_ADMIN,
+      },
+    );
+
+    this.accessLog
+      .record({
+        actorType: 'ADMIN',
+        actorId: adminId,
+        actorRole: admin.role ?? null,
+        kind: 'LOGIN_SUCCESS',
+        ipAddress,
+        userAgent,
+      })
+      .catch(() => undefined);
+
+    this.writeAudit(adminId, admin.role ?? null, 'ADMIN_MFA_SUCCESS', {
+      method,
+      sessionId: session.id,
+      ipAddress,
+      userAgent,
+    });
+    this.eventBus
+      .publish({
+        eventName: 'admin.mfa.login_succeeded',
+        aggregate: 'admin',
+        aggregateId: adminId,
+        occurredAt: new Date(),
+        payload: {
+          adminId,
+          email: admin.email ?? null,
+          ipAddress: ipAddress ?? null,
+          userAgent: userAgent ?? null,
+          sessionId: session.id,
+          method,
+        },
+      })
+      .catch(() => undefined);
+
+    return {
+      accessToken,
+      refreshToken,
+      expiresIn: accessTtlSeconds,
+      admin: {
+        adminId,
         name: admin.name ?? '',
         email: admin.email ?? '',
         role: admin.role ?? '',
