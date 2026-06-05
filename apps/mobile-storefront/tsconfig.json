@@ -1,0 +1,28 @@
+{
+  "extends": "@react-native/typescript-config/tsconfig.json",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    },
+    "jsx": "react-native",
+    // "bundler" matches Metro's resolver behaviour: honours the
+    // `exports` field in package.json (required for @posthog/core/
+    // subpath imports) and is compatible with the `customConditions`
+    // inherited from @react-native/typescript-config. "node" rejects
+    // customConditions outright.
+    "moduleResolution": "bundler",
+    // DOM lib is included so the shared @sportsmart/shared-utils
+    // package (which targets both web and RN, guarded at runtime by
+    // typeof window === 'undefined') type-checks here without errors
+    // on `window` / `sessionStorage` references. RN itself doesn't
+    // expose any DOM globals at runtime, so this is types-only and
+    // doesn't change app behaviour.
+    "lib": ["ESNext", "DOM"],
+    // `node` is here purely for the shared @sportsmart/shared-utils
+    // package, which references `process.env.NODE_ENV` (a global Metro
+    // does provide at runtime, but TS only sees with @types/node).
+    "types": ["nativewind/types", "node"]
+  },
+  "include": ["src/**/*", "App.tsx", "index.js", "nativewind-env.d.ts"]
+}

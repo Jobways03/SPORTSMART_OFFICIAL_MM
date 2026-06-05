@@ -1,0 +1,9 @@
+/* Web build's stylesheet. NativeWind v4 on web uses Tailwind CSS
+   directly (the className → style babel transform still runs, but the
+   actual CSS rules come from this file processed by PostCSS).
+
+   Tailwind content scan picks up everything under src/ and App.tsx
+   via tailwind.config.js. */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
