@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Sportsmart Mobile · Web Preview</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='22' fill='%232563eb'/%3E%3Ctext x='50' y='66' font-family='-apple-system,sans-serif' font-size='52' font-weight='800' fill='white' text-anchor='middle'%3ES%3C/text%3E%3C/svg%3E" />
+    <style>
+      /* Mobile-first reset — the React app handles its own layout via
+         NativeWind. We just provide a viewport-sized root, then on
+         wide screens upgrade to a phone-shaped frame floating on a
+         gradient background. */
+      *, *::before, *::after { box-sizing: border-box; }
+      html, body { margin: 0; padding: 0; height: 100%; }
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Inter',
+          'Segoe UI', Roboto, sans-serif;
+        background: #ffffff;
+        color: #111827;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+      #root {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        background: #ffffff;
+      }
+
+      /* Desktop phone-frame: any viewport ≥ 720px wraps the app in a
+         centred iPhone-style frame on a gradient backdrop. Below
+         720px (real phones + narrow DevTools mock) the app fills
+         the screen edge-to-edge. */
+      @media (min-width: 720px) {
+        body {
+          min-height: 100vh;
+          background:
+            radial-gradient(circle at 20% 0%, rgba(99, 102, 241, 0.3), transparent 50%),
+            radial-gradient(circle at 80% 100%, rgba(236, 72, 153, 0.25), transparent 50%),
+            linear-gradient(135deg, #0f172a 0%, #1e293b 50%, #312e81 100%);
+          background-attachment: fixed;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 32px 16px;
+          overflow: auto;
+        }
+        /* Brand banner above the device */
+        body::before {
+          content: 'SPORTSMART MOBILE · WEB PREVIEW';
+          display: block;
+          color: rgba(255, 255, 255, 0.65);
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.25em;
+          margin-bottom: 24px;
+          text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+        }
+        #root {
+          width: 390px;
+          height: 844px;
+          max-height: calc(100vh - 120px);
+          border-radius: 48px;
+          background: #ffffff;
+          overflow: hidden;
+          position: relative;
+          border: 14px solid #0a0a0a;
+          box-shadow:
+            0 0 0 2px #1f2937,
+            0 25px 50px -12px rgba(0, 0, 0, 0.7),
+            0 0 80px -20px rgba(99, 102, 241, 0.5);
+          flex: none;
+        }
+        /* Dynamic Island / notch — pure decorative overlay */
+        #root::before {
+          content: '';
+          position: absolute;
+          top: 12px;
+          left: 50%;
+          transform: translateX(-50%);
+          width: 120px;
+          height: 32px;
+          background: #0a0a0a;
+          border-radius: 20px;
+          z-index: 9999;
+          pointer-events: none;
+        }
+        /* Subtle status-bar inset so the top of the app doesn't clip
+           into the notch area. Push app content down 44px (iOS safe
+           area equivalent) only on the frame view. */
+        #root > * {
+          padding-top: 44px;
+        }
+        /* Footer caption under the device */
+        body::after {
+          content: '↺ Built with React Native + react-native-web · Same code on iOS, Android, and here';
+          display: block;
+          color: rgba(255, 255, 255, 0.4);
+          font-size: 11px;
+          margin-top: 24px;
+          text-align: center;
+          max-width: 480px;
+        }
+      }
+
+      /* Larger desktops get a slightly bigger frame for readability */
+      @media (min-width: 1024px) {
+        #root {
+          width: 414px;
+          height: 896px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script>
+      // RN packages assume Node's `global` is defined (it isn't in a
+      // browser). Aliasing to `window` BEFORE any module loads keeps
+      // libraries that do `global.X = ...` or read `global.Y` from
+      // throwing ReferenceError. Standard polyfill for RN-on-web.
+      window.global = window;
+      // Same story for `process` — some RN libs read process.env.X
+      // at runtime. Vite already defines a few keys via `define`, but
+      // a fallback empty object avoids "process is not defined" on
+      // unguarded reads.
+      window.process = window.process || {env: {NODE_ENV: 'development'}};
+    </script>
+    <script type="module" src="/web/index.tsx"></script>
+  </body>
+</html>
