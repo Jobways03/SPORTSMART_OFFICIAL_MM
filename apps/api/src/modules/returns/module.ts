@@ -49,6 +49,7 @@ import { CustomerReturnsController } from './presentation/controllers/customer-r
 import { AdminReturnsController } from './presentation/controllers/admin-returns.controller';
 import { SellerReturnsController } from './presentation/controllers/seller-returns.controller';
 import { FranchiseReturnsController } from './presentation/controllers/franchise-returns.controller';
+import { AdminFranchiseReturnsController } from './presentation/controllers/admin-franchise-returns.controller';
 import { RazorpayRefundWebhookController } from './presentation/controllers/razorpay-refund-webhook.controller';
 import { RazorpayRefundWebhookService } from './application/services/razorpay-refund-webhook.service';
 import { RefundStatusPollerCron } from './application/jobs/refund-status-poller.cron';
@@ -75,6 +76,7 @@ import { MoneyModule } from '../../core/money/money.module';
     AdminReturnsController,
     SellerReturnsController,
     FranchiseReturnsController,
+    AdminFranchiseReturnsController,
     RazorpayRefundWebhookController,
     SellerReversalsController,
     AdminSellerReversalsController,

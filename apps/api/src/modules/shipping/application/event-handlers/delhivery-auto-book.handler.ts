@@ -73,6 +73,12 @@ export class DelhiveryAutoBookHandler {
             orderNumber: true,
             createdAt: true,
             paymentMethod: true,
+            // Wallet + sibling subtotals so the mapper can net the wallet
+            // portion out of the courier COD amount (no double-charge at door).
+            walletAmountUsedInPaise: true,
+            subOrders: {
+              select: { id: true, subTotal: true, acceptStatus: true },
+            },
             shippingAddressSnapshot: true,
             customer: { select: { email: true } },
           },

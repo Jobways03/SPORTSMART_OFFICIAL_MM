@@ -22,11 +22,7 @@ import { OrphanRecoveredHandler } from './application/event-handlers/orphan-reco
 import { OrderExpiredHandler } from './application/event-handlers/order-expired.handler';
 
 @Module({
-<<<<<<< Updated upstream
   imports: [forwardRef(() => OrdersModule), RazorpayModule, forwardRef(() => FranchiseModule), NotificationsModule],
-=======
-  imports: [OrdersModule, RazorpayModule, forwardRef(() => FranchiseModule)],
->>>>>>> Stashed changes
   controllers: [
     AdminPaymentsController,
     PaymentWebhookController,

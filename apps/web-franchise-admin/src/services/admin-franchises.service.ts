@@ -191,6 +191,51 @@ export interface FranchiseSubOrderRaw {
   } | null;
 }
 
+// Full franchise sub-order detail (GET /admin/franchise-orders/sub-orders/:id).
+export interface FranchiseSubOrderDetailItem {
+  id: string;
+  productTitle: string;
+  variantTitle?: string | null;
+  sku?: string | null;
+  imageUrl?: string | null;
+  quantity: number;
+  unitPrice: string | number | null;
+  totalPrice: string | number | null;
+}
+export interface FranchiseSubOrderDetail {
+  id: string;
+  subTotal: string | number | null;
+  fulfillmentStatus: string;
+  acceptStatus: string;
+  deliveryMethod?: string | null;
+  trackingNumber?: string | null;
+  courierName?: string | null;
+  createdAt: string;
+  items?: FranchiseSubOrderDetailItem[];
+  franchise?: { id: string; businessName: string } | null;
+  masterOrder?: {
+    id: string;
+    orderNumber?: string;
+    shippingAddressSnapshot?: {
+      fullName?: string;
+      name?: string;
+      phone?: string;
+      addressLine1?: string;
+      addressLine2?: string;
+      line1?: string;
+      line2?: string;
+      city?: string;
+      state?: string;
+      pincode?: string;
+    } | null;
+    totalAmount?: string | number | null;
+    paymentMethod?: string;
+    paymentStatus?: string;
+    orderStatus?: string;
+    createdAt?: string;
+  } | null;
+}
+
 // Shape of a row from GET /admin/franchises/:id/pos-sales (FranchisePosSale +
 // _count.items). netAmount is a Prisma Decimal, serialised over JSON as a string.
 export interface FranchisePosSale {
@@ -288,6 +333,12 @@ export const adminFranchisesService = {
     if (params.limit) query.set('limit', String(params.limit));
     const qs = query.toString();
     return apiClient(`/admin/franchise-orders/franchises/${franchiseId}${qs ? `?${qs}` : ''}`);
+  },
+
+  getFranchiseOrder(
+    subOrderId: string,
+  ): Promise<ApiResponse<FranchiseSubOrderDetail>> {
+    return apiClient(`/admin/franchise-orders/sub-orders/${subOrderId}`);
   },
 
   // Inventory

@@ -1,0 +1,13 @@
+-- Product.moderationStatus was declared without @map, so Prisma created the
+-- physical column as the camelCase "moderationStatus" while the rest of the
+-- schema (and 7 hand-written raw-SQL call sites: storefront product listing,
+-- search suggestions, filter facets, price/availability facets, and the
+-- back-in-stock cron) use snake_case `moderation_status`. Those raw queries
+-- all threw Postgres 42703 (undefined column), 500-ing the entire storefront
+-- product surface.
+--
+-- Schema now declares @map("moderation_status"); rename the column to match.
+-- Metadata-only rename: data, default, and the existing
+-- "products_moderationStatus_idx" index are preserved (the index name is
+-- derived from the Prisma field name, which is unchanged).
+ALTER TABLE "products" RENAME COLUMN "moderationStatus" TO "moderation_status";

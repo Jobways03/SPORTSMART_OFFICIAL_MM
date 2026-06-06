@@ -48,6 +48,21 @@ export interface FranchiseOrder {
   };
 }
 
+export interface FranchiseShipmentEvidence {
+  id: string;
+  kind: string;
+  capturedAt: string;
+  frozenAt: string | null;
+  // Server-derived view URL for PRIVATE (SHIPMENT_EVIDENCE) files.
+  viewUrl?: string;
+  file: {
+    id: string;
+    fileName: string;
+    providerUrl?: string | null;
+    storageKey: string;
+  };
+}
+
 export const franchiseOrdersService = {
   list(
     params: {
@@ -126,5 +141,27 @@ export const franchiseOrdersService = {
       awb?: string | null;
       courierName?: string | null;
     }>(`/franchise/sub-orders/${subOrderId}/label`);
+  },
+
+  /**
+   * Pre-ship "proof of dispatch" photos for a FRANCHISE-fulfilled sub-order.
+   * Mirrors the seller shipment-evidence surface so franchises can satisfy the
+   * packing-photo gate before marking a Delhivery order PACKED.
+   */
+  getShipmentEvidence(subOrderId: string) {
+    return apiClient<FranchiseShipmentEvidence[]>(
+      `/franchise/sub-orders/${subOrderId}/shipment-evidence`,
+    );
+  },
+
+  uploadShipmentEvidence(subOrderId: string, file: File) {
+    const fd = new FormData();
+    fd.append('image', file);
+    // apiClient auto-detects FormData and lets the browser set the multipart
+    // boundary (no application/json content-type).
+    return apiClient<{ success?: boolean; message?: string }>(
+      `/franchise/sub-orders/${subOrderId}/shipment-evidence`,
+      { method: 'POST', body: fd as unknown as BodyInit },
+    );
   },
 };

@@ -87,6 +87,12 @@ export class ShippingLabelPdfService {
             orderNumber: true,
             createdAt: true,
             paymentMethod: true,
+            // Wallet + sibling subtotals so the printed COD amount nets out the
+            // wallet portion (matches the courier booking; no door double-charge).
+            walletAmountUsedInPaise: true,
+            subOrders: {
+              select: { id: true, subTotal: true, acceptStatus: true },
+            },
             shippingAddressSnapshot: true,
             customer: { select: { email: true } },
           },

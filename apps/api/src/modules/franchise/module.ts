@@ -158,12 +158,9 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
   // AdminModule does not import FranchiseModule so a plain import is
   // sufficient (no circular-dep forwardRef needed).
   imports: [
-<<<<<<< Updated upstream
     // forwardRef: Catalog→Inventory→Franchise→Catalog form an import cycle.
     // Deferring this back-edge lets each module's file finish evaluating
     // before its reference is read, avoiding an undefined import at bootstrap.
-=======
->>>>>>> Stashed changes
     forwardRef(() => CatalogModule),
     MoneyModule,
     forwardRef(() => TaxModule),

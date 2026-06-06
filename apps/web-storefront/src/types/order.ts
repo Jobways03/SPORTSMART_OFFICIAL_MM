@@ -74,6 +74,10 @@ export interface OrderDetail {
   totalAmount: number;
   paymentStatus: string;
   paymentMethod: string;
+  // Wallet-aware display label (e.g. "Paid by Wallet", "Cash on Delivery
+  // (Wallet ₹X applied)"). Falls back to paymentMethod when absent.
+  paymentMethodLabel?: string;
+  walletAmountUsedInPaise?: string;
   itemCount: number;
   createdAt: string;
   shippingAddressSnapshot: ShippingAddressSnapshot;

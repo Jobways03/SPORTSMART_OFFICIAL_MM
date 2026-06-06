@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   franchiseOrdersService,
   FranchiseOrder,
+  FranchiseShipmentEvidence,
 } from '@/services/orders.service';
 import { useModal } from '@sportsmart/ui';
 import { DeliveryMethodBadge } from '@/components/DeliveryMethodBadge';
@@ -138,6 +139,28 @@ const { id } = useParams<{ id: string }>();
   const [shipCourierOther, setShipCourierOther] = useState('');
   const [shipError, setShipError] = useState('');
 
+  // Shipment-evidence (pre-ship proof-of-dispatch photos). Mirrors the seller
+  // flow so franchises can satisfy the Delhivery packing-photo gate.
+  const [shipmentEvidence, setShipmentEvidence] = useState<
+    FranchiseShipmentEvidence[]
+  >([]);
+  const [evidenceFiles, setEvidenceFiles] = useState<File[]>([]);
+  const [evidenceUploading, setEvidenceUploading] = useState(false);
+  const [evidenceProgress, setEvidenceProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
+  const [evidenceMsg, setEvidenceMsg] = useState('');
+
+  // Holds the post-pack auto-refresh poll timer so we can cancel it on unmount.
+  const packPollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(
+    () => () => {
+      if (packPollRef.current) clearTimeout(packPollRef.current);
+    },
+    [],
+  );
+
   const fetchOrder = useCallback(async () => {
     if (!id) return;
     setLoading(true);
@@ -155,6 +178,59 @@ const { id } = useParams<{ id: string }>();
   useEffect(() => {
     fetchOrder();
   }, [fetchOrder]);
+
+  const fetchShipmentEvidence = useCallback(async () => {
+    if (!id) return;
+    try {
+      const res = await franchiseOrdersService.getShipmentEvidence(id);
+      if (Array.isArray(res.data)) setShipmentEvidence(res.data);
+    } catch {
+      // 404/403 = no photos yet / not ours — fail soft; the page still works.
+    }
+  }, [id]);
+
+  useEffect(() => {
+    fetchShipmentEvidence();
+  }, [fetchShipmentEvidence]);
+
+  const handleEvidenceUpload = async () => {
+    if (!id) return;
+    if (evidenceFiles.length === 0) {
+      setEvidenceMsg('Pick at least one image first');
+      return;
+    }
+    setEvidenceUploading(true);
+    setEvidenceMsg('');
+    setEvidenceProgress({ done: 0, total: evidenceFiles.length });
+    let ok = 0;
+    const failures: string[] = [];
+    // Sequential (not parallel) so per-file progress is clear and the upload
+    // gateway isn't hammered with a burst.
+    for (let i = 0; i < evidenceFiles.length; i++) {
+      const file = evidenceFiles[i];
+      try {
+        const res = await franchiseOrdersService.uploadShipmentEvidence(id, file);
+        if (res.success) ok += 1;
+        else failures.push(`${file.name}: ${res.message ?? 'failed'}`);
+      } catch (e) {
+        failures.push(
+          `${file.name}: ${(e as ApiError)?.body?.message ?? (e as Error)?.message ?? 'failed'}`,
+        );
+      }
+      setEvidenceProgress({ done: i + 1, total: evidenceFiles.length });
+    }
+    setEvidenceUploading(false);
+    setEvidenceProgress(null);
+    setEvidenceFiles([]);
+    setEvidenceMsg(
+      failures.length === 0
+        ? `Uploaded ${ok} photo${ok === 1 ? '' : 's'}`
+        : ok === 0
+          ? `All uploads failed — ${failures[0]}`
+          : `Uploaded ${ok} of ${evidenceFiles.length}. Failed: ${failures.length} (${failures[0]})`,
+    );
+    fetchShipmentEvidence();
+  };
 
   const handleAcceptConfirm = async () => {if (!id) return;
     setActionLoading('accept');
@@ -191,13 +267,37 @@ const { id } = useParams<{ id: string }>();
     }
   };
 
-  const handlePackConfirm = async () => {if (!id) return;
+  const handlePackConfirm = async () => {
+    if (!id) return;
     setActionLoading('pack');
     try {
       await franchiseOrdersService.updateStatus(id, 'PACKED');
       setShowPackModal(false);
       setPackNote('');
-      fetchOrder();
+      await fetchOrder();
+      // Delhivery auto-books + auto-ships ASYNCHRONOUSLY after PACK, so a single
+      // refetch only catches the interim PACKED state. Auto-refresh the page a
+      // few times until it settles (SHIPPED / tracking assigned) — the franchise
+      // sees the courier + AWB appear without reloading manually.
+      if (packPollRef.current) clearTimeout(packPollRef.current);
+      let attempts = 0;
+      const poll = async () => {
+        attempts += 1;
+        try {
+          const res = await franchiseOrdersService.get(id);
+          if (res.data) setOrder(res.data);
+          const settled =
+            res.data?.fulfillmentStatus === 'SHIPPED' ||
+            res.data?.fulfillmentStatus === 'DELIVERED' ||
+            !!res.data?.trackingNumber;
+          if (!settled && attempts < 6) {
+            packPollRef.current = setTimeout(poll, 2000);
+          }
+        } catch {
+          if (attempts < 6) packPollRef.current = setTimeout(poll, 2000);
+        }
+      };
+      packPollRef.current = setTimeout(poll, 1500);
     } catch (err) {
       if (err instanceof ApiError) void notify(err.body.message || 'Failed to mark as packed');
       else void notify('Failed to mark as packed');
@@ -326,6 +426,20 @@ const { id } = useParams<{ id: string }>();
 
   const canMarkPacked =
     order.acceptStatus === 'ACCEPTED' && order.fulfillmentStatus === 'UNFULFILLED';
+  // Delhivery franchise packs auto-book + auto-ship, so the dispatch photos are
+  // required AT PACK (same rule as sellers). Keep SHIPMENT_EVIDENCE_REQUIRED in
+  // sync with the API's SHIPMENT_EVIDENCE_REQUIRED_PHOTOS (default 4).
+  const SHIPMENT_EVIDENCE_REQUIRED = 4;
+  const isDelhivery = order.deliveryMethod === 'DELHIVERY';
+  const hasEnoughEvidence =
+    shipmentEvidence.length >= SHIPMENT_EVIDENCE_REQUIRED;
+  const evidenceShortBy = Math.max(
+    0,
+    SHIPMENT_EVIDENCE_REQUIRED - shipmentEvidence.length,
+  );
+  // Show the uploader + gate the pack button only at the Delhivery pack step.
+  const showEvidenceBlock = canMarkPacked && isDelhivery;
+  const packBlockedOnEvidence = showEvidenceBlock && !hasEnoughEvidence;
   const canMarkShipped =
     order.acceptStatus === 'ACCEPTED' &&
     order.fulfillmentStatus === 'PACKED' &&
@@ -617,14 +731,176 @@ const { id } = useParams<{ id: string }>();
               </div>
             )}
 
+            {showEvidenceBlock && (
+              <div
+                style={{
+                  marginBottom: 12,
+                  padding: 12,
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 8,
+                  background: '#f9fafb',
+                }}
+              >
+                <div
+                  style={{
+                    fontWeight: 600,
+                    fontSize: 13,
+                    color: '#111827',
+                    marginBottom: 4,
+                  }}
+                >
+                  Shipment photos {shipmentEvidence.length}/
+                  {SHIPMENT_EVIDENCE_REQUIRED}
+                </div>
+                <div
+                  style={{ fontSize: 11.5, color: '#6b7280', marginBottom: 8 }}
+                >
+                  Upload {SHIPMENT_EVIDENCE_REQUIRED} clear photos of the packed
+                  item (label, contents, sealed box) before marking packed —
+                  Delhivery auto-ships on pack, so the dispatch proof is required
+                  first.
+                </div>
+                {shipmentEvidence.length > 0 && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 6,
+                      flexWrap: 'wrap',
+                      marginBottom: 8,
+                    }}
+                  >
+                    {shipmentEvidence.map((ev) => {
+                      // `||` (not `??`) so an EMPTY-string viewUrl coerces to
+                      // null. PRIVATE evidence files / dev-stubs have no
+                      // resolvable URL; rendering <a href=""> would open the
+                      // current page in a new tab → a fresh load bounces through
+                      // the auth guard to /login. So: only render a clickable
+                      // link when there's a real URL, else a static placeholder.
+                      const url =
+                        ev.viewUrl || ev.file.providerUrl || null;
+                      const boxStyle = {
+                        width: 44,
+                        height: 44,
+                        borderRadius: 6,
+                        overflow: 'hidden',
+                        border: '1px solid #e5e7eb',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        background: '#f3f4f6',
+                      } as const;
+                      if (!url) {
+                        return (
+                          <div
+                            key={ev.id}
+                            title={ev.file.fileName}
+                            style={boxStyle}
+                          >
+                            <span style={{ fontSize: 16, color: '#9ca3af' }}>
+                              &#128247;
+                            </span>
+                          </div>
+                        );
+                      }
+                      return (
+                        <a
+                          key={ev.id}
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={ev.file.fileName}
+                          style={boxStyle}
+                        >
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img
+                            src={url}
+                            alt=""
+                            style={{
+                              width: '100%',
+                              height: '100%',
+                              objectFit: 'cover',
+                            }}
+                          />
+                        </a>
+                      );
+                    })}
+                  </div>
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  disabled={evidenceUploading}
+                  onChange={(e) =>
+                    setEvidenceFiles(Array.from(e.target.files ?? []))
+                  }
+                  style={{ fontSize: 12, marginBottom: 8, width: '100%' }}
+                />
+                {evidenceFiles.length > 0 && !evidenceUploading && (
+                  <div
+                    style={{
+                      fontSize: 11.5,
+                      color: '#374151',
+                      marginBottom: 6,
+                    }}
+                  >
+                    {evidenceFiles.length} file
+                    {evidenceFiles.length === 1 ? '' : 's'} ready
+                  </div>
+                )}
+                <button
+                  onClick={handleEvidenceUpload}
+                  disabled={evidenceUploading || evidenceFiles.length === 0}
+                  className="btn"
+                  style={{
+                    width: '100%',
+                    fontSize: 12,
+                    opacity:
+                      evidenceUploading || evidenceFiles.length === 0 ? 0.6 : 1,
+                  }}
+                >
+                  {evidenceUploading
+                    ? `Uploading ${evidenceProgress?.done ?? 0}/${evidenceProgress?.total ?? 0}...`
+                    : evidenceFiles.length > 0
+                      ? `Upload ${evidenceFiles.length} photo${evidenceFiles.length === 1 ? '' : 's'}`
+                      : 'Select photos to upload'}
+                </button>
+                {evidenceMsg && (
+                  <div
+                    style={{
+                      fontSize: 11.5,
+                      color: '#6b7280',
+                      marginTop: 6,
+                    }}
+                  >
+                    {evidenceMsg}
+                  </div>
+                )}
+              </div>
+            )}
+
             {canMarkPacked && (
               <button
                 onClick={() => setShowPackModal(true)}
-                disabled={!!actionLoading}
+                disabled={!!actionLoading || packBlockedOnEvidence}
                 className="btn btn-primary"
-                style={{ width: '100%', background: '#d97706', borderColor: '#d97706' }}
+                title={
+                  packBlockedOnEvidence
+                    ? `Upload ${evidenceShortBy} more shipment photo${evidenceShortBy === 1 ? '' : 's'} first (need ${SHIPMENT_EVIDENCE_REQUIRED} total)`
+                    : ''
+                }
+                style={{
+                  width: '100%',
+                  background: packBlockedOnEvidence ? '#9ca3af' : '#d97706',
+                  borderColor: packBlockedOnEvidence ? '#9ca3af' : '#d97706',
+                  cursor: packBlockedOnEvidence ? 'not-allowed' : 'pointer',
+                }}
               >
-                {actionLoading === 'pack' ? 'Updating...' : 'Mark as Packed'}
+                {actionLoading === 'pack'
+                  ? 'Updating...'
+                  : packBlockedOnEvidence
+                    ? `Upload ${evidenceShortBy} more photo${evidenceShortBy === 1 ? '' : 's'} to pack`
+                    : 'Mark as Packed'}
               </button>
             )}
 

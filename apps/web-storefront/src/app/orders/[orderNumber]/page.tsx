@@ -927,7 +927,7 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
         {/* Footer */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 8, padding: '12px 0', gap: 12, flexWrap: 'wrap' }}>
           <div style={{ fontSize: 13, color: '#6b7280' }}>
-            Payment Method: <strong>{order.paymentMethod === 'COD' ? 'Cash on Delivery' : order.paymentMethod}</strong>
+            Payment Method: <strong>{order.paymentMethodLabel ?? (order.paymentMethod === 'COD' ? 'Cash on Delivery' : order.paymentMethod)}</strong>
           </div>
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             {/* Suppress the "Return Items" CTA when there's already an

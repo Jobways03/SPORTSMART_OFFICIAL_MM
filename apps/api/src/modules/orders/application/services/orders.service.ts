@@ -104,16 +104,10 @@ export class OrdersService {
     private readonly orderRepo: OrderRepository,
     private readonly eventBus: EventBusService,
     private readonly catalogFacade: CatalogPublicFacade,
-<<<<<<< Updated upstream
     // Orders↔Franchise is a constructor-level circular provider dependency
     // (FranchiseOrdersService injects OrdersService via the same param-level
     // forwardRef). Mirror it here so this facade resolves regardless of
     // module init order.
-=======
-    // forwardRef: Orders↔Franchise is a circular module pair; resolve the
-    // facade lazily so OrdersService can instantiate before FranchiseModule
-    // finishes (merge-broken module-init order exposed this at bootstrap).
->>>>>>> Stashed changes
     @Inject(forwardRef(() => FranchisePublicFacade))
     private readonly franchiseFacade: FranchisePublicFacade,
     private readonly prisma: PrismaService,
@@ -1973,11 +1967,19 @@ export class OrdersService {
     // PENDING; see PAYMENT_STATUS_TRANSITIONS.)
     assertTransition('OrderPaymentStatus', order.paymentStatus, 'PAID');
 
-    // #4/#9 — cash variance. Default the collected amount to the full payable
-    // (the legacy callers + the UI's "collect full" affordance); when the admin
-    // records a different amount, a variance reason is mandatory so the
+    // #4/#9 — cash variance. The cash actually due at the door is the order
+    // total MINUS any wallet already debited at checkout (a wallet-applied COD
+    // order must not be charged twice). Source the total from the Decimal
+    // `totalAmount`: `totalAmountInPaise` is a dual-write mirror that is 0 when
+    // MONEY_DUAL_WRITE_ENABLED=false, whereas `walletAmountUsedInPaise` is
+    // written directly at checkout and is always reliable. Default the collected
+    // amount to that payable (the UI's "collect full" affordance); when the
+    // admin records a different amount, a variance reason is mandatory so the
     // discrepancy is never silently absorbed.
-    const expectedInPaise = BigInt(order.totalAmountInPaise);
+    const grossInPaise = BigInt(Math.round(Number(order.totalAmount) * 100));
+    const walletInPaise = BigInt(order.walletAmountUsedInPaise ?? 0);
+    const expectedInPaise =
+      grossInPaise > walletInPaise ? grossInPaise - walletInPaise : 0n;
     const collectedInPaise =
       opts.collectedAmountInPaise ?? expectedInPaise;
     if (collectedInPaise < 0n) {
@@ -2208,7 +2210,18 @@ export class OrdersService {
       throw new BadRequestAppException('Cannot mark a cancelled sub-order as paid');
     }
 
-    const expectedInPaise = BigInt(sub.subTotalInPaise);
+    // Per-sub cash due = this sub's subtotal MINUS its prorated share of the
+    // master-level wallet credit (wallet is stored only on the master order).
+    // Use the Decimal subTotal; subTotalInPaise is a dual-write mirror that is
+    // 0 when MONEY_DUAL_WRITE_ENABLED=false.
+    const subGrossInPaise = BigInt(Math.round(Number(sub.subTotal) * 100));
+    const walletShareInPaise = BigInt(
+      this.proratedWalletShareInPaise(master, sub),
+    );
+    const expectedInPaise =
+      subGrossInPaise > walletShareInPaise
+        ? subGrossInPaise - walletShareInPaise
+        : 0n;
     const collectedInPaise = opts.collectedAmountInPaise ?? expectedInPaise;
     if (collectedInPaise < 0n) {
       throw new BadRequestAppException('collectedAmountInPaise cannot be negative');
@@ -4286,16 +4299,20 @@ export class OrdersService {
       // Shipment-evidence gate.
       //   • Non-Delhivery: enforced at the manual SHIPPED step (the seller
       //     clicks "Mark as Shipped").
-      //   • Delhivery (SELLER/RETAIL): there is NO manual ship — marking PACKED
-      //     auto-books + auto-ships the parcel — so the 4 photos are required at
-      //     PACKED instead, guaranteeing dispatch evidence exists BEFORE the
-      //     parcel leaves. Scoped to actorKind SELLER because only the seller
-      //     portal has the evidence-upload surface (the franchise portal has
-      //     none, so gating its PACK on photos would lock franchises out).
+      //   • Delhivery (SELLER/RETAIL/FRANCHISE): there is NO manual ship —
+      //     marking PACKED auto-books + auto-ships the parcel — so the 4 photos
+      //     are required at PACKED instead, guaranteeing dispatch evidence
+      //     exists BEFORE the parcel leaves. Franchises now have their own
+      //     shipment-evidence upload surface (FranchiseShipmentEvidenceController
+      //     + the franchise order-page uploader), so the gate applies to both
+      //     SELLER and FRANCHISE actors — gating their PACK no longer locks
+      //     them out.
       const isDelhiveryNode = locked.delivery_method === 'DELHIVERY';
       const requiresEvidence =
         status === 'SHIPPED' ||
-        (status === 'PACKED' && isDelhiveryNode && actorKind === 'SELLER');
+        (status === 'PACKED' &&
+          isDelhiveryNode &&
+          (actorKind === 'SELLER' || actorKind === 'FRANCHISE'));
       if (requiresEvidence) {
         const evidenceRequired = this.env.getNumber(
           'SHIPMENT_EVIDENCE_REQUIRED_PHOTOS',
@@ -4876,6 +4893,72 @@ export class OrdersService {
    * paymentExpiresAt is NOT included here (it's added explicitly by
    * the detail path only — the listing doesn't need it).
    */
+  /**
+   * Prorate the master-level wallet credit across active sub-orders by subtotal
+   * weight, using a largest-remainder pass so the per-sub shares sum EXACTLY to
+   * the master wallet (no 1-paise drift that would trip the cash-variance gate).
+   * Returns this sub's share in paise. Uses Decimal subTotal, never the
+   * dual-write-gated paise mirror.
+   */
+  private proratedWalletShareInPaise(master: any, sub: any): number {
+    const masterWallet = Number(master?.walletAmountUsedInPaise ?? 0);
+    if (masterWallet <= 0) return 0;
+    const siblings = (master?.subOrders ?? []).filter(
+      (s: any) => s.acceptStatus !== 'REJECTED',
+    );
+    if (siblings.length === 0) return 0;
+    const grossOf = (s: any) => Math.round(Number(s.subTotal) * 100);
+    const sumSub = siblings.reduce((a: number, s: any) => a + grossOf(s), 0);
+    if (sumSub <= 0) return 0;
+    const entries: Array<{ id: string; floor: number; frac: number }> =
+      siblings.map((s: any) => {
+        const exact = (masterWallet * grossOf(s)) / sumSub;
+        const floor = Math.floor(exact);
+        return { id: String(s.id), floor, frac: exact - floor };
+      });
+    const residual =
+      masterWallet - entries.reduce((a, e) => a + e.floor, 0);
+    // Hand the residual paise to the largest fractional parts; ties broken by
+    // id so the allocation is deterministic across independent per-sub calls.
+    const ranked = [...entries].sort(
+      (a, b) => b.frac - a.frac || (a.id < b.id ? -1 : 1),
+    );
+    const bump = new Set<string>();
+    for (let i = 0; i < residual && i < ranked.length; i++) {
+      const entry = ranked[i];
+      if (entry) bump.add(entry.id);
+    }
+    const mine = entries.find((e) => e.id === String(sub.id));
+    if (!mine) return 0;
+    return mine.floor + (bump.has(String(sub.id)) ? 1 : 0);
+  }
+
+  /**
+   * Wallet-aware, customer-facing payment-method label. Wallet is modelled as a
+   * credit on top of a base method (COD/ONLINE) — there is no WALLET enum value
+   * — so derive the display string from walletAmountUsedInPaise vs the Decimal
+   * total (the paise mirror is dual-write-gated and unreliable).
+   */
+  private deriveEffectivePaymentLabel(o: any): string {
+    const grossPaise = Math.round(Number(o?.totalAmount ?? 0) * 100);
+    const walletPaise = Number(o?.walletAmountUsedInPaise ?? 0);
+    const method = o?.paymentMethod;
+    if (walletPaise > 0 && grossPaise > 0 && walletPaise >= grossPaise) {
+      return 'Paid by Wallet';
+    }
+    if (walletPaise > 0) {
+      const walletRupees = (walletPaise / 100).toFixed(2);
+      return method === 'COD'
+        ? `Cash on Delivery (Wallet ₹${walletRupees} applied)`
+        : `Online (Wallet ₹${walletRupees} applied)`;
+    }
+    return method === 'COD'
+      ? 'Cash on Delivery'
+      : method === 'ONLINE'
+        ? 'Online'
+        : String(method ?? 'Unknown');
+  }
+
   private toCustomerSafeMasterOrder(o: any) {
     return {
       id: o.id,
@@ -4884,6 +4967,14 @@ export class OrdersService {
       orderStatusLabel: this.mapOrderStatusLabel(o.orderStatus),
       paymentStatus: o.paymentStatus,
       paymentMethod: o.paymentMethod,
+      // Wallet-aware label for display. A full-wallet order reads "Paid by
+      // Wallet" instead of the raw base method (COD/ONLINE), so a wallet
+      // purchase is never mislabelled as Cash on Delivery.
+      paymentMethodLabel: this.deriveEffectivePaymentLabel(o),
+      walletAmountUsedInPaise:
+        o.walletAmountUsedInPaise != null
+          ? o.walletAmountUsedInPaise.toString()
+          : '0',
       totalAmount: o.totalAmount,
       totalAmountInPaise:
         o.totalAmountInPaise != null ? o.totalAmountInPaise.toString() : null,

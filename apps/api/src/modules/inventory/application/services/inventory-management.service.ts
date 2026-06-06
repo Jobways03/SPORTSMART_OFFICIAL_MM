@@ -90,6 +90,11 @@ export interface MappingMovement {
 }
 
 export interface OutOfStockProduct {
+  // Stable synthetic key. Seller rows aggregate across all sellers (no single
+  // mapping id exists); franchise rows are per (franchise, product, variant).
+  // The admin inventory table keys each <tr> on this, so it must be present,
+  // unique across the merged list, and stable across reloads.
+  id: string;
   productId: string;
   productTitle: string;
   productCode: string;
@@ -589,6 +594,8 @@ export class InventoryManagementService {
     const sellerOutOfStock: OutOfStockProduct[] = Array.from(aggregated.values())
       .filter((item) => item.totalStock - item.totalReserved <= 0)
       .map((item) => ({
+        // Unique per aggregated (product, variant); mirrors the Map key above.
+        id: `oos-seller::${item.productId}::${item.variantId ?? 'null'}`,
         ...item,
         node: {
           type: 'SELLER' as const,
@@ -604,6 +611,9 @@ export class InventoryManagementService {
     // is its own actionable signal (one franchise being empty doesn't
     // mean another is, so we don't aggregate across franchises).
     const franchiseOutOfStock: OutOfStockProduct[] = franchiseRows.map((r) => ({
+      // Unique per (franchise, product, variant) — franchise rows are not
+      // aggregated, so each empty franchise stock line is its own key.
+      id: `oos-franchise::${r.franchiseId}::${r.productId}::${r.variantId ?? 'null'}`,
       productId: r.productId,
       productTitle: r.productTitle,
       productCode: r.productCode,

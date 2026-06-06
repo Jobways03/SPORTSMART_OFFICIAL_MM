@@ -2,7 +2,8 @@
 
 import { useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
-import { adminAuthService } from '@/services/admin-auth.service';
+import { adminAuthService, isMfaChallenge } from '@/services/admin-auth.service';
+import { verifyMfaChallenge } from '@/services/admin-mfa.service';
 import { ApiError } from '@/lib/api-client';
 import './login.css';
 
@@ -20,6 +21,25 @@ export default function FranchiseAdminLoginPage() {
   const [serverError, setServerError] = useState('');
   const [serverErrorType, setServerErrorType] = useState<'error' | 'warning' | 'info'>('error');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  // MFA challenge step — shown when an MFA-enrolled admin signs in.
+  const [challengeToken, setChallengeToken] = useState<string | null>(null);
+  const [mfaCode, setMfaCode] = useState('');
+  const [mfaError, setMfaError] = useState('');
+
+  const persistSession = (data: {
+    accessToken: string;
+    refreshToken: string;
+    admin: unknown;
+  }) => {
+    try {
+      sessionStorage.setItem('adminAccessToken', data.accessToken);
+      sessionStorage.setItem('adminRefreshToken', data.refreshToken);
+      sessionStorage.setItem('admin', JSON.stringify(data.admin));
+    } catch {
+      // Storage unavailable
+    }
+    router.push('/dashboard');
+  };
 
   const validate = (): boolean => {
     const newErrors: FormErrors = {};
@@ -53,14 +73,14 @@ export default function FranchiseAdminLoginPage() {
       });
 
       if (result.data) {
-        try {
-          sessionStorage.setItem('adminAccessToken', result.data.accessToken);
-          sessionStorage.setItem('adminRefreshToken', result.data.refreshToken);
-          sessionStorage.setItem('admin', JSON.stringify(result.data.admin));
-        } catch {
-          // Storage unavailable
+        if (isMfaChallenge(result.data)) {
+          // MFA-enrolled admin — switch to the 6-digit verification step.
+          setChallengeToken(result.data.challengeToken);
+          setMfaCode('');
+          setMfaError('');
+        } else {
+          persistSession(result.data);
         }
-        router.push('/dashboard');
       }
     } catch (err) {
       if (err instanceof ApiError) {
@@ -80,6 +100,37 @@ export default function FranchiseAdminLoginPage() {
         setServerErrorType('error');
         setServerError('Something went wrong. Please try again.');
       }
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleMfaVerify = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!challengeToken) return;
+    const code = mfaCode.trim();
+    const isTotp = /^\d{6}$/.test(code);
+    const isBackup = /^[A-Za-z0-9]{5}-?[A-Za-z0-9]{5}$/.test(code);
+    if (!isTotp && !isBackup) {
+      setMfaError('Enter your 6-digit authenticator code (or a backup code).');
+      return;
+    }
+    setIsSubmitting(true);
+    setMfaError('');
+    try {
+      const res = await verifyMfaChallenge({ challengeToken, code });
+      if (res.data) persistSession(res.data);
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const msg = err.body?.message;
+        setMfaError(
+          (typeof msg === 'string' && msg) ||
+            'Invalid or expired code. Please try again.',
+        );
+      } else {
+        setMfaError('Something went wrong. Please try again.');
+      }
+      setMfaCode('');
     } finally {
       setIsSubmitting(false);
     }
@@ -116,6 +167,7 @@ export default function FranchiseAdminLoginPage() {
           </div>
         )}
 
+        {!challengeToken && (
         <form onSubmit={handleSubmit} noValidate>
           <div className="form-group">
             <label htmlFor="email">Email</label>
@@ -185,6 +237,69 @@ export default function FranchiseAdminLoginPage() {
             )}
           </button>
         </form>
+        )}
+
+        {challengeToken && (
+          <form onSubmit={handleMfaVerify} noValidate>
+            <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
+              Two-factor authentication is enabled. Enter the 6-digit code from
+              your authenticator app (or a backup code).
+            </p>
+            <div className="form-group">
+              <label htmlFor="mfaCode">Authenticator code</label>
+              <input
+                id="mfaCode"
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                placeholder="6-digit code"
+                value={mfaCode}
+                onChange={(e) => setMfaCode(e.target.value)}
+                disabled={isSubmitting}
+                autoFocus
+              />
+              {mfaError && (
+                <span className="field-error" role="alert">
+                  {mfaError}
+                </span>
+              )}
+            </div>
+            <button
+              type="submit"
+              className="btn-submit"
+              disabled={isSubmitting}
+              aria-busy={isSubmitting}
+            >
+              {isSubmitting ? (
+                <>
+                  <span className="btn-spinner" aria-hidden="true" />
+                  Verifying
+                </>
+              ) : (
+                'Verify & sign in'
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setChallengeToken(null);
+                setMfaCode('');
+                setMfaError('');
+                setPassword('');
+              }}
+              style={{
+                marginTop: 12,
+                background: 'none',
+                border: 'none',
+                color: '#2563eb',
+                cursor: 'pointer',
+                fontSize: 13,
+              }}
+            >
+              ← Back to sign in
+            </button>
+          </form>
+        )}
 
         <p className="auth-footer">
           Franchise admin access only. Contact your administrator for credentials.

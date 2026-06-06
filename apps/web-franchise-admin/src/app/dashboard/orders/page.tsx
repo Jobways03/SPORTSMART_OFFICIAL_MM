@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { adminFranchisesService } from '@/services/admin-franchises.service';
 
 export default function FranchiseOrdersPage() {
@@ -9,6 +10,7 @@ export default function FranchiseOrdersPage() {
   const [orders, setOrders] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [ordLoading, setOrdLoading] = useState(false);
+  const router = useRouter();
 
   useEffect(() => {
     adminFranchisesService.listFranchises({ limit: 100 }).then(res => {
@@ -22,7 +24,28 @@ export default function FranchiseOrdersPage() {
     setOrdLoading(true);
     try {
       const res = await adminFranchisesService.listFranchiseOrders(id, { limit: 50 });
-      setOrders((res.data as any)?.orders || []);
+      // The API returns { subOrders, pagination } (not `orders`), and each row is
+      // a sub-order whose display fields live under masterOrder / subTotal /
+      // fulfillmentStatus. Map to the flat shape the table renders. Reading the
+      // wrong key here was why every franchise showed "No orders found".
+      const subOrders = res.data?.subOrders ?? [];
+      setOrders(
+        subOrders.map((s) => {
+          const addr = s.masterOrder?.shippingAddressSnapshot as
+            | { fullName?: string; name?: string }
+            | null
+            | undefined;
+          return {
+            id: s.id,
+            orderNumber: s.masterOrder?.orderNumber ?? '—',
+            status: s.fulfillmentStatus,
+            totalAmount: s.subTotal,
+            customerName: addr?.fullName ?? addr?.name ?? '—',
+            itemsCount: Array.isArray(s.items) ? s.items.length : 0,
+            createdAt: s.createdAt,
+          };
+        }),
+      );
     } catch { setOrders([]); }
     finally { setOrdLoading(false); }
   };
@@ -63,7 +86,17 @@ export default function FranchiseOrdersPage() {
               </thead>
               <tbody>
                 {orders.map((o: any) => (
-                  <tr key={o.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
+                  <tr
+                    key={o.id}
+                    onClick={() => router.push(`/dashboard/orders/${o.id}`)}
+                    style={{ borderBottom: '1px solid #f3f4f6', cursor: 'pointer' }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = '#f9fafb';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = '';
+                    }}
+                  >
                     <td style={{ padding: '10px 12px', fontFamily: 'monospace', fontWeight: 500 }}>{o.orderNumber}</td>
                     <td style={{ padding: '10px 12px' }}>{o.customerName}</td>
                     <td style={{ padding: '10px 12px' }}><span style={{ fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, background: o.status === 'DELIVERED' ? '#dcfce7' : '#dbeafe', color: o.status === 'DELIVERED' ? '#15803d' : '#1d4ed8' }}>{o.status?.replace(/_/g, ' ')}</span></td>
