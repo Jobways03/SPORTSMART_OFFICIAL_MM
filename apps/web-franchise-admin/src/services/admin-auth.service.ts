@@ -17,6 +17,21 @@ export interface AdminLoginResponseData {
   };
 }
 
+// When the admin has MFA enrolled, /admin/auth/login returns a challenge
+// instead of tokens — the login page must trade it via verifyMfaChallenge.
+export interface AdminLoginMfaChallenge {
+  mfaRequired: true;
+  challengeToken: string;
+  challengeExpiresIn: number;
+  admin: { adminId: string; email: string };
+}
+
+export function isMfaChallenge(
+  d: AdminLoginResponseData | AdminLoginMfaChallenge | undefined | null,
+): d is AdminLoginMfaChallenge {
+  return (d as AdminLoginMfaChallenge | undefined)?.mfaRequired === true;
+}
+
 export interface AdminMeResponseData {
   adminId: string;
   name: string;
@@ -28,11 +43,16 @@ export interface AdminMeResponseData {
 }
 
 export const adminAuthService = {
-  login(payload: AdminLoginPayload): Promise<ApiResponse<AdminLoginResponseData>> {
-    return apiClient<AdminLoginResponseData>('/admin/auth/login', {
-      method: 'POST',
-      body: JSON.stringify(payload),
-    });
+  login(
+    payload: AdminLoginPayload,
+  ): Promise<ApiResponse<AdminLoginResponseData | AdminLoginMfaChallenge>> {
+    return apiClient<AdminLoginResponseData | AdminLoginMfaChallenge>(
+      '/admin/auth/login',
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    );
   },
 
   logout(): Promise<ApiResponse> {

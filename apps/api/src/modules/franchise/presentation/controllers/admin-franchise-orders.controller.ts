@@ -48,6 +48,13 @@ export class AdminFranchiseOrdersController {
     };
   }
 
+  @Get('sub-orders/:subOrderId')
+  async getFranchiseOrder(@Param('subOrderId') subOrderId: string) {
+    const data =
+      await this.franchiseOrdersService.getOrderForAdmin(subOrderId);
+    return { success: true, message: 'Franchise order retrieved', data };
+  }
+
   @Patch(':subOrderId/mark-delivered')
   async markDelivered(@Param('subOrderId') subOrderId: string) {
     const data = await this.franchiseOrdersService.markDelivered(subOrderId);

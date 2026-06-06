@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { adminFranchisesService } from '@/services/admin-franchises.service';
 
 export default function FranchiseCommissionPage() {
@@ -30,7 +31,24 @@ export default function FranchiseCommissionPage() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Franchise Commission & Finance</h1>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4, flexWrap: 'wrap', gap: 8 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 700 }}>Franchise Commission & Finance</h1>
+        <Link
+          href="/dashboard/commission/settings"
+          style={{
+            fontSize: 13,
+            fontWeight: 600,
+            color: '#2563eb',
+            textDecoration: 'none',
+            border: '1px solid #bfdbfe',
+            background: '#eff6ff',
+            padding: '8px 14px',
+            borderRadius: 8,
+          }}
+        >
+          Commission Settings &rarr;
+        </Link>
+      </div>
       <p style={{ color: '#6b7280', fontSize: 14, marginBottom: 24 }}>View commission ledger and finance entries for each franchise.</p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 24 }}>

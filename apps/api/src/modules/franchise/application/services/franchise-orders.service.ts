@@ -156,6 +156,38 @@ export class FranchiseOrdersService {
     return subOrder;
   }
 
+  /**
+   * Admin (oversight) variant of getOrder — same shape but NOT scoped to a
+   * franchiseId, since the franchise-admin views any partner's sub-order.
+   * Includes the owning franchise so the admin detail page can label it.
+   */
+  async getOrderForAdmin(subOrderId: string) {
+    const subOrder = await this.prisma.subOrder.findFirst({
+      where: { id: subOrderId, fulfillmentNodeType: 'FRANCHISE' },
+      include: {
+        masterOrder: {
+          select: {
+            id: true,
+            orderNumber: true,
+            customerId: true,
+            shippingAddressSnapshot: true,
+            totalAmount: true,
+            paymentMethod: true,
+            paymentStatus: true,
+            orderStatus: true,
+            createdAt: true,
+          },
+        },
+        items: true,
+        franchise: { select: { id: true, businessName: true } },
+      },
+    });
+    if (!subOrder) {
+      throw new NotFoundAppException('Order not found');
+    }
+    return subOrder;
+  }
+
   // ── Accept order ──────────────────────────────────────────────────────
 
   async acceptOrder(

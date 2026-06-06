@@ -34,6 +34,16 @@ export interface SubOrderForShipment {
     orderNumber: string;
     createdAt?: Date | string | null;
     paymentMethod?: string | null;
+    // Wallet credit (paise) applied at checkout. Prorated across the master's
+    // sub-orders by subtotal to compute the true cash-on-delivery amount, so a
+    // wallet-paid order is never charged again at the door. Optional: callers
+    // that never book COD may omit them (the COD amount then defaults to gross).
+    walletAmountUsedInPaise?: bigint | number | null;
+    subOrders?: Array<{
+      id?: string | null;
+      subTotal: unknown;
+      acceptStatus?: string | null;
+    }>;
     shippingAddressSnapshot?: any;
     customer?: { email?: string | null } | null;
   };
@@ -138,6 +148,47 @@ function toCm(len: unknown, unit?: string | null): number {
  * nullable weight/dimension columns: falls back to a 0.5 kg / 10×10×10 cm
  * parcel so a missing catalog measurement never blocks a booking.
  */
+/**
+ * Prorate the master-level wallet credit (stored only on MasterOrder) across
+ * its active sub-orders by subtotal weight, with a largest-remainder pass so the
+ * per-sub shares sum EXACTLY to the wallet total (no paise drift between courier
+ * COD amounts and the order total). Returns this sub's share in paise. Falls
+ * back to 0 (no reduction) when siblings/wallet aren't loaded — i.e. the courier
+ * collects the gross subtotal, never more.
+ */
+function proratedWalletShareInPaise(
+  master: SubOrderForShipment['masterOrder'],
+  sub: SubOrderForShipment,
+): number {
+  const masterWallet = Number(master?.walletAmountUsedInPaise ?? 0);
+  if (masterWallet <= 0) return 0;
+  const siblings = (master?.subOrders ?? []).filter(
+    (s) => s.acceptStatus !== 'REJECTED',
+  );
+  if (siblings.length === 0) return 0;
+  const grossOf = (s: { subTotal: unknown }) =>
+    Math.round(Number(s.subTotal) * 100);
+  const sumSub = siblings.reduce((a, s) => a + grossOf(s), 0);
+  if (sumSub <= 0) return 0;
+  const entries = siblings.map((s) => {
+    const exact = (masterWallet * grossOf(s)) / sumSub;
+    const floor = Math.floor(exact);
+    return { id: String(s.id ?? ''), floor, frac: exact - floor };
+  });
+  const residual = masterWallet - entries.reduce((a, e) => a + e.floor, 0);
+  const ranked = [...entries].sort(
+    (a, b) => b.frac - a.frac || (a.id < b.id ? -1 : 1),
+  );
+  const bump = new Set<string>();
+  for (let i = 0; i < residual && i < ranked.length; i++) {
+    const entry = ranked[i];
+    if (entry) bump.add(entry.id);
+  }
+  const mine = entries.find((e) => e.id === String(sub.id));
+  if (!mine) return 0;
+  return mine.floor + (bump.has(String(sub.id)) ? 1 : 0);
+}
+
 export function buildCreateShipmentRequest(
   sub: SubOrderForShipment,
 ): CreateShipmentRequest {
@@ -198,8 +249,19 @@ export function buildCreateShipmentRequest(
   if (width <= 0) width = 10;
   if (height <= 0) height = 10;
 
-  const cod = (master.paymentMethod ?? '').toUpperCase() === 'COD';
   const subTotal = toRupeeString(sub.subTotal);
+  // Cash to collect at the door = this sub's subtotal MINUS its prorated share
+  // of any wallet credit already debited at checkout. A fully-wallet-covered
+  // order ships PREPAID (codDue=0) so the courier never collects the money a
+  // second time. Decimal subTotal; only walletAmountUsedInPaise is reliable.
+  const codDuePaise = Math.max(
+    0,
+    Math.round(Number(sub.subTotal) * 100) -
+      proratedWalletShareInPaise(master, sub),
+  );
+  const codAmount = (codDuePaise / 100).toFixed(2);
+  const cod =
+    (master.paymentMethod ?? '').toUpperCase() === 'COD' && codDuePaise > 0;
 
   const gstNumber =
     sub.fulfillmentNodeType === 'SELLER'
@@ -263,7 +325,7 @@ export function buildCreateShipmentRequest(
       dimensions: { length, width, height },
       weightKg: Number(weightKg.toFixed(3)),
       paymentMode: cod ? 'cod' : 'prepaid',
-      ...(cod ? { codAmount: subTotal } : {}),
+      ...(cod ? { codAmount } : {}),
       ...(gstNumber ? { gstNumber } : {}),
       ...(sellerName ? { sellerName } : {}),
       ...(sellerAddress ? { sellerAddress } : {}),

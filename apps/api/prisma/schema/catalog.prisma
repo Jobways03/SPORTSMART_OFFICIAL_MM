@@ -222,7 +222,7 @@ model Product {
   categoryId       String?          @map("category_id")
   brandId          String?          @map("brand_id")
   status           ProductStatus    @default(DRAFT)
-  moderationStatus ModerationStatus @default(PENDING)
+  moderationStatus ModerationStatus @default(PENDING) @map("moderation_status")
   moderationNote   String?          @map("moderation_note")
 
   /// Phase 192 (#4) — structured sport classification (e.g. "cricket",

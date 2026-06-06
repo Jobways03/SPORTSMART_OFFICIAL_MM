@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { PartnerRegistrationPanel } from '@/components/PartnerRegistrationPanel';
 
@@ -31,6 +32,52 @@ export default function SettingsHubPage() {
           Account-level controls for your franchise admin profile.
         </p>
       </header>
+
+      {/* Security — admin account controls (persona-agnostic, scoped to the
+          logged-in admin via req.adminId on the backend). */}
+      <section style={{ marginBottom: 28 }}>
+        <header style={{ marginBottom: 12 }}>
+          <h2
+            style={{
+              fontSize: 18,
+              fontWeight: 700,
+              margin: 0,
+              color: '#0f172a',
+            }}
+          >
+            Security
+          </h2>
+          <p style={{ marginTop: 4, fontSize: 13, color: '#64748b' }}>
+            Protect your admin account.
+          </p>
+        </header>
+        <Link href="/dashboard/settings/mfa" style={{ textDecoration: 'none' }}>
+          <div
+            style={{
+              padding: '16px 20px',
+              border: '1px solid #e5e7eb',
+              borderRadius: 10,
+              background: '#fff',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              maxWidth: 520,
+            }}
+          >
+            <div>
+              <div
+                style={{ fontWeight: 600, color: '#0f172a', fontSize: 14 }}
+              >
+                Two-factor authentication (MFA)
+              </div>
+              <div style={{ fontSize: 13, color: '#64748b', marginTop: 2 }}>
+                Add a one-time code to your sign-in. Strongly recommended.
+              </div>
+            </div>
+            <span style={{ color: '#2563eb', fontSize: 18 }}>&rarr;</span>
+          </div>
+        </Link>
+      </section>
 
       {/* Logistics partners — admin registers the franchise store as a
           pickup location with each courier the facade can talk to.

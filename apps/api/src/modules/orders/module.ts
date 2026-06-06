@@ -4,6 +4,7 @@ import { AdminRoutingController } from './presentation/controllers/admin-routing
 import { AdminVerificationController } from './presentation/controllers/admin-verification.controller';
 import { SellerOrdersController } from './presentation/controllers/seller-orders.controller';
 import { SellerShipmentEvidenceController } from './presentation/controllers/seller-shipment-evidence.controller';
+import { FranchiseShipmentEvidenceController } from './presentation/controllers/franchise-shipment-evidence.controller';
 import { AdminShipmentEvidenceController } from './presentation/controllers/admin-shipment-evidence.controller';
 import { CustomerOrdersController } from './presentation/controllers/customer-orders.controller';
 import { OrdersService } from './application/services/orders.service';
@@ -73,6 +74,7 @@ import { ShipmentEvidenceService } from '../shipping/application/services/shipme
     AdminVerificationController,
     SellerOrdersController,
     SellerShipmentEvidenceController,
+    FranchiseShipmentEvidenceController,
     AdminShipmentEvidenceController,
     CustomerOrdersController,
   ],
@@ -119,14 +121,8 @@ import { ShipmentEvidenceService } from '../shipping/application/services/shipme
     // Phase 88 (2026-05-23) — exported so ShippingModule's webhook
     // POD capture path can consume the typed-evidence orchestrator.
     ShipmentEvidenceService,
-<<<<<<< Updated upstream
     // Exported so ShippingModule's RtoSideEffectsHandler (and CheckoutModule)
     // can inject the canonical stock-restore writer instead of owning a copy.
-=======
-    // Exported so ShippingModule's RtoSideEffectsHandler can inject the
-    // canonical stock-restore writer (provider here but previously not
-    // exported, so the RTO handler failed dependency resolution at boot).
->>>>>>> Stashed changes
     StockRestoreService,
   ],
 })
