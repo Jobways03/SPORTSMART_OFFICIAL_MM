@@ -17,6 +17,8 @@ import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiClient, ApiError } from '@/lib/api-client';
 import { franchiseProfileService, FranchiseProfile } from '@/services/profile.service';
+import { PincodeFields } from '@sportsmart/ui';
+import './franchise-onboarding.css';
 
 type GstType = 'REGULAR' | 'COMPOSITION' | 'CASUAL';
 
@@ -36,11 +38,13 @@ interface FormState {
   businessCity: string;
   businessState: string;
   businessPincode: string;
+  businessLocality: string;
   warehouseLine1: string;
   warehouseLine2: string;
   warehouseCity: string;
   warehouseState: string;
   warehousePincode: string;
+  warehouseLocality: string;
   confirmedAccurate: boolean;
 }
 
@@ -55,11 +59,13 @@ const EMPTY: FormState = {
   businessCity: '',
   businessState: '',
   businessPincode: '',
+  businessLocality: '',
   warehouseLine1: '',
   warehouseLine2: '',
   warehouseCity: '',
   warehouseState: '',
   warehousePincode: '',
+  warehouseLocality: '',
   confirmedAccurate: false,
 };
 
@@ -169,7 +175,8 @@ export default function FranchiseOnboardingPage() {
         panNumber: form.panNumber.trim().toUpperCase(),
         businessAddress: {
           line1: form.businessLine1.trim(),
-          line2: form.businessLine2.trim() || undefined,
+          line2:
+            form.businessLine2.trim() || form.businessLocality || undefined,
           city: form.businessCity.trim(),
           state: form.businessState.trim(),
           pincode: form.businessPincode.trim(),
@@ -178,7 +185,10 @@ export default function FranchiseOnboardingPage() {
         warehouseAddress: warehouseFilled
           ? {
               line1: form.warehouseLine1.trim(),
-              line2: form.warehouseLine2.trim() || undefined,
+              line2:
+                form.warehouseLine2.trim() ||
+                form.warehouseLocality ||
+                undefined,
               city: form.warehouseCity.trim(),
               state: form.warehouseState.trim(),
               pincode: form.warehousePincode.trim(),
@@ -234,7 +244,7 @@ export default function FranchiseOnboardingPage() {
   const readOnly = status === 'UNDER_REVIEW';
 
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto', padding: 24 }}>
+    <div className="fr-kyc" style={{ maxWidth: 720, margin: '0 auto', padding: 24 }}>
       <h1 style={{ marginBottom: 8 }}>Franchise KYC Onboarding</h1>
       <p style={{ color: '#64748b', marginBottom: 16 }}>
         Submit your GSTIN, PAN, and business address so an admin can approve your account.
@@ -421,51 +431,22 @@ export default function FranchiseOnboardingPage() {
             }
           />
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Field
-              label="City *"
-              error={errors.businessCity}
-              input={
-                <input
-                  type="text"
-                  value={form.businessCity}
-                  onChange={(e) =>
-                    setForm({ ...form, businessCity: e.target.value })
-                  }
-                />
-              }
-            />
-            <Field
-              label="State *"
-              error={errors.businessState}
-              input={
-                <input
-                  type="text"
-                  value={form.businessState}
-                  onChange={(e) =>
-                    setForm({ ...form, businessState: e.target.value })
-                  }
-                />
-              }
-            />
-          </div>
-
-          <Field
-            label="Pincode *"
-            error={errors.businessPincode}
-            input={
-              <input
-                type="text"
-                maxLength={6}
-                value={form.businessPincode}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    businessPincode: e.target.value.replace(/\D/g, '').slice(0, 6),
-                  })
-                }
-                inputMode="numeric"
-              />
+          <PincodeFields
+            idPrefix="biz"
+            value={{
+              pincode: form.businessPincode,
+              city: form.businessCity,
+              state: form.businessState,
+              locality: form.businessLocality,
+            }}
+            onChange={(patch) =>
+              setForm((f) => ({
+                ...f,
+                businessPincode: patch.pincode ?? f.businessPincode,
+                businessCity: patch.city ?? f.businessCity,
+                businessState: patch.state ?? f.businessState,
+                businessLocality: patch.locality ?? f.businessLocality,
+              }))
             }
           />
 
@@ -499,48 +480,22 @@ export default function FranchiseOnboardingPage() {
             }
           />
 
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
-            <Field
-              label="City"
-              input={
-                <input
-                  type="text"
-                  value={form.warehouseCity}
-                  onChange={(e) =>
-                    setForm({ ...form, warehouseCity: e.target.value })
-                  }
-                />
-              }
-            />
-            <Field
-              label="State"
-              input={
-                <input
-                  type="text"
-                  value={form.warehouseState}
-                  onChange={(e) =>
-                    setForm({ ...form, warehouseState: e.target.value })
-                  }
-                />
-              }
-            />
-          </div>
-
-          <Field
-            label="Pincode"
-            input={
-              <input
-                type="text"
-                maxLength={6}
-                value={form.warehousePincode}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    warehousePincode: e.target.value.replace(/\D/g, '').slice(0, 6),
-                  })
-                }
-                inputMode="numeric"
-              />
+          <PincodeFields
+            idPrefix="wh"
+            value={{
+              pincode: form.warehousePincode,
+              city: form.warehouseCity,
+              state: form.warehouseState,
+              locality: form.warehouseLocality,
+            }}
+            onChange={(patch) =>
+              setForm((f) => ({
+                ...f,
+                warehousePincode: patch.pincode ?? f.warehousePincode,
+                warehouseCity: patch.city ?? f.warehouseCity,
+                warehouseState: patch.state ?? f.warehouseState,
+                warehouseLocality: patch.locality ?? f.warehouseLocality,
+              }))
             }
           />
 
