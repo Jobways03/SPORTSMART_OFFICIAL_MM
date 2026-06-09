@@ -5,7 +5,7 @@
   "description": "Shared ESLint configuration for SportsMart frontend apps. Frontends extend nextjs.json (legacy .eslintrc shape) today; if/when ESLint flat-config becomes mandatory across the toolchain, add a nextjs.mjs sibling.",
   "main": "nextjs.json",
   "dependencies": {
-    "eslint-config-next": "^15.5.14"
+    "eslint-config-next": "^16.2.7"
   },
   "peerDependencies": {
     "eslint": ">=8"
