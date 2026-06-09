@@ -133,13 +133,17 @@ export class ReturnEligibilityService {
       ? await this.ordersFacade.getMasterOrderWithDeliveredSubOrders(
           masterOrderId,
           customerId,
-          { excludeMasterStatuses: ['CANCELLED', 'REFUNDED'] },
+          // OrderStatus has NO `REFUNDED` member — the dead terminals are
+          // CANCELLED and REJECTED. Passing 'REFUNDED' made Prisma reject the
+          // enum filter (`Invalid value for argument notIn. Expected
+          // OrderStatus`), which 500-ed EVERY return-eligibility check.
+          { excludeMasterStatuses: ['CANCELLED', 'REJECTED'] },
         )
       : await this.prisma.masterOrder.findFirst({
           where: {
             id: masterOrderId,
             customerId,
-            orderStatus: { notIn: ['CANCELLED', 'REFUNDED'] } as any,
+            orderStatus: { notIn: ['CANCELLED', 'REJECTED'] } as any,
           },
           include: {
             subOrders: {
@@ -506,7 +510,9 @@ export class ReturnEligibilityService {
     }
     // Phase 92 — Gap #6 master-order status guard.
     const masterStatus = (subOrder.masterOrder as any).orderStatus;
-    if (masterStatus === 'CANCELLED' || masterStatus === 'REFUNDED') {
+    // 'REFUNDED' is not an OrderStatus value (no-op compare); the real dead
+    // terminals are CANCELLED and REJECTED.
+    if (masterStatus === 'CANCELLED' || masterStatus === 'REJECTED') {
       throw new BadRequestAppException(
         'Master order is no longer eligible for returns.',
       );

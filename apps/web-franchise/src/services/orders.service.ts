@@ -42,6 +42,10 @@ export interface FranchiseOrder {
     shippingAddressSnapshot: any;
     totalAmount: number;
     paymentMethod: string;
+    // Wallet-aware label from the API ("Paid by Wallet" / "Cash on Delivery
+    // (Wallet ₹X applied)" / "Online" …) — prefer this over raw paymentMethod.
+    paymentMethodLabel?: string;
+    walletAmountUsedInPaise?: string;
     paymentStatus: string;
     orderStatus: string;
     createdAt: string;

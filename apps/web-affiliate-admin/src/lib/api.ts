@@ -2,7 +2,32 @@
  * Affiliate-admin API helper. Reads the JWT from sessionStorage
  * (`adminToken`), attaches it on every request, and on 401 wipes
  * the session and redirects to /login.
+ *
+ * NOTE (2026-06-08): this app does NOT use the shared `createApiClient`
+ * from @sportsmart/shared-utils — it has its own single-token `apiFetch`
+ * (returns the unwrapped `.data`, used by ~30 call sites), whereas the
+ * shared client returns the full ApiResponse envelope and uses an
+ * access/refresh token pair. A full migration was judged too risky, so
+ * the shared client's STEP_UP_REQUIRED recovery is reimplemented inline
+ * here against the same `registerStepUpHandler` registrar — the
+ * StepUpHandlerProvider plugs into it identically to the other admin apps.
  */
+import type { StepUpHandler } from '@sportsmart/shared-utils';
+
+export type { StepUpHandler };
+
+/**
+ * Step-up handler registrar (module-local mirror of shared-utils'
+ * registerStepUpHandler). The shared-utils registrar feeds the shared
+ * `createApiClient`, which this app does NOT use — so its own apiFetch
+ * reads this local handler instead. The StepUpHandlerProvider in this app
+ * calls registerStepUpHandler from here on mount / null on unmount.
+ */
+let stepUpHandler: StepUpHandler | null = null;
+
+export function registerStepUpHandler(handler: StepUpHandler | null): void {
+  stepUpHandler = handler;
+}
 /**
  * Resolve the API base. Dev fallback is fine; production with a
  * missing env would silently issue API calls against localhost from
@@ -38,10 +63,31 @@ export function clearSession() {
   sessionStorage.removeItem('adminProfile');
 }
 
-export async function apiFetch<T = any>(
-  path: string,
-  init: RequestInit = {},
-): Promise<T> {
+/**
+ * STEP_UP_REQUIRED detection. The backend signals "this destructive route
+ * needs a fresh MFA step-up" with HTTP 403 + body.code === 'STEP_UP_REQUIRED'.
+ * Nest's GlobalExceptionFilter sometimes nests the structured error under
+ * `.data`, so check both shapes — mirrors shared-utils' api-client.
+ */
+function isStepUpRequiredBody(body: any): boolean {
+  if (!body || typeof body !== 'object') return false;
+  if (body.code === 'STEP_UP_REQUIRED') return true;
+  return body?.data?.code === 'STEP_UP_REQUIRED';
+}
+
+function extractStepUpMeta(body: any): { maxAgeMs?: number; message?: string } {
+  if (!body || typeof body !== 'object') return {};
+  return {
+    maxAgeMs: body?.meta?.maxAgeMs ?? body?.data?.meta?.maxAgeMs,
+    message: typeof body?.message === 'string' ? body.message : undefined,
+  };
+}
+
+/**
+ * One raw round-trip. Kept separate from apiFetch so the step-up path can
+ * replay the exact same request after a successful elevation.
+ */
+async function rawFetch(path: string, init: RequestInit) {
   const token = getToken();
   const headers: Record<string, string> = {
     Accept: 'application/json',
@@ -60,12 +106,42 @@ export async function apiFetch<T = any>(
   } catch {
     body = text;
   }
+  return { res, body };
+}
+
+export async function apiFetch<T = any>(
+  path: string,
+  init: RequestInit = {},
+): Promise<T> {
+  let { res, body } = await rawFetch(path, init);
 
   if (res.status === 401) {
     clearSession();
     if (typeof window !== 'undefined') window.location.href = '/login';
     throw new ApiError(401, 'Session expired', body);
   }
+
+  // Step-up recovery: if a destructive route 403s with STEP_UP_REQUIRED and
+  // a handler is registered (StepUpHandlerProvider does so on mount), hand
+  // off — the modal collects a code, POSTs /admin/mfa/step-up, and resolves
+  // true on success. We then replay the original request exactly once.
+  if (res.status === 403 && isStepUpRequiredBody(body) && stepUpHandler) {
+    let elevated = false;
+    try {
+      elevated = await stepUpHandler(extractStepUpMeta(body));
+    } catch {
+      elevated = false;
+    }
+    if (elevated) {
+      ({ res, body } = await rawFetch(path, init));
+      if (res.status === 401) {
+        clearSession();
+        if (typeof window !== 'undefined') window.location.href = '/login';
+        throw new ApiError(401, 'Session expired', body);
+      }
+    }
+  }
+
   if (!res.ok) {
     const msg =
       (Array.isArray(body?.message) ? body.message[0] : body?.message) ||

@@ -21,7 +21,7 @@ import { escapeCsvField } from '../../../../core/utils/csv.util';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { AccountsDashboardService } from '../../application/services/accounts-dashboard.service';
 import type { RankMetric, RankNodeType } from '../../domain/repositories/accounts.repository.interface';
-import { AccountsDateRangeDto } from '../dtos/accounts-date-range.dto';
+import { AccountsDateRangeDto, AccountsPagedQueryDto } from '../dtos/accounts-date-range.dto';
 import { CreateFranchiseAdjustmentDto } from '../dtos/franchise-adjustment.dto';
 import { SettlementHoldDto, RecordSettlementPaymentDto } from '../dtos/settlement-hold.dto';
 import { parseAccountsDate, parseAccountsRange } from '../accounts-range.util';
@@ -200,7 +200,7 @@ export class AccountsDashboardController {
   async getSellerCommission(
     @Req() req: any,
     @Param('sellerId', new ParseUUIDPipe()) sellerId: string,
-    @Query() query: AccountsDateRangeDto,
+    @Query() query: AccountsPagedQueryDto,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
@@ -217,7 +217,7 @@ export class AccountsDashboardController {
   async getSellerSettlementsList(
     @Req() req: any,
     @Param('sellerId', new ParseUUIDPipe()) sellerId: string,
-    @Query() query: AccountsDateRangeDto,
+    @Query() query: AccountsPagedQueryDto,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
@@ -289,7 +289,7 @@ export class AccountsDashboardController {
   async getFranchiseLedger(
     @Req() req: any,
     @Param('franchiseId', new ParseUUIDPipe()) franchiseId: string,
-    @Query() query: AccountsDateRangeDto,
+    @Query() query: AccountsPagedQueryDto,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('sourceType') sourceType?: string, // ONLINE_ORDER (orders) | PROCUREMENT_FEE
@@ -359,7 +359,7 @@ export class AccountsDashboardController {
   async getFranchisePos(
     @Req() req: any,
     @Param('franchiseId', new ParseUUIDPipe()) franchiseId: string,
-    @Query() query: AccountsDateRangeDto,
+    @Query() query: AccountsPagedQueryDto,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
@@ -376,7 +376,7 @@ export class AccountsDashboardController {
   async getFranchiseSettlementsList(
     @Req() req: any,
     @Param('franchiseId', new ParseUUIDPipe()) franchiseId: string,
-    @Query() query: AccountsDateRangeDto,
+    @Query() query: AccountsPagedQueryDto,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {

@@ -38,6 +38,7 @@ import {
 } from '../../queries/useCheckout';
 import {useAddresses} from '../../queries/useAddresses';
 import {useProfile} from '../../queries/useProfile';
+import {useWalletBalance} from '../../queries/useWallet';
 import {Spinner} from '../../components/Spinner';
 import {ErrorState} from '../../components/ErrorState';
 import {CachedImage} from '../../components/CachedImage';
@@ -84,6 +85,7 @@ export function CheckoutScreen() {
   const nav = useNavigation<Nav>();
   const addressesQuery = useAddresses();
   const profileQuery = useProfile();
+  const walletQuery = useWalletBalance();
   const initiate = useCheckoutInitiate();
   const removeUnserviceable = useRemoveUnserviceable();
   const placeOrder = usePlaceOrder();
@@ -105,6 +107,10 @@ export function CheckoutScreen() {
   const [appliedCoupon, setAppliedCoupon] = useState<PreviewedCoupon | null>(
     null,
   );
+  // Opt-in to spend wallet balance on this order. Mirrors the web checkout's
+  // "Use wallet balance" toggle; the server clamps the amount to
+  // min(balance, order total) and debits it at place-order.
+  const [walletApplied, setWalletApplied] = useState(false);
 
   const idemKeyRef = useRef<string>(newIdempotencyKey());
   const couponHydratedRef = useRef(false);
@@ -257,10 +263,36 @@ export function CheckoutScreen() {
   const shippingFee = selectedShipping ? feeInRupees(selectedShipping) : 0;
   const total = subtotalAfterUnserviceable + shippingFee;
   const discountAmount = appliedCoupon?.discountAmount ?? 0;
-  // What the customer actually pays — mirrors the backend's authoritative
+  // What the order costs before wallet — mirrors the backend's authoritative
   // charge: subtotal − discount + shipping. GST is included in the price
   // (not added on top) and COD carries no surcharge, so neither is added.
-  const payable = Math.max(0, total - discountAmount);
+  const orderBeforeWallet = Math.max(0, total - discountAmount);
+  // Wallet apply — clamp to (balance ∩ order), exactly like the server
+  // (checkout.service: walletDebit = min(walletApplyAmountInPaise, chargedTotal)).
+  const walletBalanceInPaise = walletQuery.data?.balanceInPaise ?? 0;
+  const walletBalanceInRupees = walletBalanceInPaise / 100;
+  const walletApplyAmount = walletApplied
+    ? Math.min(walletBalanceInRupees, orderBeforeWallet)
+    : 0;
+  const walletApplyAmountInPaise = walletApplied
+    ? Math.round(walletApplyAmount * 100)
+    : 0;
+  // What's left to collect via Razorpay/COD after wallet. 0 ⟹ the wallet
+  // covers the whole order; the server marks it PAID and we skip the gateway.
+  const payable = Math.max(0, orderBeforeWallet - walletApplyAmount);
+
+  // Partial wallet + ONLINE is unsafe on the current backend: retryPayment
+  // charges the FULL order total (not the wallet-reduced balance) and its
+  // Razorpay handoff shape doesn't match this client — so a wallet-applied
+  // ONLINE order would double-charge or strand unpaid. Until that server path
+  // is fixed, when wallet leaves a balance we collect the remainder via COD
+  // (the shipping mapper nets the wallet share out of the COD-at-door amount,
+  // so there's no double collection). A FULL wallet order (payable === 0) is
+  // safe on either method — the server marks it PAID with no gateway call.
+  const onlineLockedByWallet = walletApplied && payable > 0;
+  const effectivePaymentMethod: 'ONLINE' | 'COD' = onlineLockedByWallet
+    ? 'COD'
+    : paymentMethod;
 
   const onPay = async () => {
     if (!checkout.allServiceable) {
@@ -279,9 +311,11 @@ export function CheckoutScreen() {
     try {
       const placeRes = await placeOrder.mutateAsync({
         payload: {
-          paymentMethod,
+          paymentMethod: effectivePaymentMethod,
           shippingOptionId: selectedShippingId,
           ...(appliedCoupon ? {couponCode: appliedCoupon.code} : {}),
+          // Only send when applying — server skips wallet when 0/omitted.
+          ...(walletApplyAmountInPaise > 0 ? {walletApplyAmountInPaise} : {}),
         },
         idempotencyKey: idemKeyRef.current,
       });
@@ -297,10 +331,18 @@ export function CheckoutScreen() {
       // server-side. Drop the cart-side preview so it can't bleed into a
       // future order, regardless of how payment resolves below.
       await clearCouponPreview();
-      // COD doesn't go through Razorpay — the order is confirmed (pay on
-      // delivery), so it lands on the confirmed screen as a COD order, not
-      // the online "payment pending / finish payment" state.
-      if (paymentMethod === 'COD') {
+      // Wallet covered the entire order (payable === 0). The backend marked it
+      // PAID and skipped the gateway (for ONLINE: payment.fullyCoveredByWallet;
+      // for COD: nothing left to collect). Land on the confirmed/paid screen —
+      // NOT as COD, since there's no cash to collect on delivery.
+      if (payable <= 0) {
+        nav.replace('OrderConfirmation', {orderNumber, paid: true});
+        return;
+      }
+      // COD doesn't go through Razorpay — the order is confirmed (pay the
+      // remaining balance on delivery), so it lands on the confirmed screen as
+      // a COD order, not the online "payment pending / finish payment" state.
+      if (effectivePaymentMethod === 'COD') {
         nav.replace('OrderConfirmation', {orderNumber, paid: true, cod: true});
         return;
       }
@@ -653,16 +695,19 @@ export function CheckoutScreen() {
               </Text>
             </View>
 
-            {/* ONLINE option */}
+            {/* ONLINE option — locked while wallet covers part of the order
+                (see onlineLockedByWallet rationale above). */}
             <TouchableOpacity
               className="rounded-xl px-3 py-3 mb-2 flex-row items-center"
               style={{
                 backgroundColor:
-                  paymentMethod === 'ONLINE' ? C.surfaceGold : C.surfaceWarm,
+                  effectivePaymentMethod === 'ONLINE' ? C.surfaceGold : C.surfaceWarm,
                 borderWidth: 1.5,
                 borderColor:
-                  paymentMethod === 'ONLINE' ? C.gold : 'transparent',
+                  effectivePaymentMethod === 'ONLINE' ? C.gold : 'transparent',
+                opacity: onlineLockedByWallet ? 0.45 : 1,
               }}
+              disabled={onlineLockedByWallet}
               onPress={() => setPaymentMethod('ONLINE')}
               activeOpacity={0.7}>
               <View
@@ -670,11 +715,11 @@ export function CheckoutScreen() {
                 style={{
                   borderWidth: 2,
                   borderColor:
-                    paymentMethod === 'ONLINE' ? C.goldDeep : C.textMuted,
+                    effectivePaymentMethod === 'ONLINE' ? C.goldDeep : C.textMuted,
                   backgroundColor:
-                    paymentMethod === 'ONLINE' ? C.goldDeep : 'transparent',
+                    effectivePaymentMethod === 'ONLINE' ? C.goldDeep : 'transparent',
                 }}>
-                {paymentMethod === 'ONLINE' ? (
+                {effectivePaymentMethod === 'ONLINE' ? (
                   <Check color="white" size={11} />
                 ) : null}
               </View>
@@ -698,7 +743,9 @@ export function CheckoutScreen() {
                 <Text
                   className="text-[11px] mt-0.5"
                   style={{color: C.textSecondary}}>
-                  UPI · Cards · Wallets · Netbanking
+                  {onlineLockedByWallet
+                    ? 'Remove wallet to pay the full amount online'
+                    : 'UPI · Cards · Wallets · Netbanking'}
                 </Text>
               </View>
             </TouchableOpacity>
@@ -708,9 +755,9 @@ export function CheckoutScreen() {
               className="rounded-xl px-3 py-3 flex-row items-center"
               style={{
                 backgroundColor:
-                  paymentMethod === 'COD' ? C.surfaceGold : C.surfaceWarm,
+                  effectivePaymentMethod === 'COD' ? C.surfaceGold : C.surfaceWarm,
                 borderWidth: 1.5,
-                borderColor: paymentMethod === 'COD' ? C.gold : 'transparent',
+                borderColor: effectivePaymentMethod === 'COD' ? C.gold : 'transparent',
               }}
               onPress={() => setPaymentMethod('COD')}
               activeOpacity={0.7}>
@@ -719,11 +766,11 @@ export function CheckoutScreen() {
                 style={{
                   borderWidth: 2,
                   borderColor:
-                    paymentMethod === 'COD' ? C.goldDeep : C.textMuted,
+                    effectivePaymentMethod === 'COD' ? C.goldDeep : C.textMuted,
                   backgroundColor:
-                    paymentMethod === 'COD' ? C.goldDeep : 'transparent',
+                    effectivePaymentMethod === 'COD' ? C.goldDeep : 'transparent',
                 }}>
-                {paymentMethod === 'COD' ? (
+                {effectivePaymentMethod === 'COD' ? (
                   <Check color="white" size={11} />
                 ) : null}
               </View>
@@ -736,12 +783,62 @@ export function CheckoutScreen() {
                 <Text
                   className="text-[11px] mt-0.5"
                   style={{color: C.textSecondary}}>
-                  Pay when your order arrives
+                  {walletApplied && walletApplyAmount > 0 && payable > 0
+                    ? `Pay ${formatINR(payable)} balance when your order arrives`
+                    : 'Pay when your order arrives'}
                 </Text>
               </View>
             </TouchableOpacity>
           </View>
         </View>
+
+        {/* ── Use wallet balance ────────────────────────────────── */}
+        {walletBalanceInPaise > 0 ? (
+          <View className="px-5 pt-3">
+            <TouchableOpacity
+              className="rounded-2xl p-4 flex-row items-center"
+              style={{
+                backgroundColor: C.surface,
+                borderWidth: 1.5,
+                borderColor: walletApplied ? C.sage : 'transparent',
+              }}
+              onPress={() => setWalletApplied(v => !v)}
+              activeOpacity={0.8}>
+              <View
+                className="w-10 h-10 rounded-full items-center justify-center mr-3"
+                style={{backgroundColor: C.surfaceSage}}>
+                <Wallet color={C.sageDeep} size={17} />
+              </View>
+              <View className="flex-1">
+                <Text
+                  className="text-sm font-bold"
+                  style={{color: C.ink, letterSpacing: -0.2}}>
+                  Use wallet balance
+                </Text>
+                <Text
+                  className="text-[11px] mt-0.5"
+                  style={{color: C.textSecondary}}>
+                  {walletApplied
+                    ? `${formatINR(walletApplyAmount)} applied · ${formatINR(
+                        walletBalanceInRupees,
+                      )} available`
+                    : `${formatINR(
+                        walletBalanceInRupees,
+                      )} available · pay any part from your wallet`}
+                </Text>
+              </View>
+              <View
+                className="w-6 h-6 rounded-md items-center justify-center"
+                style={{
+                  borderWidth: 2,
+                  borderColor: walletApplied ? C.sageDeep : C.textMuted,
+                  backgroundColor: walletApplied ? C.sageDeep : 'transparent',
+                }}>
+                {walletApplied ? <Check color="white" size={13} /> : null}
+              </View>
+            </TouchableOpacity>
+          </View>
+        ) : null}
 
         {/* ── Offer banner ──────────────────────────────────────── */}
         <View className="px-5 pt-3">
@@ -791,6 +888,13 @@ export function CheckoutScreen() {
               accent={shippingFee === 0 ? C.sageDeep : undefined}
             />
             <PriceRow label="GST" value="Included in price" />
+            {walletApplied && walletApplyAmount > 0 ? (
+              <PriceRow
+                label="Wallet applied"
+                value={`− ${formatINR(walletApplyAmount)}`}
+                accent={C.sageDeep}
+              />
+            ) : null}
             <View
               className="my-3"
               style={{height: 1, backgroundColor: C.border}}
@@ -926,9 +1030,11 @@ export function CheckoutScreen() {
                 <Text
                   className="text-white font-bold text-sm mr-2"
                   style={{letterSpacing: -0.2}}>
-                  {paymentMethod === 'COD'
-                    ? 'Place order · COD'
-                    : `Pay ${formatINR(payable)} now`}
+                  {payable <= 0
+                    ? 'Place order · Paid by wallet'
+                    : effectivePaymentMethod === 'COD'
+                      ? 'Place order · COD'
+                      : `Pay ${formatINR(payable)} now`}
                 </Text>
                 <ArrowRight color="white" size={16} />
               </TouchableOpacity>

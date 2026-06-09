@@ -3,7 +3,11 @@
 import { useState, FormEvent, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { adminAuthService, isMfaChallenge } from '@/services/admin-auth.service';
-import { verifyMfaChallenge } from '@/services/admin-mfa.service';
+import {
+  verifyMfaChallenge,
+  requestMfaEmailOtp,
+  verifyMfaEmailOtp,
+} from '@/services/admin-mfa.service';
 import { ApiError } from '@/lib/api-client';
 import './login.css';
 
@@ -35,6 +39,12 @@ export default function AdminLoginPage() {
   const [mfa, setMfa] = useState<MfaState | null>(null);
   const [mfaCode, setMfaCode] = useState('');
   const [mfaSubmitting, setMfaSubmitting] = useState(false);
+  // Email-OTP alternative to the authenticator. emailMode=true once the
+  // admin has requested a code by email; the verify then targets the
+  // email-OTP endpoint instead of the TOTP one.
+  const [emailMode, setEmailMode] = useState(false);
+  const [emailRequesting, setEmailRequesting] = useState(false);
+  const [emailInfo, setEmailInfo] = useState('');
   // Force-render the countdown once a second.
   const [, setTick] = useState(0);
   const mfaInputRef = useRef<HTMLInputElement>(null);
@@ -134,7 +144,13 @@ export default function AdminLoginPage() {
     e.preventDefault();
     if (!mfa) return;
     const code = mfaCode.replace(/\s+/g, '');
-    if (!/^[0-9]{6}$/.test(code) && !/^[A-Z0-9-]{8,16}$/i.test(code)) {
+    if (emailMode) {
+      if (!/^[0-9]{6}$/.test(code)) {
+        setServerError('Enter the 6-digit code from your email.');
+        setServerErrorType('error');
+        return;
+      }
+    } else if (!/^[0-9]{6}$/.test(code) && !/^[A-Z0-9-]{8,16}$/i.test(code)) {
       setServerError('Enter the 6-digit code or a backup code.');
       setServerErrorType('error');
       return;
@@ -142,10 +158,15 @@ export default function AdminLoginPage() {
     setServerError('');
     setMfaSubmitting(true);
     try {
-      const result = await verifyMfaChallenge({
-        challengeToken: mfa.challengeToken,
-        code,
-      });
+      const result = await (emailMode
+        ? verifyMfaEmailOtp({
+            challengeToken: mfa.challengeToken,
+            code,
+          })
+        : verifyMfaChallenge({
+            challengeToken: mfa.challengeToken,
+            code,
+          }));
       if (result.data) {
         try {
           sessionStorage.setItem('adminAccessToken', result.data.accessToken);
@@ -170,6 +191,8 @@ export default function AdminLoginPage() {
           );
           setMfa(null);
           setMfaCode('');
+          setEmailMode(false);
+          setEmailInfo('');
         } else {
           setServerErrorType('error');
           setServerError('Something went wrong. Please try again.');
@@ -183,11 +206,54 @@ export default function AdminLoginPage() {
     }
   };
 
+  // Email-OTP: ask the API to email a 6-digit code, then switch the
+  // form into email-verify mode (the same code box, but submit targets
+  // the email-OTP endpoint).
+  const handleRequestEmailOtp = async () => {
+    if (!mfa) return;
+    setServerError('');
+    setEmailRequesting(true);
+    try {
+      await requestMfaEmailOtp(mfa.challengeToken);
+      setEmailMode(true);
+      setMfaCode('');
+      setEmailInfo(`We emailed a 6-digit code to ${mfa.email}. Enter it below.`);
+      if (mfaInputRef.current) mfaInputRef.current.focus();
+    } catch (err) {
+      if (err instanceof ApiError) {
+        if (err.status === 403) {
+          setServerErrorType('info');
+          setServerError(
+            err.body?.message ||
+              'Your sign-in challenge expired. Please enter your password again.',
+          );
+          setMfa(null);
+          setMfaCode('');
+          setEmailMode(false);
+          setEmailInfo('');
+        } else {
+          setServerErrorType('error');
+          setServerError(
+            err.body?.message ||
+              'Could not send the email code. Please try again.',
+          );
+        }
+      } else {
+        setServerErrorType('error');
+        setServerError('Could not send the email code. Please try again.');
+      }
+    } finally {
+      setEmailRequesting(false);
+    }
+  };
+
   const handleUseDifferentAccount = () => {
     setMfa(null);
     setMfaCode('');
     setServerError('');
     setPassword('');
+    setEmailMode(false);
+    setEmailInfo('');
   };
 
   const alertClass =
@@ -239,8 +305,10 @@ export default function AdminLoginPage() {
                 color: '#374151',
               }}
             >
-              Signed in as <strong>{mfa.email}</strong>. Enter the 6-digit code
-              from your authenticator app, or a backup code, to continue.
+              Signed in as <strong>{mfa.email}</strong>.{' '}
+              {emailMode
+                ? 'Enter the 6-digit code we emailed you to continue.'
+                : 'Enter the 6-digit code from your authenticator app, or a backup code, to continue.'}
               {!mfaExpired && (
                 <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
                   Challenge expires in{' '}
@@ -264,8 +332,27 @@ export default function AdminLoginPage() {
               )}
             </div>
 
+            {emailMode && emailInfo && (
+              <div
+                role="status"
+                style={{
+                  background: '#ecfdf5',
+                  border: '1px solid #a7f3d0',
+                  color: '#065f46',
+                  borderRadius: 8,
+                  padding: '10px 12px',
+                  fontSize: 13,
+                  marginBottom: 16,
+                }}
+              >
+                {emailInfo}
+              </div>
+            )}
+
             <div className="form-group">
-              <label htmlFor="mfa-code">Verification code</label>
+              <label htmlFor="mfa-code">
+                {emailMode ? 'Email code' : 'Verification code'}
+              </label>
               <input
                 id="mfa-code"
                 ref={mfaInputRef}
@@ -275,13 +362,15 @@ export default function AdminLoginPage() {
                 value={mfaCode}
                 onChange={(e) =>
                   setMfaCode(
-                    e.target.value
-                      .toUpperCase()
-                      .replace(/[^0-9A-Z-]/g, '')
-                      .slice(0, 16),
+                    emailMode
+                      ? e.target.value.replace(/[^0-9]/g, '').slice(0, 6)
+                      : e.target.value
+                          .toUpperCase()
+                          .replace(/[^0-9A-Z-]/g, '')
+                          .slice(0, 16),
                   )
                 }
-                placeholder="123456 or XXXXX-XXXXX"
+                placeholder={emailMode ? '123456' : '123456 or XXXXX-XXXXX'}
                 disabled={mfaSubmitting || mfaExpired}
                 style={{
                   fontFamily: 'ui-monospace, monospace',
@@ -307,6 +396,74 @@ export default function AdminLoginPage() {
                 'Verify and sign in'
               )}
             </button>
+
+            {!emailMode ? (
+              <div style={{ marginTop: 14, textAlign: 'center' }}>
+                <button
+                  type="button"
+                  onClick={handleRequestEmailOtp}
+                  disabled={emailRequesting || mfaExpired}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: 13,
+                    color: '#2563eb',
+                    cursor:
+                      emailRequesting || mfaExpired ? 'default' : 'pointer',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  {emailRequesting
+                    ? 'Sending code…'
+                    : 'Email me a code instead'}
+                </button>
+              </div>
+            ) : (
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 16,
+                  justifyContent: 'center',
+                  marginTop: 14,
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={handleRequestEmailOtp}
+                  disabled={emailRequesting || mfaExpired}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: 13,
+                    color: '#2563eb',
+                    cursor:
+                      emailRequesting || mfaExpired ? 'default' : 'pointer',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  {emailRequesting ? 'Sending…' : 'Resend code'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmailMode(false);
+                    setEmailInfo('');
+                    setMfaCode('');
+                    setServerError('');
+                  }}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    fontSize: 13,
+                    color: '#2563eb',
+                    cursor: 'pointer',
+                    textDecoration: 'underline',
+                  }}
+                >
+                  Use authenticator instead
+                </button>
+              </div>
+            )}
 
             <div style={{ marginTop: 14, textAlign: 'center' }}>
               <button

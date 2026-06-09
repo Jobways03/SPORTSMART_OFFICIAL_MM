@@ -35,6 +35,9 @@ interface SellerSettlementRow {
   utrReference?: string | null;
   paymentFailureReason?: string | null;
   paidByAdmin?: { name: string } | null;
+  // Phase 153 — a settlement locked into an active payout batch can't be
+  // adjusted until the batch is cancelled (mirrors the backend guard).
+  payoutBatchId?: string | null;
 }
 
 interface CycleDetail {
@@ -523,6 +526,20 @@ export default function SettlementCycleDetailPage() {
   if (!cycle) return null;
 
   const balanceBySellerId = new Map(balances.map((b) => [b.sellerId, b]));
+
+  // Why the adjustments modal may be read-only. The backend rejects a NEW
+  // adjustment once the settlement OR its cycle is PAID, or once the settlement
+  // is locked into an active payout batch; it rejects a VOID once the settlement
+  // OR cycle is PAID (settlement.service.ts recordAdjustment / voidAdjustment).
+  // Mirror that here so we never present a form whose submit is guaranteed to 400.
+  const adjLockReason: 'paid' | 'batched' | null = adjFor
+    ? adjFor.status === 'PAID' || cycle.status === 'PAID'
+      ? 'paid'
+      : adjFor.payoutBatchId
+        ? 'batched'
+        : null
+    : null;
+  const adjLocked = adjLockReason !== null;
 
   return (
     <main style={{ padding: '24px 32px', maxWidth: 1200, margin: '0 auto' }}>
@@ -1071,7 +1088,7 @@ export default function SettlementCycleDetailPage() {
                         )}
                       </td>
                       <td style={{ padding: '6px 8px', textAlign: 'right' }}>
-                        {!voided && canApprove && adjFor.status !== 'PAID' && (
+                        {!voided && canApprove && !adjLocked && (
                           <button
                             type="button"
                             onClick={() => voidAdjustment(a)}
@@ -1089,6 +1106,8 @@ export default function SettlementCycleDetailPage() {
               </table>
             )}
 
+            {!adjLocked && (
+            <>
             <h3 style={{ margin: '14px 0 8px', fontSize: 13, fontWeight: 700, color: '#0f172a' }}>
               Record new adjustment
             </h3>
@@ -1166,6 +1185,47 @@ export default function SettlementCycleDetailPage() {
                 </strong>
               </div>
             )}
+            </>
+            )}
+
+            {adjLocked && (
+              <div
+                style={{
+                  marginTop: 14,
+                  padding: '12px 14px',
+                  background: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 10,
+                }}
+              >
+                <div style={{ fontSize: 13, fontWeight: 700, color: '#0f172a', marginBottom: 4 }}>
+                  {adjLockReason === 'paid'
+                    ? 'This settlement is already paid — adjustments are locked'
+                    : 'This settlement is in an active payout batch — adjustments are locked'}
+                </div>
+                <p style={{ margin: 0, fontSize: 12, color: '#475569', lineHeight: 1.55 }}>
+                  {adjLockReason === 'paid' ? (
+                    <>
+                      The money has already been wired, so this settlement can&apos;t be
+                      edited. Post-payment corrections carry into the seller&apos;s{' '}
+                      <strong>next</strong> settlement cycle — automatically for
+                      returns / RTO / dispute losses (they show up here as a claw-back),
+                      or manually as a debit/credit in the{' '}
+                      <strong>Liability Ledger</strong>.
+                    </>
+                  ) : (
+                    <>
+                      This settlement is locked into payout batch{' '}
+                      <code style={{ fontFamily: 'ui-monospace, monospace' }}>
+                        {adjFor.payoutBatchId?.slice(0, 8)}
+                      </code>
+                      . Cancel that batch to release it, or record the correction in
+                      the next cycle.
+                    </>
+                  )}
+                </p>
+              </div>
+            )}
 
             {adjError && (
               <div style={{
@@ -1190,20 +1250,22 @@ export default function SettlementCycleDetailPage() {
               >
                 Close
               </button>
-              <button
-                type="button"
-                onClick={submitAdjustment}
-                disabled={adjSaving}
-                style={{
-                  height: 36, padding: '0 16px',
-                  border: 'none', background: '#0F1115', color: '#fff',
-                  borderRadius: 9999, fontWeight: 700, fontSize: 13,
-                  cursor: adjSaving ? 'wait' : 'pointer',
-                  opacity: adjSaving ? 0.6 : 1,
-                }}
-              >
-                {adjSaving ? 'Saving…' : 'Add adjustment'}
-              </button>
+              {!adjLocked && (
+                <button
+                  type="button"
+                  onClick={submitAdjustment}
+                  disabled={adjSaving}
+                  style={{
+                    height: 36, padding: '0 16px',
+                    border: 'none', background: '#0F1115', color: '#fff',
+                    borderRadius: 9999, fontWeight: 700, fontSize: 13,
+                    cursor: adjSaving ? 'wait' : 'pointer',
+                    opacity: adjSaving ? 0.6 : 1,
+                  }}
+                >
+                  {adjSaving ? 'Saving…' : 'Add adjustment'}
+                </button>
+              )}
             </div>
           </div>
         </div>

@@ -1037,7 +1037,13 @@ const { id } = useParams<{ id: string }>();
               )}
               {mo?.paymentMethod && (
                 <div>
-                  <strong>Payment:</strong> {mo.paymentMethod}
+                  <strong>Payment:</strong>{' '}
+                  {mo.paymentMethodLabel ??
+                    (mo.paymentMethod === 'COD'
+                      ? 'Cash on Delivery'
+                      : mo.paymentMethod === 'ONLINE'
+                        ? 'Online'
+                        : mo.paymentMethod)}
                 </div>
               )}
               <div>

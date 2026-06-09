@@ -4,12 +4,24 @@ import {apiClient, ApiResponse} from '../lib/api-client';
 // backed topup endpoints are intentionally omitted in v5 — they need the
 // native Razorpay SDK which is a Phase 6 dependency.
 
+// Mirrors the full server-side enum (web-storefront wallet.service.ts). The
+// previous mobile build only listed five types — anything else (notably
+// ORDER_REDEMPTION, written every time wallet is spent at checkout, and the
+// REVERSAL/cancellation refunds) fell through transactionTypeLabel() to
+// `undefined`, and `.toUpperCase()` on it crashed the wallet screen. Keep this
+// in sync with apps/api WalletTransactionType.
 export type WalletTransactionType =
   | 'TOPUP'
   | 'REFUND'
   | 'CREDIT_ADJUSTMENT'
   | 'DEBIT'
-  | 'DEBIT_ADJUSTMENT';
+  | 'DEBIT_ADJUSTMENT'
+  | 'LOYALTY_REBATE'
+  | 'MANUAL_CREDIT'
+  | 'MANUAL_DEBIT'
+  | 'GOODWILL_CREDIT'
+  | 'ORDER_REDEMPTION'
+  | 'REVERSAL';
 
 export type WalletTransactionStatus =
   | 'PENDING'
@@ -30,8 +42,12 @@ export interface WalletTransaction {
   status: WalletTransactionStatus;
   amountInPaise: number;
   balanceAfterInPaise: number;
+  balanceBeforeInPaise?: number;
+  direction?: 'CREDIT' | 'DEBIT';
+  currency?: string;
   referenceType: string | null;
   referenceId: string | null;
+  referenceNumber?: string | null;
   description: string;
   internalNotes: string | null;
   createdByAdminId: string | null;
@@ -122,10 +138,18 @@ export function formatPaise(paise: number): string {
   );
 }
 
+// Money INTO the wallet. Everything else (DEBIT, DEBIT_ADJUSTMENT,
+// MANUAL_DEBIT, ORDER_REDEMPTION) is money out. Mirrors the web wallet's
+// credit/debit colouring. The ledger also stores a signed amount, so the
+// screen can cross-check with the sign when needed.
 const CREDIT_TYPES: WalletTransactionType[] = [
   'TOPUP',
   'REFUND',
   'CREDIT_ADJUSTMENT',
+  'LOYALTY_REBATE',
+  'MANUAL_CREDIT',
+  'GOODWILL_CREDIT',
+  'REVERSAL',
 ];
 
 export function transactionDirection(
@@ -146,5 +170,27 @@ export function transactionTypeLabel(type: WalletTransactionType): string {
       return 'Spent';
     case 'DEBIT_ADJUSTMENT':
       return 'Adjustment';
+    case 'LOYALTY_REBATE':
+      return 'Cashback';
+    case 'MANUAL_CREDIT':
+      return 'Credit';
+    case 'MANUAL_DEBIT':
+      return 'Debit';
+    case 'GOODWILL_CREDIT':
+      return 'Goodwill';
+    case 'ORDER_REDEMPTION':
+      return 'Spent';
+    case 'REVERSAL':
+      return 'Reversal';
+    default:
+      // Defensive: a server type we don't know yet must never crash the
+      // screen (the old switch returned undefined → .toUpperCase() threw).
+      return 'Transaction';
   }
+}
+
+/** Signed display for a transaction row: "+ ₹500" or "− ₹250". */
+export function formatTransactionAmount(amountInPaise: number): string {
+  const sign = amountInPaise >= 0 ? '+' : '−';
+  return `${sign} ${formatPaise(Math.abs(amountInPaise))}`;
 }

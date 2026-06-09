@@ -3,7 +3,11 @@
 import { useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { adminAuthService, isMfaChallenge } from '@/services/admin-auth.service';
-import { verifyMfaChallenge } from '@/services/admin-mfa.service';
+import {
+  verifyMfaChallenge,
+  requestMfaEmailOtp,
+  verifyMfaEmailOtp,
+} from '@/services/admin-mfa.service';
 import { ApiError } from '@/lib/api-client';
 import './login.css';
 
@@ -25,6 +29,10 @@ export default function FranchiseAdminLoginPage() {
   const [challengeToken, setChallengeToken] = useState<string | null>(null);
   const [mfaCode, setMfaCode] = useState('');
   const [mfaError, setMfaError] = useState('');
+  // Email-OTP alternative to the authenticator on the MFA challenge step.
+  const [emailOtpMode, setEmailOtpMode] = useState(false);
+  const [emailOtpSending, setEmailOtpSending] = useState(false);
+  const [emailOtpInfo, setEmailOtpInfo] = useState('');
 
   const persistSession = (data: {
     accessToken: string;
@@ -109,16 +117,26 @@ export default function FranchiseAdminLoginPage() {
     e.preventDefault();
     if (!challengeToken) return;
     const code = mfaCode.trim();
-    const isTotp = /^\d{6}$/.test(code);
-    const isBackup = /^[A-Za-z0-9]{5}-?[A-Za-z0-9]{5}$/.test(code);
-    if (!isTotp && !isBackup) {
-      setMfaError('Enter your 6-digit authenticator code (or a backup code).');
-      return;
+    if (emailOtpMode) {
+      // Emailed login OTP is always a 6-digit code.
+      if (!/^\d{6}$/.test(code)) {
+        setMfaError('Enter the 6-digit code we emailed you.');
+        return;
+      }
+    } else {
+      const isTotp = /^\d{6}$/.test(code);
+      const isBackup = /^[A-Za-z0-9]{5}-?[A-Za-z0-9]{5}$/.test(code);
+      if (!isTotp && !isBackup) {
+        setMfaError('Enter your 6-digit authenticator code (or a backup code).');
+        return;
+      }
     }
     setIsSubmitting(true);
     setMfaError('');
     try {
-      const res = await verifyMfaChallenge({ challengeToken, code });
+      const res = emailOtpMode
+        ? await verifyMfaEmailOtp({ challengeToken, code })
+        : await verifyMfaChallenge({ challengeToken, code });
       if (res.data) persistSession(res.data);
     } catch (err) {
       if (err instanceof ApiError) {
@@ -133,6 +151,33 @@ export default function FranchiseAdminLoginPage() {
       setMfaCode('');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  // "Email me a code" — asks the backend to email a 6-digit login OTP, then
+  // flips the challenge step into email-OTP mode so the same input redeems it.
+  const handleRequestEmailOtp = async () => {
+    if (!challengeToken) return;
+    setEmailOtpSending(true);
+    setMfaError('');
+    setEmailOtpInfo('');
+    try {
+      await requestMfaEmailOtp(challengeToken);
+      setEmailOtpMode(true);
+      setMfaCode('');
+      setEmailOtpInfo('We emailed you a 6-digit code. Enter it below (valid 5 minutes).');
+    } catch (err) {
+      if (err instanceof ApiError) {
+        const msg = err.body?.message;
+        setMfaError(
+          (typeof msg === 'string' && msg) ||
+            'Could not email a code. Please try again.',
+        );
+      } else {
+        setMfaError('Something went wrong. Please try again.');
+      }
+    } finally {
+      setEmailOtpSending(false);
     }
   };
 
@@ -242,11 +287,14 @@ export default function FranchiseAdminLoginPage() {
         {challengeToken && (
           <form onSubmit={handleMfaVerify} noValidate>
             <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
-              Two-factor authentication is enabled. Enter the 6-digit code from
-              your authenticator app (or a backup code).
+              {emailOtpMode
+                ? 'Enter the 6-digit code we emailed you to finish signing in.'
+                : 'Two-factor authentication is enabled. Enter the 6-digit code from your authenticator app (or a backup code).'}
             </p>
             <div className="form-group">
-              <label htmlFor="mfaCode">Authenticator code</label>
+              <label htmlFor="mfaCode">
+                {emailOtpMode ? 'Emailed code' : 'Authenticator code'}
+              </label>
               <input
                 id="mfaCode"
                 type="text"
@@ -258,6 +306,14 @@ export default function FranchiseAdminLoginPage() {
                 disabled={isSubmitting}
                 autoFocus
               />
+              {emailOtpInfo && !mfaError && (
+                <span
+                  className="field-info"
+                  style={{ color: '#0b8457', fontSize: 13 }}
+                >
+                  {emailOtpInfo}
+                </span>
+              )}
               {mfaError && (
                 <span className="field-error" role="alert">
                   {mfaError}
@@ -281,11 +337,36 @@ export default function FranchiseAdminLoginPage() {
             </button>
             <button
               type="button"
+              onClick={handleRequestEmailOtp}
+              disabled={isSubmitting || emailOtpSending}
+              style={{
+                marginTop: 12,
+                background: 'none',
+                border: 'none',
+                color: '#2563eb',
+                cursor: isSubmitting || emailOtpSending ? 'not-allowed' : 'pointer',
+                opacity: isSubmitting || emailOtpSending ? 0.6 : 1,
+                fontSize: 13,
+                fontWeight: 600,
+                display: 'block',
+              }}
+            >
+              {emailOtpSending
+                ? 'Sending…'
+                : emailOtpMode
+                  ? 'Resend code to my email'
+                  : 'No authenticator? Email me a code'}
+            </button>
+            <button
+              type="button"
               onClick={() => {
                 setChallengeToken(null);
                 setMfaCode('');
                 setMfaError('');
                 setPassword('');
+                setEmailOtpMode(false);
+                setEmailOtpInfo('');
+                setEmailOtpSending(false);
               }}
               style={{
                 marginTop: 12,

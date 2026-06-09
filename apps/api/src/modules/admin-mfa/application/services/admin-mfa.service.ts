@@ -17,6 +17,9 @@ import { buildOtpAuthUri } from '../../domain/totp-uri';
 import { verifyTotpCode } from '../../domain/totp-verify';
 import { BackupCodesService } from './backup-codes.service';
 import { MfaSecretCipher } from './mfa-secret-cipher.service';
+import { randomInt, createHash } from 'crypto';
+import { RedisService } from '../../../../bootstrap/cache/redis.service';
+import { EmailOtpAdapter } from '../../../../integrations/email/adapters/email-otp.adapter';
 
 /**
  * Phase 10 (PR 10.4) + Phase 25 (2026-05-20) — Admin MFA enrolment
@@ -53,6 +56,25 @@ const MFA_PENDING_TTL_MS = 30 * 60 * 1000;
 // to know the guard's internal default.
 const STEP_UP_DEFAULT_WINDOW_MS = 5 * 60 * 1000;
 
+// Email-OTP step-up — an ALTERNATIVE to the TOTP/backup code for elevating a
+// session. The admin requests a 6-digit code by email; its SHA-256 hash is held
+// in Redis keyed by the SESSION (so it only elevates the requesting session) and
+// expires with the step-up window. Unlike TOTP step-up it does NOT require MFA
+// enrollment — it's the path for admins who use email codes.
+const STEP_UP_EMAIL_OTP_TTL_SECONDS = 300;
+const STEP_UP_EMAIL_OTP_COOLDOWN_SECONDS = 60;
+const STEP_UP_EMAIL_OTP_MAX_ATTEMPTS = 5;
+const stepUpEmailOtpKey = (sessionId: string) =>
+  `admin:mfa:stepup:emailotp:${sessionId}`;
+const stepUpEmailOtpCooldownKey = (sessionId: string) =>
+  `admin:mfa:stepup:emailotp:cooldown:${sessionId}`;
+function maskEmail(email: string): string {
+  const [user, domain] = email.split('@');
+  if (!user || !domain) return email;
+  const head = user.slice(0, 2);
+  return `${head}${'*'.repeat(Math.max(1, user.length - 2))}@${domain}`;
+}
+
 interface RequestContext {
   ipAddress: string | null;
   userAgent: string | null;
@@ -70,6 +92,8 @@ export class AdminMfaService {
     private readonly backupCodes: BackupCodesService,
     private readonly audit: AuditPublicFacade,
     private readonly events: EventEmitter2,
+    private readonly redis: RedisService,
+    private readonly emailOtp: EmailOtpAdapter,
   ) {}
 
   async beginEnrollment(
@@ -255,9 +279,72 @@ export class AdminMfaService {
     if (!admin) {
       throw new NotFoundAppException('Admin not found');
     }
+
+    // ── Email-OTP step-up path (alternative to TOTP/backup) ──────────────
+    // If a step-up email code was requested for THIS session and the supplied
+    // code matches, elevate immediately — no TOTP enrollment required. A wrong
+    // code increments the attempt counter and (for a TOTP-enrolled admin) falls
+    // through so they can still use their authenticator instead.
+    const emailRec = await this.redis.get<{ otpHash: string; attempts: number }>(
+      stepUpEmailOtpKey(sessionId),
+    );
+    if (emailRec) {
+      const matches =
+        createHash('sha256').update(code.trim()).digest('hex') === emailRec.otpHash;
+      if (matches) {
+        await this.redis.del(stepUpEmailOtpKey(sessionId));
+        if (!this.adminRepo.markSessionStepUpVerified) {
+          throw new BadRequestAppException(
+            'Step-up persistence is unavailable on this repository binding',
+          );
+        }
+        await this.adminRepo.markSessionStepUpVerified(sessionId);
+        const verifiedAt = new Date();
+        const expiresAt = new Date(verifiedAt.getTime() + STEP_UP_DEFAULT_WINDOW_MS);
+        await this.writeAudit({
+          adminId,
+          action: 'admin.mfa.step_up_verified',
+          newValue: {
+            sessionId,
+            method: 'email',
+            ipAddress: ctx.ipAddress,
+            userAgent: ctx.userAgent,
+          },
+        });
+        this.emit('admin.mfa.step_up_verified', adminId, {
+          adminId,
+          email: admin.email,
+          method: 'email',
+          ...ctx,
+        });
+        return {
+          stepUpVerifiedAt: verifiedAt,
+          stepUpExpiresAt: expiresAt,
+          usedBackupCode: false,
+        };
+      }
+      const attempts = (emailRec.attempts ?? 0) + 1;
+      if (attempts >= STEP_UP_EMAIL_OTP_MAX_ATTEMPTS) {
+        await this.redis.del(stepUpEmailOtpKey(sessionId));
+      } else {
+        await this.redis.set(
+          stepUpEmailOtpKey(sessionId),
+          { otpHash: emailRec.otpHash, attempts },
+          STEP_UP_EMAIL_OTP_TTL_SECONDS,
+        );
+      }
+      // No TOTP fallback possible for a non-enrolled admin → fail clearly.
+      if (!admin.mfaEnabledAt || !admin.mfaSecretCiphertext) {
+        throw new BadRequestAppException(
+          'Invalid email code. Check your inbox or request a new code.',
+        );
+      }
+      // else: fall through — the admin may be entering their TOTP code instead.
+    }
+
     if (!admin.mfaEnabledAt || !admin.mfaSecretCiphertext) {
       throw new BadRequestAppException(
-        'Step-up requires MFA enrollment. Enroll first via /admin/mfa/enroll/begin.',
+        'Step-up requires MFA enrollment. Enroll first via /admin/mfa/enroll/begin, or use "Email me a code".',
       );
     }
 
@@ -350,6 +437,76 @@ export class AdminMfaService {
       });
     }
     return { stepUpVerifiedAt, stepUpExpiresAt, usedBackupCode };
+  }
+
+  /**
+   * Email-OTP step-up — step A. Generate a 6-digit code, stash its SHA-256 hash
+   * in Redis keyed by the session, and email it to the admin. The code is then
+   * accepted by stepUp() (above). Requires only an active, authenticated admin
+   * with an email — NOT TOTP enrollment — so it's the no-authenticator path.
+   */
+  async requestStepUpEmailOtp(
+    adminId: string,
+    sessionId: string,
+    ctx: RequestContext = { ipAddress: null, userAgent: null },
+  ): Promise<{ otpExpiresIn: number; maskedEmail: string }> {
+    const admin = await this.adminRepo.findAdminById(adminId, {
+      email: true,
+      role: true,
+      status: true,
+    } as any);
+    if (!admin) {
+      throw new NotFoundAppException('Admin not found');
+    }
+    if ((admin as any).status !== 'ACTIVE') {
+      throw new BadRequestAppException('Admin account is not active');
+    }
+    if (!admin.email) {
+      throw new BadRequestAppException('Admin has no email on record.');
+    }
+
+    // Per-session cooldown so the "email me a code" button can't be spammed.
+    const cooled = await this.redis.acquireLock(
+      stepUpEmailOtpCooldownKey(sessionId),
+      STEP_UP_EMAIL_OTP_COOLDOWN_SECONDS,
+    );
+    if (!cooled) {
+      throw new BadRequestAppException(
+        'A code was just sent. Please wait a moment before requesting another.',
+      );
+    }
+
+    const otp = String(randomInt(100000, 1000000));
+    const otpHash = createHash('sha256').update(otp).digest('hex');
+    await this.redis.set(
+      stepUpEmailOtpKey(sessionId),
+      { otpHash, attempts: 0 },
+      STEP_UP_EMAIL_OTP_TTL_SECONDS,
+    );
+
+    const sent = await this.emailOtp.sendOtp(admin.email, otp).catch((err) => {
+      this.logger.error(
+        `Failed to send admin step-up email OTP: ${(err as Error)?.message}`,
+      );
+      return false;
+    });
+    if (!sent) {
+      // Don't leave a code the admin can never see — drop it.
+      await this.redis.del(stepUpEmailOtpKey(sessionId));
+      throw new BadRequestAppException(
+        'Could not send the email code right now. Please try again shortly.',
+      );
+    }
+
+    await this.writeAudit({
+      adminId,
+      action: 'admin.mfa.step_up_email_otp_sent',
+      newValue: { sessionId, ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    });
+    return {
+      otpExpiresIn: STEP_UP_EMAIL_OTP_TTL_SECONDS,
+      maskedEmail: maskEmail(admin.email),
+    };
   }
 
   /**

@@ -85,6 +85,7 @@ const navItems: (NavItem & { section?: NavSection })[] = [
   // Finance — money flow. Approvals first because they block payouts.
   { label: 'Finance Approvals', href: '/dashboard/finance/refund-approvals', icon: 'banknote', anyOf: ['refunds.approve', 'refunds.read'], section: 'finance' },
   { label: 'Commission', href: '/dashboard/commission', icon: 'percent', anyOf: ['settlements.read'], section: 'finance' },
+  { label: 'Settlements', href: '/dashboard/finance/settlements', icon: 'banknote', anyOf: ['settlements.read'], section: 'finance' },
   { label: 'Wallets', href: '/dashboard/wallets', icon: 'wallet', anyOf: ['wallets.read'], section: 'finance' },
   { label: 'Payment Ops', href: '/dashboard/payment-ops', icon: 'shield', anyOf: ['paymentOps.read'], section: 'finance' },
   { label: 'Reconciliation', href: '/dashboard/reconciliation', icon: 'recon', anyOf: ['recon.read'], section: 'finance' },

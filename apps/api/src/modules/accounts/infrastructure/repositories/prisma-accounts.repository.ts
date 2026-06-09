@@ -792,6 +792,13 @@ export class PrismaAccountsRepository implements AccountsRepository {
     //   #4  frozen (frozen_at) / ON_HOLD excluded from overdue; surfaced apart.
     //   #7  money as exact paise→rupee strings.
     const asOf = asOfDate ?? new Date();
+    // Outstanding = unpaid, not-frozen states.
+    // Outstanding = unpaid, not-frozen states. The two settlement enums DIFFER:
+    // SellerSettlementStatus has READY_FOR_PAYOUT (batched, awaiting bank run),
+    // but FranchiseSettlementStatus does NOT. Casting 'READY_FOR_PAYOUT' against
+    // franchise_settlements.status threw 22P02 ("invalid input value for enum
+    // FranchiseSettlementStatus") — the 500 on this endpoint. So use a per-enum
+    // list: only the seller branch includes READY_FOR_PAYOUT.
     // Outstanding = unpaid, not-frozen states. NOTE: SellerSettlementStatus
     // has READY_FOR_PAYOUT but FranchiseSettlementStatus does NOT — sharing a
     // single list cast READY_FOR_PAYOUT against the franchise enum and 500'd

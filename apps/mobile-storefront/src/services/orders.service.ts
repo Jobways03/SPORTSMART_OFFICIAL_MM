@@ -49,6 +49,14 @@ export interface OrderListItem {
   totalAmount: number;
   paymentStatus: string;
   paymentMethod: string;
+  // Wallet-aware display label derived server-side (toCustomerSafeMasterOrder):
+  // "Paid by Wallet" / "Cash on Delivery (Wallet ₹X applied)" / "Online" etc.
+  // Prefer this over the raw paymentMethod so a wallet purchase is never
+  // mislabelled as plain COD.
+  paymentMethodLabel?: string;
+  // Wallet amount applied to this order, in paise (BigInt-safe string). '0'
+  // when no wallet was used.
+  walletAmountUsedInPaise?: string;
   itemCount: number;
   createdAt: string;
   subOrders: SubOrder[];

@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { ModalProvider } from '@sportsmart/ui';
+import { StepUpHandlerProvider } from '../components/StepUpHandlerProvider';
 import '../styles/globals.css';
 
 export const metadata: Metadata = {
@@ -15,7 +16,15 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <ModalProvider>{children}</ModalProvider>
+        <ModalProvider>
+          {/*
+           * Wraps the whole app so destructive routes that 403 with
+           * code: 'STEP_UP_REQUIRED' open the step-up modal automatically.
+           * The handler registers with the shared api-client at mount; any
+           * apiClient(...) call gets the recovery UX for free.
+           */}
+          <StepUpHandlerProvider>{children}</StepUpHandlerProvider>
+        </ModalProvider>
       </body>
     </html>
   );

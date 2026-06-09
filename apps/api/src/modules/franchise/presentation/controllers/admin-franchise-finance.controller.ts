@@ -102,7 +102,9 @@ export class AdminFranchiseFinanceController {
 
   // #11 — pending high-value penalty queue (read).
   @Get('penalty-approvals')
-  @Permissions('franchise.finance')
+  // Read — franchise.finance.read (MEDIUM). franchise.finance is CRITICAL and
+  // would force an MFA step-up on this browse list. Writes below keep it.
+  @Permissions('franchise.finance.read')
   async listPenaltyApprovals(
     @Query('status') status?: string,
     @Query('franchiseId') franchiseId?: string,
@@ -144,7 +146,7 @@ export class AdminFranchiseFinanceController {
 
   // #1 — GET /admin/franchise-finance/:franchiseId/balance?asOf=ISO
   @Get(':franchiseId/balance')
-  @Permissions('franchise.finance')
+  @Permissions('franchise.finance.read')
   async getBalance(
     @Param('franchiseId') franchiseId: string,
     @Query('asOf') asOf?: string,
@@ -159,7 +161,7 @@ export class AdminFranchiseFinanceController {
   }
 
   @Get(':franchiseId/ledger')
-  @Permissions('franchise.finance')
+  @Permissions('franchise.finance.read')
   async getFranchiseLedger(
     @Param('franchiseId') franchiseId: string,
     @Query('page') page?: string,
@@ -178,7 +180,7 @@ export class AdminFranchiseFinanceController {
 
   // #17 — GET /admin/franchise-finance/:franchiseId/ledger/export.csv (with balance)
   @Get(':franchiseId/ledger/export.csv')
-  @Permissions('franchise.finance')
+  @Permissions('franchise.finance.read')
   @Header('Content-Type', 'text/csv; charset=utf-8')
   async exportLedgerCsv(
     @Req() req: Request,

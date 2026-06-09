@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import { ModalProvider } from '@sportsmart/ui';
+import { StepUpHandlerProvider } from '../components/StepUpHandlerProvider';
 
 export const metadata: Metadata = {
   title: 'SportsMart — Affiliate Admin',
@@ -28,7 +29,16 @@ export default function RootLayout({
             so destructive admin actions use the shared in-app prompt
             rather than window.confirm(), which mobile browsers render
             inconsistently. */}
-        <ModalProvider>{children}</ModalProvider>
+        <ModalProvider>
+          {/*
+           * Wraps the whole app so destructive routes that 403 with
+           * code: 'STEP_UP_REQUIRED' open the step-up modal automatically.
+           * The handler registers with this app's api-helper at mount; any
+           * apiFetch(...) call gets the recovery UX for free. (This app does
+           * not use the shared createApiClient — see src/lib/api.ts.)
+           */}
+          <StepUpHandlerProvider>{children}</StepUpHandlerProvider>
+        </ModalProvider>
       </body>
     </html>
   );

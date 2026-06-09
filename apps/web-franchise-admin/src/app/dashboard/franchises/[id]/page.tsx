@@ -23,9 +23,11 @@ import SendMessageModal from '../components/send-message-modal';
 import ChangePasswordModal from '../components/change-password-modal';
 import ImpersonateModal from '../components/impersonate-modal';
 import DeleteFranchiseModal from '../components/delete-franchise-modal';
+import CreatePenaltyModal from '../components/create-penalty-modal';
+import CreateAdjustmentModal from '../components/create-adjustment-modal';
 import '../franchises.css';
 
-type ModalType = 'status' | 'verification' | 'commission' | 'approve-mapping' | 'stop-mapping' | 'message' | 'password' | 'impersonate' | 'delete' | null;
+type ModalType = 'status' | 'verification' | 'commission' | 'approve-mapping' | 'stop-mapping' | 'message' | 'password' | 'impersonate' | 'delete' | 'penalty' | 'adjustment' | null;
 type TabKey = 'profile' | 'location' | 'catalog' | 'inventory' | 'orders' | 'commission' | 'finance' | 'settlements' | 'pos' | 'tax';
 
 interface FranchiseTaxSummary {
@@ -1230,7 +1232,20 @@ export default function AdminFranchiseDetailPage() {
                   <p>Commission entries, adjustments, and penalties</p>
                 </div>
                 <div style={{ display: 'flex', gap: 8 }}>
-                  {/* TODO: wire a real adjustment modal — button left as placeholder */}
+                  <button
+                    className="sidebar-action-btn"
+                    style={{ width: 'auto', margin: 0 }}
+                    onClick={() => setActiveModal('adjustment')}
+                  >
+                    Add Adjustment
+                  </button>
+                  <button
+                    className="sidebar-action-btn"
+                    style={{ width: 'auto', margin: 0 }}
+                    onClick={() => setActiveModal('penalty')}
+                  >
+                    Add Penalty
+                  </button>
                 </div>
               </div>
               {financeLoading ? (
@@ -1581,6 +1596,22 @@ export default function AdminFranchiseDetailPage() {
           currentProcurementFeeRate={franchise.procurementFeeRate}
           onClose={closeModal}
           onSuccess={onActionComplete}
+        />
+      )}
+      {activeModal === 'penalty' && (
+        <CreatePenaltyModal
+          franchiseId={franchiseId}
+          businessName={franchise.businessName}
+          onClose={closeModal}
+          onSuccess={() => { closeModal(); fetchFinanceLedger(); }}
+        />
+      )}
+      {activeModal === 'adjustment' && (
+        <CreateAdjustmentModal
+          franchiseId={franchiseId}
+          businessName={franchise.businessName}
+          onClose={closeModal}
+          onSuccess={() => { closeModal(); fetchFinanceLedger(); }}
         />
       )}
       {activeModal === 'approve-mapping' && selectedMapping && (

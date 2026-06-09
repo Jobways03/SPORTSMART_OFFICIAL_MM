@@ -118,6 +118,10 @@ export interface MasterOrderEntity {
   itemCount: number;
   orderStatus: string;
   paymentStatus: string;
+  // Wallet portion debited at checkout (master-level, paise). Surfaced so the
+  // cancel path can refund it; present at runtime via the `...order` spread in
+  // findMasterOrderWithSubOrders.
+  walletAmountUsedInPaise?: bigint | number | null;
   subOrders: SubOrderEntity[];
 }
 

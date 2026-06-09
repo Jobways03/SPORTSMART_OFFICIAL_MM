@@ -51,7 +51,7 @@ describe('ReturnEligibilityService — Phase 92 follow-up', () => {
       expect(
         ordersFacade.getMasterOrderWithDeliveredSubOrders,
       ).toHaveBeenCalledWith('order-1', 'cust-1', {
-        excludeMasterStatuses: ['CANCELLED', 'REFUNDED'],
+        excludeMasterStatuses: ['CANCELLED', 'REJECTED'],
       });
       expect(prisma.masterOrder.findFirst).not.toHaveBeenCalled();
     });

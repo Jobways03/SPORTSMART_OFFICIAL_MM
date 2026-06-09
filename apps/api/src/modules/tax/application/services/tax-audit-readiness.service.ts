@@ -253,6 +253,11 @@ export class TaxAuditReadinessService {
   }
 
   private async scanMissingRate(filter: ScanFilter): Promise<BlockerSummary> {
+    // gstRateBps is a non-nullable `Int @default(0)`, so "no rate set" is 0 (or
+    // any erroneous negative) — it can never be null. The previous
+    // `{ gstRateBps: null }` branch passed null as a filter on a required scalar,
+    // which Prisma rejects with "Argument `gstRateBps` is missing", 500-ing the
+    // entire audit-readiness endpoint.
     const where = this.activeProductWhere(
       // gstRateBps is a non-nullable Int @default(0); filtering `null` on it
       // throws "Invalid `count()` invocation" (Prisma rejects null for a

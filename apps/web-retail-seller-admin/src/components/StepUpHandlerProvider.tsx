@@ -9,29 +9,28 @@ import {
   type ReactNode,
 } from 'react';
 import { registerStepUpHandler, type StepUpHandler } from '@sportsmart/shared-utils';
-import { adminMfaService } from '../services/admin-auth.service';
+import { stepUp, requestStepUpEmailOtp } from '@/services/admin-mfa.service';
 
 /**
- * Phase 26 (2026-05-20) — Admin step-up recovery UX.
+ * Admin step-up recovery UX (mirrors web-admin-storefront).
  *
  * Plugs into the shared api-client's STEP_UP_REQUIRED interceptor.
  * When a destructive route returns 403 with `code: 'STEP_UP_REQUIRED'`,
  * the interceptor calls our handler, which:
  *
- *   1. Opens a modal with a TOTP / backup-code input. If the modal is
- *      already open (a parallel request is also stalled on step-up),
- *      the new caller awaits the same in-flight promise — one verify
- *      satisfies every queued request.
+ *   1. Opens a modal with a TOTP / backup-code / emailed-code input. If
+ *      the modal is already open (a parallel request is also stalled on
+ *      step-up), the new caller awaits the same in-flight promise — one
+ *      verify satisfies every queued request.
  *   2. POSTs the code to /admin/mfa/step-up. On success, resolves the
  *      handler with `true` so the interceptor retries the original
  *      request(s).
  *   3. On cancel / dismiss, resolves with `false` so the original 403
  *      propagates to the caller (which surfaces the error normally).
  *
- * No timer ticking down inside the modal — the freshness window is a
- * backend concept; the modal closes as soon as step-up succeeds and
- * the user gets a normal countdown via /admin/mfa/status (rendered
- * outside this component when needed).
+ * The "Email me a code" button asks the backend
+ * (/admin/mfa/step-up/email/request) to email a 6-digit step-up code;
+ * the user types it into the same input and submits — stepUp() accepts it.
  */
 interface PendingRequest {
   resolve: (v: boolean) => void;
@@ -117,7 +116,7 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
       setSubmitting(true);
       setErrorText(null);
       try {
-        const res = await adminMfaService.stepUp(trimmed);
+        const res = await stepUp(trimmed);
         if (res?.success) {
           resolveAll(true);
         } else {
@@ -142,7 +141,7 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
     setEmailSending(true);
     setErrorText(null);
     try {
-      const res = await adminMfaService.requestStepUpEmailOtp();
+      const res = await requestStepUpEmailOtp();
       if (res?.success) {
         setEmailSentTo(res.data?.maskedEmail ?? 'your email');
       } else {

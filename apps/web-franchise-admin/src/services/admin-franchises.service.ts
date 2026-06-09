@@ -230,6 +230,10 @@ export interface FranchiseSubOrderDetail {
     } | null;
     totalAmount?: string | number | null;
     paymentMethod?: string;
+    // Wallet-aware label from the API ("Paid by Wallet" / "Cash on Delivery
+    // (Wallet ₹X applied)" / "Online" …) — prefer over raw paymentMethod.
+    paymentMethodLabel?: string;
+    walletAmountUsedInPaise?: string;
     paymentStatus?: string;
     orderStatus?: string;
     createdAt?: string;

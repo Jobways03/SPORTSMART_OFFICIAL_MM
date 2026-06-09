@@ -300,6 +300,16 @@ export function OrderDetailScreen() {
     });
   };
 
+  // Wallet-aware cancel copy. A wallet-paid order is refunded to the SportsMart
+  // wallet (not the "original payment method"), so the generic line was wrong
+  // for those. The wallet portion always returns to the wallet; anything paid
+  // online goes back to the original method via the split-refund saga.
+  const cancelWalletRefund = Number(order.walletAmountUsedInPaise ?? '0') / 100;
+  const cancelMessage =
+    cancelWalletRefund > 0
+      ? `${formatINR(cancelWalletRefund)} will be refunded to your SportsMart wallet. Anything paid online goes back to your original payment method.`
+      : 'Refunds are processed back to your original payment method.';
+
   return (
     <SafeAreaView className="flex-1" style={{backgroundColor: C.bg}} edges={['top']}>
       {/* ── Top bar ─────────────────────────────────────────────── */}
@@ -957,6 +967,9 @@ export function OrderDetailScreen() {
                 : 0;
               const subtotal =
                 order.totalAmount - shippingFee + discountAmount;
+              // Wallet portion applied to this order (paise string → rupees).
+              const walletApplied =
+                Number(order.walletAmountUsedInPaise ?? '0') / 100;
               return (
                 <>
                   <PriceRow
@@ -987,6 +1000,13 @@ export function OrderDetailScreen() {
                     }
                     accent={shippingFee === 0 ? C.sageDeep : undefined}
                   />
+                  {walletApplied > 0 ? (
+                    <PriceRow
+                      label="Wallet applied"
+                      value={`− ${formatINR(walletApplied)}`}
+                      accent={C.sageDeep}
+                    />
+                  ) : null}
                 </>
               );
             })()}
@@ -1004,7 +1024,13 @@ export function OrderDetailScreen() {
                 <Text
                   className="text-[10px] mt-0.5"
                   style={{color: C.textTertiary}}>
-                  Paid via {order.paymentMethod} · Tax included
+                  {order.paymentMethodLabel ??
+                    (order.paymentMethod === 'COD'
+                      ? 'Cash on Delivery'
+                      : order.paymentMethod === 'ONLINE'
+                        ? 'Online'
+                        : order.paymentMethod)}{' '}
+                  · Tax included
                 </Text>
               </View>
               <Text
@@ -1132,7 +1158,7 @@ export function OrderDetailScreen() {
       <ConfirmModal
         visible={showCancelConfirm}
         title="Cancel this order?"
-        message="Refunds are processed back to your original payment method."
+        message={cancelMessage}
         confirmLabel="Cancel order"
         cancelLabel="Keep order"
         destructive

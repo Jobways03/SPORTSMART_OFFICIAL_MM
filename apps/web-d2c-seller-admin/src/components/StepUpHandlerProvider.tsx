@@ -9,10 +9,11 @@ import {
   type ReactNode,
 } from 'react';
 import { registerStepUpHandler, type StepUpHandler } from '@sportsmart/shared-utils';
-import { adminMfaService } from '../services/admin-auth.service';
+import { stepUp, requestStepUpEmailOtp } from '../services/admin-mfa.service';
 
 /**
- * Phase 26 (2026-05-20) — Admin step-up recovery UX.
+ * Phase 38 — D2C seller-admin step-up recovery UX (mirrors the
+ * super-admin app's StepUpHandlerProvider).
  *
  * Plugs into the shared api-client's STEP_UP_REQUIRED interceptor.
  * When a destructive route returns 403 with `code: 'STEP_UP_REQUIRED'`,
@@ -29,9 +30,7 @@ import { adminMfaService } from '../services/admin-auth.service';
  *      propagates to the caller (which surfaces the error normally).
  *
  * No timer ticking down inside the modal — the freshness window is a
- * backend concept; the modal closes as soon as step-up succeeds and
- * the user gets a normal countdown via /admin/mfa/status (rendered
- * outside this component when needed).
+ * backend concept; the modal closes as soon as step-up succeeds.
  */
 interface PendingRequest {
   resolve: (v: boolean) => void;
@@ -117,7 +116,7 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
       setSubmitting(true);
       setErrorText(null);
       try {
-        const res = await adminMfaService.stepUp(trimmed);
+        const res = await stepUp(trimmed);
         if (res?.success) {
           resolveAll(true);
         } else {
@@ -142,7 +141,7 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
     setEmailSending(true);
     setErrorText(null);
     try {
-      const res = await adminMfaService.requestStepUpEmailOtp();
+      const res = await requestStepUpEmailOtp();
       if (res?.success) {
         setEmailSentTo(res.data?.maskedEmail ?? 'your email');
       } else {

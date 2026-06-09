@@ -112,6 +112,12 @@ interface OrderDetail {
   discountAmount: number;
   paymentStatus: string;
   paymentMethod: string;
+  // Wallet-aware payment label from the admin getOrder API (top-level).
+  // e.g. "Paid by Wallet", "Cash on Delivery (Wallet ₹X applied)", "Online".
+  // Optional so legacy/unpatched responses still type-check; we fall back
+  // to the raw paymentMethod when absent.
+  paymentMethodLabel?: string;
+  walletAmountUsedInPaise?: string;
   verified: boolean;
   verifiedAt: string | null;
   verifiedBy: string | null;
@@ -153,6 +159,16 @@ const fmtDateTime = (d: string) => {
     dt.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true })
   );
 };
+
+// Prefer the wallet-aware label the API returns; fall back to a readable
+// label derived from the raw paymentMethod for legacy/unpatched responses.
+const paymentMethodDisplay = (o: Pick<OrderDetail, 'paymentMethodLabel' | 'paymentMethod'>) =>
+  o.paymentMethodLabel ??
+  (o.paymentMethod === 'COD'
+    ? 'Cash on Delivery'
+    : o.paymentMethod === 'ONLINE'
+      ? 'Online'
+      : o.paymentMethod);
 
 /* -- pill tones (shared design language) -- */
 type PillTone = 'success' | 'warning' | 'danger' | 'info' | 'neutral';
@@ -764,7 +780,7 @@ export default function OrderDetailPage() {
                 <h3 style={colTitle}>BILLING DETAILS</h3>
                 <table style={{ borderCollapse: 'collapse', fontSize: 13, width: '100%' }}>
                   <tbody>
-                    <DetailRow label="Payment Mode" value="Cash On Delivery (COD)" />
+                    <DetailRow label="Payment Mode" value={paymentMethodDisplay(order)} />
                     <DetailRow label="Name" value={addr.fullName} />
                     <DetailRow label="Address" value={addr.addressLine1 + (addr.addressLine2 ? `, ${addr.addressLine2}` : '')} />
                     <DetailRow label="Postal Code" value={addr.postalCode} />
@@ -1130,7 +1146,7 @@ export default function OrderDetailPage() {
             <h3 style={sideCardTitle}>ADDITIONAL ORDER DETAILS</h3>
             <div style={{ fontSize: 13, color: '#6b7280' }}>
               <div>Order ID: <span style={{ fontFamily: 'monospace' }}>{order.id}</span></div>
-              <div style={{ marginTop: 6 }}>Payment Method: {order.paymentMethod}</div>
+              <div style={{ marginTop: 6 }}>Payment Method: {paymentMethodDisplay(order)}</div>
               <div style={{ marginTop: 6 }}>Items Ordered: {totalItems}</div>
               <div style={{ marginTop: 6 }}>Sub-Orders: {order.subOrders.length}</div>
               {order.verifiedAt && (

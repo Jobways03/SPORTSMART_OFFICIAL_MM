@@ -36,6 +36,12 @@ export function useCancelOrder() {
     onSuccess: (_res, orderNumber) => {
       qc.invalidateQueries({queryKey: queryKeys.order(orderNumber)});
       qc.invalidateQueries({queryKey: queryKeys.orders()});
+      // Cancelling a wallet-paid order refunds the wallet portion server-side
+      // (durable, idempotent refund saga on the same /cancel endpoint). Refresh
+      // the wallet balance + ledger so the credit shows immediately instead of
+      // only after a manual pull-to-refresh.
+      qc.invalidateQueries({queryKey: queryKeys.wallet()});
+      qc.invalidateQueries({queryKey: queryKeys.walletTransactions()});
     },
   });
 }

@@ -64,6 +64,27 @@ export function stepUp(code: string): Promise<ApiResponse<null>> {
   });
 }
 
+/**
+ * POST /admin/mfa/step-up/email/request
+ *
+ * Email-OTP alternative to the authenticator for step-up. Emails a
+ * 6-digit code that stepUp() then accepts — no TOTP enrollment needed.
+ * The response surfaces a masked recipient so the UI can confirm where
+ * the code went.
+ */
+export interface StepUpEmailOtpResponse {
+  otpExpiresIn: number;
+  maskedEmail: string;
+}
+
+export function requestStepUpEmailOtp(): Promise<
+  ApiResponse<StepUpEmailOtpResponse>
+> {
+  return apiClient<StepUpEmailOtpResponse>('/admin/mfa/step-up/email/request', {
+    method: 'POST',
+  });
+}
+
 // ── Login challenge (called from the login page) ─────────────────────────
 
 export interface MfaVerifyChallengeInput {
@@ -94,6 +115,41 @@ export function verifyMfaChallenge(
   input: MfaVerifyChallengeInput,
 ): Promise<ApiResponse<MfaVerifyChallengeResponse>> {
   return apiClient<MfaVerifyChallengeResponse>('/admin/auth/mfa-verify', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+// ── Login email-OTP (called from the login page) ─────────────────────────
+
+/**
+ * POST /admin/auth/mfa-email/request
+ *
+ * Email-OTP alternative to the authenticator at login. Given the
+ * short-lived challengeToken issued by /admin/auth/login, emails a
+ * 6-digit code. Kept separate from verifyMfaChallenge because an email
+ * OTP and a TOTP code are both 6 digits and the backend can't tell them
+ * apart by shape.
+ */
+export function requestMfaEmailOtp(
+  challengeToken: string,
+): Promise<ApiResponse<{ otpExpiresIn: number }>> {
+  return apiClient<{ otpExpiresIn: number }>('/admin/auth/mfa-email/request', {
+    method: 'POST',
+    body: JSON.stringify({ challengeToken }),
+  });
+}
+
+/**
+ * POST /admin/auth/mfa-email/verify
+ *
+ * Redeems the emailed 6-digit code (paired with the challengeToken) for
+ * a real session, mirroring verifyMfaChallenge.
+ */
+export function verifyMfaEmailOtp(
+  input: MfaVerifyChallengeInput,
+): Promise<ApiResponse<MfaVerifyChallengeResponse>> {
+  return apiClient<MfaVerifyChallengeResponse>('/admin/auth/mfa-email/verify', {
     method: 'POST',
     body: JSON.stringify(input),
   });

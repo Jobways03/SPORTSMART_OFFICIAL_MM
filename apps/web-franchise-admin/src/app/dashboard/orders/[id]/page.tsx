@@ -337,7 +337,15 @@ export default function FranchiseAdminOrderDetailPage() {
           <h2 style={h2}>Order Info</h2>
           <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.9 }}>
             <div>Order #: {mo?.orderNumber ?? '—'}</div>
-            <div>Payment: {mo?.paymentMethod ?? '—'}</div>
+            <div>
+              Payment:{' '}
+              {mo?.paymentMethodLabel ??
+                (mo?.paymentMethod === 'COD'
+                  ? 'Cash on Delivery'
+                  : mo?.paymentMethod === 'ONLINE'
+                    ? 'Online'
+                    : (mo?.paymentMethod ?? '—'))}
+            </div>
             <div>Payment status: {mo?.paymentStatus ?? '—'}</div>
             <div>Accept status: {order.acceptStatus?.replace(/_/g, ' ')}</div>
             <div>Delivery: {order.deliveryMethod ?? '—'}</div>

@@ -121,6 +121,11 @@ interface OrderDetail {
   shippingFeeInPaise?: string | null;
   paymentStatus: string;
   paymentMethod: string;
+  // Wallet-aware payment label returned top-level by /admin/orders/:id
+  // (orders.service.getOrder). e.g. "Paid by Wallet",
+  // "Cash on Delivery (Wallet ₹X applied)", "Online".
+  paymentMethodLabel?: string;
+  walletAmountUsedInPaise?: string;
   verified: boolean;
   verifiedAt: string | null;
   verifiedBy: string | null;
@@ -1982,8 +1987,17 @@ export default function OrderDetailPage() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 14 }}>
               <span style={{ fontSize: 18 }}>&#128176;</span>
               <div>
-                <div style={{ fontWeight: 600 }}>Cash on Delivery</div>
-                <div style={{ fontSize: 12, color: '#6b7280' }}>Customer pays on delivery</div>
+                <div style={{ fontWeight: 600 }}>
+                  {order.paymentMethodLabel ??
+                    (order.paymentMethod === 'COD'
+                      ? 'Cash on Delivery'
+                      : order.paymentMethod === 'ONLINE'
+                      ? 'Online'
+                      : order.paymentMethod)}
+                </div>
+                {order.paymentMethod === 'COD' && (
+                  <div style={{ fontSize: 12, color: '#6b7280' }}>Customer pays on delivery</div>
+                )}
               </div>
             </div>
           </div>
