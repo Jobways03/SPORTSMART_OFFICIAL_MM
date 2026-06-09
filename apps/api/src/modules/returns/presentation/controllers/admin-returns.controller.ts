@@ -16,9 +16,15 @@ import { Response } from 'express';
 import { ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { Throttle } from '@nestjs/throttler';
-import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
+import {
+  AdminAuthGuard,
+  RolesGuard,
+  PermissionsGuard,
+  AdminReturnSellerScopeGuard,
+} from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { resolveScopedTypes } from '../../../../core/authorization/seller-scope';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { ReturnService } from '../../application/services/return.service';
@@ -59,7 +65,7 @@ function endOfUtcDay(s: string): Date {
 
 @ApiTags('Admin Returns')
 @Controller('admin/returns')
-@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard, AdminReturnSellerScopeGuard)
 export class AdminReturnsController {
   constructor(
     private readonly returnService: ReturnService,
@@ -88,6 +94,7 @@ export class AdminReturnsController {
     @Query('riskScoreMin') riskScoreMin?: string,
     @Query('riskScoreMax') riskScoreMax?: string,
     @Query('hasRiskScore') hasRiskScore?: string,
+    @Req() req?: any,
   ) {
     const toInt = (v?: string): number | undefined =>
       v !== undefined && v !== '' && Number.isFinite(parseInt(v, 10))
@@ -111,6 +118,8 @@ export class AdminReturnsController {
           : hasRiskScore === 'false'
             ? false
             : undefined,
+      // Phase 38 (admin breadth) — restrict to the admin's seller-type scope.
+      allowedSellerTypes: resolveScopedTypes(req?.user?.permissions) ?? undefined,
     });
     return { success: true, message: 'Returns retrieved', data };
   }
@@ -125,10 +134,12 @@ export class AdminReturnsController {
   async getAnalyticsSummary(
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
+    @Req() req?: any,
   ) {
     const data = await this.returnService.getAnalytics(
       fromDate ? new Date(fromDate) : undefined,
       toDate ? new Date(toDate) : undefined,
+      resolveScopedTypes(req?.user?.permissions) ?? undefined,
     );
     return { success: true, message: 'Returns analytics retrieved', data };
   }
@@ -140,6 +151,7 @@ export class AdminReturnsController {
     @Query('fromDate') fromDate: string,
     @Query('toDate') toDate: string,
     @Query('groupBy') groupBy: 'day' | 'week' | 'month' = 'day',
+    @Req() req?: any,
   ) {
     if (!fromDate || !toDate) {
       throw new BadRequestAppException('fromDate and toDate are required');
@@ -148,6 +160,7 @@ export class AdminReturnsController {
       new Date(fromDate),
       new Date(toDate),
       groupBy,
+      resolveScopedTypes(req?.user?.permissions) ?? undefined,
     );
     return { success: true, message: 'Returns trend retrieved', data };
   }
@@ -159,11 +172,13 @@ export class AdminReturnsController {
     @Query('limit') limit?: string,
     @Query('fromDate') fromDate?: string,
     @Query('toDate') toDate?: string,
+    @Req() req?: any,
   ) {
     const data = await this.returnService.getTopReturnReasons(
       parseInt(limit || '10', 10),
       fromDate ? new Date(fromDate) : undefined,
       toDate ? new Date(toDate) : undefined,
+      resolveScopedTypes(req?.user?.permissions) ?? undefined,
     );
     return { success: true, message: 'Top return reasons retrieved', data };
   }
@@ -171,8 +186,14 @@ export class AdminReturnsController {
   // GET /admin/returns/customers/:customerId/history — customer return history
   @Get('customers/:customerId/history')
   @Permissions('returns.read')
-  async getCustomerHistory(@Param('customerId') customerId: string) {
-    const data = await this.returnService.getCustomerReturnHistory(customerId);
+  async getCustomerHistory(
+    @Param('customerId') customerId: string,
+    @Req() req?: any,
+  ) {
+    const data = await this.returnService.getCustomerReturnHistory(
+      customerId,
+      resolveScopedTypes(req?.user?.permissions) ?? undefined,
+    );
     return {
       success: true,
       message: 'Customer return history retrieved',

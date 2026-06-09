@@ -18,8 +18,8 @@ interface SellerInfo {
   verificationStatus?: SellerProfileData['verificationStatus'];
 }
 
-function getInitials(name: string): string {
-  return name
+function getInitials(name?: string | null): string {
+  return ((name ?? '').trim() || '?')
     .split(' ')
     .filter(Boolean)
     .map(w => w[0])
@@ -195,8 +195,9 @@ export default function DashboardLayout({
     { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;', disabled: !isActive },
     { href: '/dashboard/accounts', label: 'My Finances', icon: '&#128202;', disabled: !isActive, description: 'Revenue, payables, TDS/TCS, settlements — one view' },
     { href: '/dashboard/tax/invoices', label: 'Tax Invoices', icon: '&#129534;', disabled: !isActive, description: 'GST invoices, credit notes — download for filing' },
+    { href: '/dashboard/tax/tcs', label: 'TCS (Sec 52)', icon: '&#128179;', disabled: !isActive, description: 'TCS collected at source — status & §52(5) certificates' },
     { href: '/dashboard/support', label: 'Support', icon: '&#128172;' },
-    { href: '#', label: 'Analytics', icon: '&#128200;', disabled: true },
+    { href: '/dashboard/analytics', label: 'Analytics', icon: '&#128200;' },
   ];
 
   // Banner content depends on the seller's current state. The

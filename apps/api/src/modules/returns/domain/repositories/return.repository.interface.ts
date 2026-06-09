@@ -56,6 +56,9 @@ export interface FindAllPaginatedParams {
   riskScoreMin?: number;
   riskScoreMax?: number;
   hasRiskScore?: boolean;
+  // Phase 38 (admin breadth) — restrict to returns whose sub-order seller is in
+  // the admin's seller-type scope (undefined = all).
+  allowedSellerTypes?: ('D2C' | 'RETAIL')[];
 }
 
 export interface FindReturnsForFulfillmentNodeParams {
@@ -175,6 +178,7 @@ export interface ReturnRepository {
   getAnalyticsSummary(params?: {
     fromDate?: Date;
     toDate?: Date;
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[];
   }): Promise<{
     totalReturns: number;
     totalRefundAmount: number;
@@ -192,6 +196,7 @@ export interface ReturnRepository {
     fromDate: Date;
     toDate: Date;
     groupBy: 'day' | 'week' | 'month';
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[];
   }): Promise<
     Array<{
       period: string;
@@ -204,6 +209,7 @@ export interface ReturnRepository {
     limit: number,
     fromDate?: Date,
     toDate?: Date,
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[],
   ): Promise<
     Array<{
       reasonCategory: string;
@@ -212,7 +218,7 @@ export interface ReturnRepository {
     }>
   >;
 
-  getReturnsByCustomer(customerId: string): Promise<{
+  getReturnsByCustomer(customerId: string, allowedSellerTypes?: ('D2C' | 'RETAIL')[]): Promise<{
     totalReturns: number;
     totalRefunded: number;
     recentReturns: any[];

@@ -101,6 +101,37 @@ function statusBadgeStyle(status: string): React.CSSProperties {
   }
 }
 
+// Phase 38+ (2026-06-08) — weekly earnings buckets for the Overview trend
+// chart. Sums each ledger entry's franchiseEarning into the week (last 8
+// weeks) its createdAt falls in. Replaces the old placeholder box.
+function computeWeeklyEarnings(
+  ledger: LedgerEntry[],
+): Array<{ label: string; total: number }> {
+  const WEEKS = 8;
+  const now = new Date();
+  const buckets = Array.from({ length: WEEKS }, (_, idx) => {
+    const i = WEEKS - 1 - idx;
+    const end = new Date(now);
+    end.setDate(now.getDate() - i * 7);
+    end.setHours(23, 59, 59, 999);
+    const start = new Date(end);
+    start.setDate(end.getDate() - 6);
+    start.setHours(0, 0, 0, 0);
+    return {
+      label: `${start.getDate()}/${start.getMonth() + 1}`,
+      start: start.getTime(),
+      end: end.getTime(),
+      total: 0,
+    };
+  });
+  for (const e of ledger) {
+    const t = new Date(e.createdAt).getTime();
+    const b = buckets.find((bk) => t >= bk.start && t <= bk.end);
+    if (b) b.total += toNumber(e.franchiseEarning);
+  }
+  return buckets.map(({ label, total }) => ({ label, total }));
+}
+
 export default function EarningsPage() {
 const [activeTab, setActiveTab] = useState<TabKey>('overview');
 
@@ -168,16 +199,19 @@ function OverviewTab() {
   const { notify, confirmDialog } = useModal();
 const [summary, setSummary] = useState<EarningsSummary | null>(null);
   const [recent, setRecent] = useState<FranchiseSettlement[]>([]);
+  const [ledger, setLedger] = useState<LedgerEntry[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   const load = async () => {setIsLoading(true);
     try {
-      const [summaryRes, settlementsRes] = await Promise.all([
+      const [summaryRes, settlementsRes, ledgerRes] = await Promise.all([
         franchiseEarningsService.getSummary(),
         franchiseEarningsService.listSettlements({ page: 1, limit: 5 }),
+        franchiseEarningsService.getLedgerHistory({ page: 1, limit: 200 }).catch(() => null),
       ]);
       if (summaryRes.data) setSummary(summaryRes.data);
       if (settlementsRes.data) setRecent(settlementsRes.data.settlements);
+      if (ledgerRes?.data?.entries) setLedger(ledgerRes.data.entries);
     } catch (err) {
       if (err instanceof ApiError) {
         void notify(err.body.message || 'Failed to load earnings summary');
@@ -226,18 +260,80 @@ const [summary, setSummary] = useState<EarningsSummary | null>(null);
 
       <div className="card">
         <h2>Earnings Trend</h2>
-        <div
-          style={{
-            padding: 48,
-            textAlign: 'center',
-            color: '#9ca3af',
-            background: '#f9fafb',
-            borderRadius: 8,
-            border: '1px dashed #e5e7eb',
-          }}
-        >
-          Chart coming soon
-        </div>
+        <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 16px' }}>
+          Your franchise earnings over the last 8 weeks (summed from ledger entries).
+        </p>
+        {(() => {
+          const weeks = computeWeeklyEarnings(ledger);
+          const max = Math.max(1, ...weeks.map((w) => w.total));
+          const hasData = weeks.some((w) => w.total > 0);
+          if (!hasData) {
+            return (
+              <div
+                style={{
+                  padding: 40,
+                  textAlign: 'center',
+                  color: '#9ca3af',
+                  background: '#f9fafb',
+                  borderRadius: 8,
+                  border: '1px dashed #e5e7eb',
+                  fontSize: 13,
+                }}
+              >
+                No earnings recorded in the last 8 weeks yet.
+              </div>
+            );
+          }
+          return (
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'flex-end',
+                gap: 10,
+                height: 180,
+                paddingTop: 8,
+              }}
+            >
+              {weeks.map((w, i) => (
+                <div
+                  key={i}
+                  style={{
+                    flex: 1,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'flex-end',
+                    height: '100%',
+                    gap: 6,
+                  }}
+                >
+                  <span
+                    style={{
+                      fontSize: 11,
+                      fontWeight: 600,
+                      color: '#374151',
+                      height: 28,
+                      textAlign: 'center',
+                      fontVariantNumeric: 'tabular-nums',
+                    }}
+                  >
+                    {w.total > 0 ? formatInr(w.total) : ''}
+                  </span>
+                  <div
+                    style={{
+                      width: '100%',
+                      maxWidth: 48,
+                      height: `${Math.max(2, (w.total / max) * 100)}%`,
+                      background: w.total > 0 ? '#059669' : '#e5e7eb',
+                      borderRadius: '4px 4px 0 0',
+                    }}
+                  />
+                  <span style={{ fontSize: 11, color: '#9ca3af' }}>{w.label}</span>
+                </div>
+              ))}
+            </div>
+          );
+        })()}
       </div>
 
       <div className="card">

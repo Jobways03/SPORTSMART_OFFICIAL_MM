@@ -22,7 +22,13 @@ import {
   BadRequestAppException,
 } from '../../../../../core/exceptions';
 import { AppException } from '../../../../../core/exceptions/app.exception';
-import { AdminAuthGuard, PermissionsGuard, RolesGuard } from '../../../../../core/guards';
+import {
+  AdminAuthGuard,
+  PermissionsGuard,
+  RolesGuard,
+  AdminProductSellerScopeGuard,
+} from '../../../../../core/guards';
+import { resolveScopedTypes } from '../../../../../core/authorization/seller-scope';
 import { Permissions } from '../../../../../core/decorators/permissions.decorator';
 import { Roles } from '../../../../../core/decorators/roles.decorator';
 import { Idempotent } from '../../../../../core/decorators/idempotent.decorator';
@@ -57,7 +63,7 @@ import { PrismaService } from '../../../../../bootstrap/database/prisma.service'
 // tax.bulk-config / tax.bulk-verify permission keys). RolesGuard
 // short-circuits to allow when no @Roles() metadata is set, so the
 // other handlers on this controller are unaffected.
-@UseGuards(AdminAuthGuard, PermissionsGuard, RolesGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard, RolesGuard, AdminProductSellerScopeGuard)
 export class AdminProductsController {
   /**
    * Phase 31 (2026-05-21) — states in which a product is still part
@@ -119,6 +125,7 @@ export class AdminProductsController {
     @Query('categoryId') categoryId?: string,
     @Query('sellerId') sellerId?: string,
     @Query('hasSellers') hasSellers?: string,
+    @Req() req?: any,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '10', 10) || 10));
@@ -126,6 +133,8 @@ export class AdminProductsController {
     const { products, total } = await this.productRepo.findAllPaginated({
       page: pageNum, limit: limitNum, search, status, moderationStatus,
       categoryId, sellerId, hasSellers: hasSellers === 'true',
+      // Phase 38 (admin breadth) — restrict to the admin's seller-type scope.
+      allowedSellerTypes: resolveScopedTypes(req?.user?.permissions) ?? undefined,
     });
 
     // Bulk-load franchise mappings + their stock for the page's product
@@ -1125,8 +1134,29 @@ export class AdminProductsController {
   async bulkApprove(
     @CurrentAdmin() adminId: string,
     @Body() dto: { productIds: string[] },
+    @Req() req?: any,
   ) {
     const ids = this.validateBulkIds(dto.productIds);
+
+    // Phase 38 (admin breadth) — restrict bulk-approve to the admin's
+    // seller-type scope; out-of-scope ids are reported as not-found per-item
+    // (no existence leak). Unrestricted admins (SUPER_ADMIN) skip this.
+    const scopedTypes = resolveScopedTypes(req?.user?.permissions);
+    let inScopeIds: Set<string> | null = null;
+    if (scopedTypes) {
+      const rows = await this.prisma.product.findMany({
+        where: { id: { in: ids } },
+        select: { id: true, seller: { select: { sellerType: true } } } as any,
+      });
+      inScopeIds = new Set(
+        rows
+          .filter(
+            (r: any) =>
+              r.seller?.sellerType && scopedTypes.includes(r.seller.sellerType),
+          )
+          .map((r: any) => r.id as string),
+      );
+    }
 
     const ok: string[] = [];
     const alreadyDone: string[] = [];
@@ -1134,6 +1164,10 @@ export class AdminProductsController {
 
     for (const productId of ids) {
       try {
+        if (inScopeIds && !inScopeIds.has(productId)) {
+          failed.push({ id: productId, reason: 'Product not found' });
+          continue;
+        }
         const product = await this.productRepo.findByIdBasic(productId);
         if (!product) {
           failed.push({ id: productId, reason: 'Product not found' });

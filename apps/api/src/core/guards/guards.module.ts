@@ -3,6 +3,12 @@ import { PermissionsGuard } from './permissions.guard';
 import { RolesGuard } from './roles.guard';
 import { PolicyGuard } from './policy.guard';
 import { D2cOnlyGuard, RetailOnlyGuard } from './seller-type.guard';
+import { AdminSellerScopeGuard } from './admin-seller-scope.guard';
+import {
+  AdminOrderSellerScopeGuard,
+  AdminReturnSellerScopeGuard,
+  AdminProductSellerScopeGuard,
+} from './entity-seller-scope.guard';
 import { PolicyEvaluatorService } from '../authorization/policy-evaluator.service';
 import { AuthorizationAuditService } from '../authorization/authorization-audit.service';
 import { AuthzModeService } from '../authorization/authz-mode.service';
@@ -37,6 +43,10 @@ import { BlockedWhileImpersonatingGuard } from '../impersonation/blocked-while-i
     PolicyGuard,
     D2cOnlyGuard,
     RetailOnlyGuard,
+    AdminSellerScopeGuard,
+    AdminOrderSellerScopeGuard,
+    AdminReturnSellerScopeGuard,
+    AdminProductSellerScopeGuard,
     PolicyEvaluatorService,
     AuthorizationAuditService,
     AuthzModeService,
@@ -58,6 +68,10 @@ import { BlockedWhileImpersonatingGuard } from '../impersonation/blocked-while-i
     PolicyGuard,
     D2cOnlyGuard,
     RetailOnlyGuard,
+    AdminSellerScopeGuard,
+    AdminOrderSellerScopeGuard,
+    AdminReturnSellerScopeGuard,
+    AdminProductSellerScopeGuard,
     PolicyEvaluatorService,
     AuthorizationAuditService,
     AuthzModeService,

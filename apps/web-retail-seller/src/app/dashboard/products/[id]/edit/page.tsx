@@ -12,6 +12,14 @@ import {
 import { apiClient, ApiError } from '@/lib/api-client';
 import '../../product-form.css';
 import { RichTextEditor, useModal } from '@sportsmart/ui';
+// Phase 39 (2026-05-21) — category metafield form section + payload mapper.
+import {
+  CategoryMetafieldFormSection,
+  metafieldValuesToPayload,
+  type MetafieldValueEntry,
+} from '../../components/CategoryMetafieldFormSection';
+// Phase 44 (2026-05-21) — seller-facing volume pricing tier CRUD.
+import { PricingTiersSection } from './_components/PricingTiersSection';
 
 // ----- Types -----
 
@@ -202,6 +210,12 @@ const router = useRouter();
   const [uploadingImage, setUploadingImage] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Phase 39 (2026-05-21) — category metafield value map. Hydrated
+  // from the loaded product's metafields[] in populateForm; sent back
+  // as `metafields[]` in buildPayload only if any entries changed.
+  const [metafieldValues, setMetafieldValues] = useState<Record<string, MetafieldValueEntry>>({});
+  const initialMetafieldsRef = useRef<string>('');
+
   // ----- Toast helper -----
 
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
@@ -254,6 +268,56 @@ const router = useRouter();
     };
     setForm(formData);
     initialFormRef.current = JSON.stringify(formData);
+
+    // Phase 39 (2026-05-21) — hydrate the metafield value map from the
+    // server response. The seller GET returns `metafields[]` rows with
+    // a definition include; we coalesce each row's value columns into
+    // a single typed value matching the UI shape.
+    const mfMap: Record<string, MetafieldValueEntry> = {};
+    const mfRows = (p as unknown as { metafields?: Array<{
+      metafieldDefinitionId: string;
+      metafieldDefinition?: { namespace: string; key: string; type: string };
+      valueText?: string | null;
+      valueNumber?: number | null;
+      valueBoolean?: boolean | null;
+      valueDate?: string | null;
+      valueJson?: unknown;
+    }> }).metafields;
+    for (const row of mfRows ?? []) {
+      const def = row.metafieldDefinition;
+      if (!def) continue;
+      let value: MetafieldValueEntry['value'];
+      switch (def.type) {
+        case 'NUMBER_INTEGER':
+        case 'NUMBER_DECIMAL':
+        case 'RATING':
+          value = row.valueNumber ?? null;
+          break;
+        case 'BOOLEAN':
+          value = row.valueBoolean ?? null;
+          break;
+        case 'DATE':
+          value = row.valueDate ? String(row.valueDate).slice(0, 10) : null;
+          break;
+        case 'MULTI_SELECT':
+        case 'DIMENSION':
+        case 'WEIGHT':
+        case 'VOLUME':
+        case 'JSON':
+          value = (row.valueJson as MetafieldValueEntry['value']) ?? null;
+          break;
+        default:
+          value = row.valueText ?? null;
+      }
+      mfMap[row.metafieldDefinitionId] = {
+        definitionId: row.metafieldDefinitionId,
+        namespace: def.namespace,
+        key: def.key,
+        value,
+      };
+    }
+    setMetafieldValues(mfMap);
+    initialMetafieldsRef.current = JSON.stringify(mfMap);
   }, []);
 
   // ----- Load product and reference data -----
@@ -445,6 +509,15 @@ const router = useRouter();
     seo.metaDescription = form.seoMetaDescription.trim() || null;
     seo.handle = form.seoHandle.trim() || null;
     payload.seo = seo;
+
+    // Phase 39 (2026-05-21) — include metafields[] only when the map
+    // changed against the loaded state. An unchanged set would be a
+    // wasted re-approval trigger (metafield writes are flagged as
+    // content by the re-approval classifier).
+    if (JSON.stringify(metafieldValues) !== initialMetafieldsRef.current) {
+      const metafields = metafieldValuesToPayload(metafieldValues);
+      payload.metafields = metafields;
+    }
 
     return payload;
   }
@@ -1022,6 +1095,15 @@ const router = useRouter();
           </div>
         </div>
       </div>
+
+      {/* Phase 39 (2026-05-21) — category-driven metafield section.
+          Placed right after BASIC INFORMATION so the seller sees the
+          required fields immediately under the title/category picker. */}
+      <CategoryMetafieldFormSection
+        categoryId={form.categoryId || null}
+        values={metafieldValues}
+        onChange={setMetafieldValues}
+      />
 
       {/* Section 2: Product Type & Pricing */}
       <div className="form-card">
@@ -1698,6 +1780,16 @@ const router = useRouter();
           </div>
         </div>
       </div>
+
+      {/* Phase 44 (2026-05-21) — volume pricing tiers. */}
+      <PricingTiersSection
+        productId={productId}
+        variants={(product?.variants ?? []).map((v: any) => ({
+          id: v.id,
+          title: v.title,
+          sku: v.sku,
+        }))}
+      />
 
       {/* Section 4: Tags */}
       <div className="form-card">

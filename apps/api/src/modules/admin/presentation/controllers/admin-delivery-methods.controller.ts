@@ -10,7 +10,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 
-import { AdminAuthGuard, RolesGuard } from '../../../../core/guards';
+import { AdminAuthGuard, RolesGuard, AdminSellerScopeGuard } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
 import { AdminDeliveryMethodsService } from '../../application/services/admin-delivery-methods.service';
 import { AdminUpdateDeliveryMethodsDto } from '../dtos/admin-update-delivery-methods.dto';
@@ -35,7 +35,7 @@ function ok<T>(data: T, message = 'OK') {
  */
 @ApiTags('Admin · Delivery Methods')
 @Controller('admin/sellers')
-@UseGuards(AdminAuthGuard, RolesGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, AdminSellerScopeGuard)
 export class AdminSellerDeliveryMethodsController {
   constructor(private readonly service: AdminDeliveryMethodsService) {}
 

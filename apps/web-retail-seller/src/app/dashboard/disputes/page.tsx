@@ -12,6 +12,7 @@ import {
   KIND_LABEL,
 } from '@/services/disputes.service';
 import { ApiError } from '@/lib/api-client';
+import { useSseStream } from '@sportsmart/ui';
 
 const STATUS_OPTIONS: Array<{ value: DisputeStatus | ''; label: string }> = [
   { value: '', label: 'All statuses' },
@@ -92,6 +93,14 @@ export default function SellerDisputesListPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Live updates over the seller dispute SSE stream — refetch the list on
+  // any dispute change instead of polling.
+  useSseStream('/portal/streams/seller-disputes', {
+    onMessage: () => {
+      fetchData();
+    },
+  });
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const showingFrom = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;

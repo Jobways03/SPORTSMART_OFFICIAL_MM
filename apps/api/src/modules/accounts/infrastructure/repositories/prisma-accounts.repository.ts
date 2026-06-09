@@ -792,8 +792,12 @@ export class PrismaAccountsRepository implements AccountsRepository {
     //   #4  frozen (frozen_at) / ON_HOLD excluded from overdue; surfaced apart.
     //   #7  money as exact paise→rupee strings.
     const asOf = asOfDate ?? new Date();
-    // Outstanding = unpaid, not-frozen states.
-    const OUTSTANDING = Prisma.sql`('PENDING','APPROVED','READY_FOR_PAYOUT','FAILED','PARTIALLY_PAID')`;
+    // Outstanding = unpaid, not-frozen states. NOTE: SellerSettlementStatus
+    // has READY_FOR_PAYOUT but FranchiseSettlementStatus does NOT — sharing a
+    // single list cast READY_FOR_PAYOUT against the franchise enum and 500'd
+    // with Postgres 22P02 (invalid enum input). Keep the two lists separate.
+    const SELLER_OUTSTANDING = Prisma.sql`('PENDING','APPROVED','READY_FOR_PAYOUT','FAILED','PARTIALLY_PAID')`;
+    const FRANCHISE_OUTSTANDING = Prisma.sql`('PENDING','APPROVED','FAILED','PARTIALLY_PAID')`;
     const SELLER_NET = Prisma.sql`(total_settlement_amount_in_paise - tcs_deducted_in_paise - tds_deducted_in_paise - total_commission_gst_in_paise - paid_amount_in_paise)`;
     const FRANCHISE_NET = Prisma.sql`((net_payable_to_franchise * 100)::bigint - paid_amount_in_paise)`;
 
@@ -815,13 +819,13 @@ export class PrismaAccountsRepository implements AccountsRepository {
           SELECT ${bucketExpr(sellerAnchor)} AS bucket, COUNT(*)::bigint AS cnt,
                  COALESCE(SUM(${SELLER_NET}), 0)::bigint AS net_paise
           FROM seller_settlements
-          WHERE status IN ${OUTSTANDING} AND frozen_at IS NULL AND ${SELLER_NET} > 0
+          WHERE status IN ${SELLER_OUTSTANDING} AND frozen_at IS NULL AND ${SELLER_NET} > 0
           GROUP BY 1`),
         this.prisma.$queryRaw<Array<{ bucket: string; cnt: bigint; net_paise: bigint }>>(Prisma.sql`
           SELECT ${bucketExpr(franchiseAnchor)} AS bucket, COUNT(*)::bigint AS cnt,
                  COALESCE(SUM(${FRANCHISE_NET}), 0)::bigint AS net_paise
           FROM franchise_settlements
-          WHERE status IN ${OUTSTANDING} AND frozen_at IS NULL AND ${FRANCHISE_NET} > 0
+          WHERE status IN ${FRANCHISE_OUTSTANDING} AND frozen_at IS NULL AND ${FRANCHISE_NET} > 0
           GROUP BY 1`),
         this.prisma.sellerSettlement.count({ where: { frozenAt: { not: null } } }),
         this.prisma.franchiseSettlement.count({ where: { frozenAt: { not: null } } }),
@@ -830,11 +834,11 @@ export class PrismaAccountsRepository implements AccountsRepository {
         this.prisma.$queryRaw<Array<{ oldest: Date | null }>>(Prisma.sql`
           SELECT MIN(anchor) AS oldest FROM (
             SELECT ${sellerAnchor} AS anchor FROM seller_settlements
-              WHERE status IN ${OUTSTANDING} AND frozen_at IS NULL AND ${SELLER_NET} > 0
+              WHERE status IN ${SELLER_OUTSTANDING} AND frozen_at IS NULL AND ${SELLER_NET} > 0
                 AND ${sellerAnchor} < ${asOf}::timestamptz
             UNION ALL
             SELECT ${franchiseAnchor} AS anchor FROM franchise_settlements
-              WHERE status IN ${OUTSTANDING} AND frozen_at IS NULL AND ${FRANCHISE_NET} > 0
+              WHERE status IN ${FRANCHISE_OUTSTANDING} AND frozen_at IS NULL AND ${FRANCHISE_NET} > 0
                 AND ${franchiseAnchor} < ${asOf}::timestamptz
           ) u`),
       ]);

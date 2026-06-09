@@ -14,8 +14,8 @@ interface AdminInfo {
   role: string;
 }
 
-function getInitials(name: string): string {
-  return name
+function getInitials(name?: string | null): string {
+  return ((name ?? '').trim() || '?')
     .split(' ')
     .filter(Boolean)
     .map(w => w[0])
@@ -156,7 +156,7 @@ export default function DashboardLayout({
               className="navbar-brand-name"
               style={{ height: 36, width: 'auto', display: 'block' }}
             />
-            <span className="navbar-brand-tag">SELLER ADMIN</span>
+            <span className="navbar-brand-tag">D2C SELLER ADMIN</span>
           </Link>
         </div>
 
@@ -169,8 +169,8 @@ export default function DashboardLayout({
               aria-haspopup="true"
             >
               <div className="navbar-user-info">
-                <div className="navbar-user-name">Seller Admin</div>
-                <div className="navbar-user-role">Seller Admin</div>
+                <div className="navbar-user-name">D2C Seller Admin</div>
+                <div className="navbar-user-role">D2C Seller Admin</div>
               </div>
               <div className="navbar-avatar">SA</div>
               <span className={`navbar-dropdown-arrow${dropdownOpen ? ' open' : ''}`}>
@@ -188,7 +188,7 @@ export default function DashboardLayout({
                     {admin.email}
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>
-                    Seller Admin
+                    D2C Seller Admin
                   </div>
                 </div>
                 <Link

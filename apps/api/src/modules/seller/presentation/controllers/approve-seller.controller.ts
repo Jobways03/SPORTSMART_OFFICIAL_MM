@@ -14,6 +14,7 @@ import { Request } from 'express';
 import {
   AdminAuthGuard,
   PermissionsGuard,
+  AdminSellerScopeGuard,
 } from '../../../../core/guards';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { ApproveSellerUseCase } from '../../application/use-cases/approve-seller.use-case';
@@ -27,7 +28,7 @@ import { ApproveSellerDto } from '../dtos/approve-seller.dto';
  */
 @ApiTags('Admin Sellers')
 @Controller('admin/sellers')
-@UseGuards(AdminAuthGuard, PermissionsGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard, AdminSellerScopeGuard)
 export class ApproveSellerController {
   constructor(private readonly approveSellerUseCase: ApproveSellerUseCase) {}
 

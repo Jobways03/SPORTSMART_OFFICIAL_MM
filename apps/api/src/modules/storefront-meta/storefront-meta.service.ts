@@ -32,6 +32,11 @@ export interface StorefrontStoresSummaryDto {
   topCities: string[];
 }
 
+export interface SitemapProductDto {
+  slug: string;
+  updatedAt: string;
+}
+
 const DEFAULTS = {
   freeShippingThreshold: 999,
   shippingFee: 49,
@@ -121,5 +126,23 @@ export class StorefrontMetaService {
   // the 404 noise in dev. Swap the impl when a Store model lands.
   async getStoresSummary(): Promise<StorefrontStoresSummaryDto> {
     return { total: 0, topCities: [] };
+  }
+
+  // Public product sitemap feed — slug + lastmod for every storefront-visible
+  // product (ACTIVE + APPROVED + not deleted), matching the storefront's own
+  // visibility filter so we never advertise a URL that 404s. Backs the Next.js
+  // sitemap.xml generator (GET /storefront/sitemap/products). Lightweight: a
+  // narrow select over an indexed status filter, ordered by recency.
+  async getSitemapProducts(limit: number): Promise<SitemapProductDto[]> {
+    const rows = await this.prisma.product.findMany({
+      where: { status: 'ACTIVE', moderationStatus: 'APPROVED', isDeleted: false },
+      select: { slug: true, updatedAt: true },
+      orderBy: { updatedAt: 'desc' },
+      take: limit,
+    });
+    return rows.map((r) => ({
+      slug: r.slug,
+      updatedAt: r.updatedAt.toISOString(),
+    }));
   }
 }
