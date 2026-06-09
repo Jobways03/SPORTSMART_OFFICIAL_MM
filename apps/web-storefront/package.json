@@ -23,7 +23,7 @@
     "@playwright/test": "^1.49.1",
     "@sportsmart/eslint-config": "workspace:*",
     "@sportsmart/tsconfig": "workspace:*",
-    "@types/node": "^22.0.0",
+    "@types/node": "^25.9.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "autoprefixer": "^10.5.0",
