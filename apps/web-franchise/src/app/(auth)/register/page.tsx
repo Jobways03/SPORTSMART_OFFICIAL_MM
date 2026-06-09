@@ -136,6 +136,12 @@ export default function FranchiseRegisterPage() {
             (fieldErrors as Record<string, string>)[e.field] = e.message;
           }
           setErrors(fieldErrors);
+        } else if (err.status === 409) {
+          // Explicit "already registered" — the footer's Sign in link is the CTA.
+          setServerError(
+            err.message ||
+              'An account with this email or phone number already exists. Please sign in instead.',
+          );
         } else if (err.status === 429) {
           setServerError('Too many registration attempts. Please try again in a moment.');
         } else if (err.status === 400) {

@@ -2,7 +2,10 @@ import { Injectable, Inject } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
-import { BadRequestAppException } from '../../../../core/exceptions';
+import {
+  BadRequestAppException,
+  ConflictAppException,
+} from '../../../../core/exceptions';
 import { SellerRegisterResponseData } from '../../presentation/dtos/seller-auth-response.dto';
 import {
   SellerRepository,
@@ -35,8 +38,9 @@ interface RegisterSellerInput {
  *
  * Flow:
  *   1. confirmPassword equality + Terms + Privacy gates.
- *   2. Look up existing email/phone. Duplicate → emit the same
- *      uniform payload as a fresh registration (no enumeration).
+ *   2. Look up existing email/phone. Duplicate → explicit 409
+ *      ALREADY_REGISTERED so the form can tell the user to sign in
+ *      (seller-portal product choice — favours UX over anti-enumeration).
  *   3. bcrypt cost 12.
  *   4. Create Seller row with status=PENDING_APPROVAL,
  *      verificationStatus=NOT_VERIFIED, isEmailVerified=false,
@@ -50,11 +54,6 @@ interface RegisterSellerInput {
  */
 @Injectable()
 export class RegisterSellerUseCase {
-  /** Soak-delay range used on the duplicate path so the timing
-   * doesn't distinguish create from absorb. */
-  private static readonly DUPLICATE_TIMING_DELAY_MIN_MS = 200;
-  private static readonly DUPLICATE_TIMING_DELAY_MAX_MS = 450;
-
   constructor(
     @Inject(SELLER_REPOSITORY)
     private readonly sellerRepo: SellerRepository,
@@ -100,32 +99,23 @@ export class RegisterSellerUseCase {
       );
     }
 
-    // Uniform "check your inbox" payload — same on both the fresh
-    // and duplicate paths so the public API never reveals account
-    // existence by either response shape OR by message content.
-    const uniformDuplicateResponse: SellerRegisterResponseData = {
-      email,
-      requiresVerification: true,
-      verificationEmailSent: true,
-      message:
-        'If this email or phone is not already registered, a 6-digit verification code has been sent to your email. Check your inbox.',
-    };
-
-    // Application-level duplicate check. We deliberately swallow both
-    // email AND phone collisions into the SAME uniform response —
-    // the older 409 branches ("phone exists" vs "email exists") let
-    // an attacker probe each axis independently.
+    // Explicit duplicate signal (product decision 2026-06-09). The seller
+    // portal favours clear onboarding UX over strict anti-enumeration: tell the
+    // user outright that an account already exists and send them to sign-in,
+    // instead of the old uniform "check your inbox" 202. Trade-off: a probe can
+    // now confirm a registered email/phone — accepted for the seller portal,
+    // and bounded by this endpoint's 3/min/IP throttle + CAPTCHA gate. (The
+    // out-of-band owner-notice email was dropped as redundant once the form
+    // states it directly.)
     const existingByEmail = await this.sellerRepo.findByEmail(email);
     const existingByPhone = await this.sellerRepo.findByPhone(phoneNumber);
     if (existingByEmail || existingByPhone) {
-      // Burn ~bcrypt-cost worth of time so the duplicate path's
-      // latency profile matches the create path.
-      await bcrypt.hash(password, 12);
-      await this.timingSoakDelay();
       this.logger.log(
-        `Seller register: duplicate email/phone absorbed (uniform 202 returned)`,
+        'Seller register: duplicate email/phone rejected (409 ALREADY_REGISTERED)',
       );
-      return uniformDuplicateResponse;
+      throw new ConflictAppException(
+        'An account with this email or phone number already exists. Please sign in instead.',
+      );
     }
 
     // Hash password BEFORE the create so the bcrypt cost is paid
@@ -144,11 +134,12 @@ export class RegisterSellerUseCase {
       });
       sellerId = seller.id;
     } catch (error: any) {
-      // Race-window: a concurrent register beat us to insert. Same
-      // uniform response.
+      // Race-window: a concurrent register won the unique-constraint race —
+      // surface the same explicit "already registered" 409 as the pre-check.
       if (error?.code === 'P2002') {
-        await this.timingSoakDelay();
-        return uniformDuplicateResponse;
+        throw new ConflictAppException(
+          'An account with this email or phone number already exists. Please sign in instead.',
+        );
       }
       throw error;
     }
@@ -203,10 +194,4 @@ export class RegisterSellerUseCase {
     };
   }
 
-  private timingSoakDelay(): Promise<void> {
-    const min = RegisterSellerUseCase.DUPLICATE_TIMING_DELAY_MIN_MS;
-    const max = RegisterSellerUseCase.DUPLICATE_TIMING_DELAY_MAX_MS;
-    const delay = min + Math.random() * (max - min);
-    return new Promise((resolve) => setTimeout(resolve, delay));
-  }
 }

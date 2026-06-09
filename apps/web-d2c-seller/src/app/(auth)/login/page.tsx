@@ -21,6 +21,7 @@ export default function SellerLoginPage() {
   const [errors, setErrors] = useState<FormErrors>({});
   const [serverError, setServerError] = useState('');
   const [serverErrorType, setServerErrorType] = useState<'error' | 'warning' | 'info'>('error');
+  const [needsVerification, setNeedsVerification] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleBlur = (field: string, value: string) => {
@@ -43,6 +44,7 @@ export default function SellerLoginPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setServerError('');
+    setNeedsVerification(false);
 
     if (!validateAll()) {
       const firstErrorField = document.querySelector('[aria-invalid="true"]') as HTMLElement;
@@ -82,9 +84,8 @@ export default function SellerLoginPage() {
           const code = (err.body && (err.body as { code?: string }).code) ?? '';
           if (code === 'EMAIL_NOT_VERIFIED') {
             setServerErrorType('warning');
-            setServerError(
-              'Please verify your email before signing in. Use the link in the verification email or visit /register/verify to enter the code.',
-            );
+            setNeedsVerification(true);
+            setServerError('Please verify your email before signing in:');
           } else {
             setServerErrorType('info');
             setServerError(
@@ -121,6 +122,12 @@ export default function SellerLoginPage() {
         ? 'alert alert-info'
         : 'alert alert-error';
 
+  // Pre-fill the verify page with the email when the identifier is one; a phone
+  // login falls back to the bare verify page (which prompts for the email).
+  const verifyHref = identifier.includes('@')
+    ? `/register/verify?email=${encodeURIComponent(identifier.trim().toLowerCase())}`
+    : '/register/verify';
+
   return (
     <div className="auth-page">
       <div className="auth-card">
@@ -139,6 +146,17 @@ export default function SellerLoginPage() {
         {serverError && (
           <div className={alertClass} role="alert">
             {serverError}
+            {needsVerification && (
+              <>
+                {' '}
+                <Link
+                  href={verifyHref}
+                  style={{ fontWeight: 600, textDecoration: 'underline' }}
+                >
+                  Verify your email →
+                </Link>
+              </>
+            )}
           </div>
         )}
 
