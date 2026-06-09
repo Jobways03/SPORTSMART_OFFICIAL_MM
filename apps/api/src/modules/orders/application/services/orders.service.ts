@@ -194,6 +194,9 @@ export class OrdersService {
     acceptStatus?: string;
     orderStatus?: string;
     search?: string;
+    // Phase 38 (admin breadth) — restrict to orders with ≥1 sub-order whose
+    // seller is in the admin's seller-type scope. undefined = unrestricted.
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[];
   }) {
     const {
       page,
@@ -203,6 +206,7 @@ export class OrdersService {
       acceptStatus,
       orderStatus,
       search,
+      allowedSellerTypes,
     } = filters;
     const skip = (page - 1) * limit;
 
@@ -228,6 +232,14 @@ export class OrdersService {
     if (fulfillmentStatus)
       subOrderFilter.fulfillmentStatus = fulfillmentStatus as any;
     if (acceptStatus) subOrderFilter.acceptStatus = acceptStatus as any;
+    // Phase 38 (admin breadth) — scope to in-type sellers, composed inside the
+    // sub-order `some`: an order matches when it has ≥1 sub-order that is both
+    // in-scope AND satisfies the status filters above.
+    if (allowedSellerTypes && allowedSellerTypes.length > 0) {
+      (subOrderFilter as any).seller = {
+        sellerType: { in: allowedSellerTypes },
+      };
+    }
     if (Object.keys(subOrderFilter).length > 0)
       where.subOrders = { some: subOrderFilter };
 

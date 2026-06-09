@@ -208,7 +208,7 @@ export default function AdminLoginPage() {
         <header className="auth-header">
           <span className="auth-badge">
             <span className="auth-badge-dot" aria-hidden="true" />
-            Seller Admin
+            Retail Seller Admin
           </span>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img

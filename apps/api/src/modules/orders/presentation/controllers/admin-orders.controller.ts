@@ -12,9 +12,15 @@ import {
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/guards';
+import {
+  AdminAuthGuard,
+  RolesGuard,
+  PermissionsGuard,
+  AdminOrderSellerScopeGuard,
+} from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { resolveScopedTypes } from '../../../../core/authorization/seller-scope';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { OrdersService } from '../../application/services/orders.service';
 import { OrderTimelineService } from '../../application/services/order-timeline.service';
@@ -30,7 +36,7 @@ import {
 
 @ApiTags('Admin Orders')
 @Controller('admin/orders')
-@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard, AdminOrderSellerScopeGuard)
 export class AdminOrdersController {
   constructor(
     private readonly ordersService: OrdersService,
@@ -84,6 +90,7 @@ export class AdminOrdersController {
     @Query('acceptStatus') acceptStatus?: string,
     @Query('orderStatus') orderStatus?: string,
     @Query('search') search?: string,
+    @Req() req?: any,
   ) {
     const data = await this.ordersService.listOrders({
       page: Math.max(1, parseInt(page || '1', 10) || 1),
@@ -93,6 +100,9 @@ export class AdminOrdersController {
       acceptStatus,
       orderStatus,
       search,
+      // Phase 38 (admin breadth) — restrict the list to the admin's seller-type
+      // scope (undefined = unrestricted).
+      allowedSellerTypes: resolveScopedTypes(req?.user?.permissions) ?? undefined,
     });
     return { success: true, message: 'Orders retrieved', data };
   }

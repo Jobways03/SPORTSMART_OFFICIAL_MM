@@ -14,8 +14,8 @@ interface AdminInfo {
   role: string;
 }
 
-function getInitials(name: string): string {
-  return name
+function getInitials(name?: string | null): string {
+  return ((name ?? '').trim() || '?')
     .split(' ')
     .filter(Boolean)
     .map(w => w[0])
@@ -133,15 +133,6 @@ export default function DashboardLayout({
     { href: '/dashboard/accounts', label: 'Accounts', icon: '&#128202;' },
     { href: '/dashboard/inventory', label: 'Inventory', icon: '&#128230;' },
     { href: '/dashboard/storefront', label: 'Storefront', icon: '&#128722;' },
-    // Marketing — drive the storefront home rails. Permissions reuse
-    // the existing content.* set (same as blog-posts admin). Services
-    // backing these links live in src/services/admin-*.service.ts.
-    { href: '/dashboard/flash-sales', label: 'Flash sales', icon: '&#128293;' },
-    { href: '/dashboard/events', label: 'Events', icon: '&#128197;' },
-    { href: '/dashboard/storefront-content', label: 'Storefront content', icon: '&#127912;' },
-    { href: '/dashboard/storefront-slots', label: 'Storefront slots', icon: '&#128279;' },
-    { href: '/dashboard/blog-posts', label: 'Blog posts', icon: '&#9999;' },
-    { href: '/dashboard/product-reviews', label: 'Reviews', icon: '&#11088;' },
     { href: '/dashboard/settings', label: 'Settings', icon: '&#9881;' },
   ];
 
@@ -165,7 +156,7 @@ export default function DashboardLayout({
               className="navbar-brand-name"
               style={{ height: 36, width: 'auto', display: 'block' }}
             />
-            <span className="navbar-brand-tag">SELLER ADMIN</span>
+            <span className="navbar-brand-tag">RETAIL SELLER ADMIN</span>
           </Link>
         </div>
 
@@ -178,8 +169,8 @@ export default function DashboardLayout({
               aria-haspopup="true"
             >
               <div className="navbar-user-info">
-                <div className="navbar-user-name">Seller Admin</div>
-                <div className="navbar-user-role">Seller Admin</div>
+                <div className="navbar-user-name">Retail Seller Admin</div>
+                <div className="navbar-user-role">Retail Seller Admin</div>
               </div>
               <div className="navbar-avatar">SA</div>
               <span className={`navbar-dropdown-arrow${dropdownOpen ? ' open' : ''}`}>
@@ -197,7 +188,7 @@ export default function DashboardLayout({
                     {admin.email}
                   </div>
                   <div style={{ fontSize: 11, color: 'var(--color-text-secondary)', marginTop: 2 }}>
-                    Seller Admin
+                    Retail Seller Admin
                   </div>
                 </div>
                 <Link

@@ -9,8 +9,8 @@ import { ApiError } from '@/lib/api-client';
 import { deriveBanner } from '@/lib/dashboard-banner';
 import './dashboard.css';
 
-function getInitials(name: string): string {
-  return name
+function getInitials(name?: string | null): string {
+  return ((name ?? '').trim() || '?')
     .split(' ')
     .filter(Boolean)
     .map((w) => w[0])

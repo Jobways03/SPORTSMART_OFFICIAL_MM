@@ -178,16 +178,6 @@ export const sellerAuthService = {
   },
 
   /**
-   * Phase 21 (2026-05-20) — cookie-validated session probe.
-   * Hits the SellerAuthGuard via GET /seller/auth/me. On 401 the
-   * caller knows the seller is not logged in. Replaces the
-   * sessionStorage-based "am I logged in?" pattern.
-   */
-  me(): Promise<ApiResponse<SellerMeData>> {
-    return apiClient<SellerMeData>('/seller/auth/me');
-  },
-
-  /**
    * Server-side logout — revokes the CURRENT SellerSession by default.
    * Pass `{ all: true }` to revoke every active SellerSession for the
    * seller (use this for "Log out of all devices"). Always clears the
@@ -201,15 +191,3 @@ export const sellerAuthService = {
     });
   },
 };
-
-export interface SellerMeData {
-  sellerId: string;
-  email: string;
-  sellerName: string;
-  sellerShopName: string;
-  phoneNumber: string;
-  status: string;
-  verificationStatus: string;
-  isEmailVerified: boolean;
-  sellerType: string | null;
-}

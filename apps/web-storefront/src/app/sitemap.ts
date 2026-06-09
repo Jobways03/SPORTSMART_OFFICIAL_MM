@@ -1,7 +1,7 @@
 import type { MetadataRoute } from 'next';
 
 const SITE_URL = process.env.NEXT_PUBLIC_STOREFRONT_URL || 'http://localhost:4005';
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 /**
  * Phase 8 (2026-05-16) — sitemap.xml for the storefront.
@@ -29,7 +29,7 @@ async function fetchProducts(): Promise<ApiProductForSitemap[]> {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 10_000);
-    const res = await fetch(`${API_URL}/storefront/sitemap/products?limit=10000`, {
+    const res = await fetch(`${API_URL}/api/v1/storefront/sitemap/products?limit=10000`, {
       signal: controller.signal,
       headers: { accept: 'application/json' },
     });

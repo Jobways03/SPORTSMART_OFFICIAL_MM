@@ -10,6 +10,9 @@ export interface ProductListParams {
   brandId?: string;
   sellerId?: string;
   hasSellers?: boolean;
+  // Phase 38 (admin breadth) — restrict to products whose OWNING seller is in
+  // the admin's seller-type scope (undefined = all).
+  allowedSellerTypes?: ('D2C' | 'RETAIL')[];
 }
 
 export interface SellerProductListParams {

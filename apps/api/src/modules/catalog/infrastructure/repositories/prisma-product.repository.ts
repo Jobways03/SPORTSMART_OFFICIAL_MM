@@ -51,13 +51,18 @@ export class PrismaProductRepository implements IProductRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAllPaginated(params: ProductListParams): Promise<ProductListResult> {
-    const { page, limit, search, status, moderationStatus, categoryId, sellerId, hasSellers } = params;
+    const { page, limit, search, status, moderationStatus, categoryId, sellerId, hasSellers, allowedSellerTypes } = params;
 
     const where: any = { isDeleted: false };
     if (status) where.status = status;
     if (moderationStatus) where.moderationStatus = moderationStatus;
     if (categoryId) where.categoryId = categoryId;
     if (sellerId) where.sellerId = sellerId;
+    // Phase 38 (admin breadth) — scope to products whose OWNING seller is in
+    // the admin's seller-type scope.
+    if (allowedSellerTypes && allowedSellerTypes.length > 0) {
+      where.seller = { sellerType: { in: allowedSellerTypes } };
+    }
     if (hasSellers) {
       where.OR = [
         ...(where.OR || []),

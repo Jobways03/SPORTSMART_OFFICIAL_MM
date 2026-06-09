@@ -14,6 +14,16 @@ export { AnyAuthGuard } from './any-auth.guard';
 // Phase 38 — D2C / RETAIL seller-type scoping. Stack after one of the
 // auth guards. See seller-type.guard.ts for the full pattern.
 export { D2cOnlyGuard, RetailOnlyGuard, type SellerType } from './seller-type.guard';
+// Phase 38 (admin enforcement) — DB-authoritative per-seller scope guard for
+// the /admin/sellers routes. Stacks after AdminAuthGuard.
+export { AdminSellerScopeGuard } from './admin-seller-scope.guard';
+// Phase 38 (breadth pass) — scope guards for order/sub-order/return/product
+// admin routes (keyed by entity id, not seller id).
+export {
+  AdminOrderSellerScopeGuard,
+  AdminReturnSellerScopeGuard,
+  AdminProductSellerScopeGuard,
+} from './entity-seller-scope.guard';
 // Phase 10 (PR 10.10) — step-up auth for destructive ops. Re-export
 // from core/step-up via the guards index so callers can pick up the
 // guard + decorator alongside the existing auth primitives.

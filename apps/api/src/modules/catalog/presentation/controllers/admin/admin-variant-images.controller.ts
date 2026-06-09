@@ -19,7 +19,7 @@ import { Request } from 'express';
 import { AppLoggerService } from '../../../../../bootstrap/logging/app-logger.service';
 import { NotFoundAppException } from '../../../../../core/exceptions';
 import { AppException } from '../../../../../core/exceptions/app.exception';
-import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard, AdminProductSellerScopeGuard } from '../../../../../core/guards';
 import { Permissions } from '../../../../../core/decorators/permissions.decorator';
 import { MediaStorageAdapter } from '../../../../../integrations/media/media-storage.adapter';
 import { FileService } from '../../../../files/application/services/file.service';
@@ -34,7 +34,7 @@ import {
 
 @ApiTags('Admin Products')
 @Controller('admin/products/:productId/variants/:variantId/images')
-@UseGuards(AdminAuthGuard, PermissionsGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard, AdminProductSellerScopeGuard)
 @Permissions('catalog.write')
 export class AdminVariantImagesController {
   constructor(

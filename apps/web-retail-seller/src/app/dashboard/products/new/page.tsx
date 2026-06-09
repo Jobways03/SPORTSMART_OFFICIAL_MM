@@ -7,6 +7,12 @@ import { sellerProductService } from '@/services/product.service';
 import { apiClient, ApiError } from '@/lib/api-client';
 import '../product-form.css';
 import { RichTextEditor, useModal } from '@sportsmart/ui';
+// Phase 39 (2026-05-21) — category metafield section.
+import {
+  CategoryMetafieldFormSection,
+  metafieldValuesToPayload,
+  type MetafieldValueEntry,
+} from '../components/CategoryMetafieldFormSection';
 
 // ----- Types -----
 
@@ -193,6 +199,10 @@ export default function CreateProductPage() {
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  // Phase 39 (2026-05-21) — category-metafield values for this product.
+  // Keyed by definition id. Empty entries are filtered out at payload
+  // build time so the backend doesn't see null upserts.
+  const [metafieldValues, setMetafieldValues] = useState<Record<string, MetafieldValueEntry>>({});
 
   // ----- Load categories and brands -----
 
@@ -330,6 +340,11 @@ export default function CreateProductPage() {
     if (form.taxInclusivePricing === false) payload.taxInclusivePricing = false;
 
     if (form.tags.length > 0) payload.tags = form.tags;
+
+    // Phase 39 (2026-05-21) — bundle category metafield values into
+    // the payload so the create call writes them in the same request.
+    const metafields = metafieldValuesToPayload(metafieldValues);
+    if (metafields.length > 0) payload.metafields = metafields;
 
     const seo: any = {};
     if (form.seoMetaTitle.trim()) seo.metaTitle = form.seoMetaTitle.trim();
@@ -539,6 +554,15 @@ export default function CreateProductPage() {
           </div>
         </div>
       </div>
+
+      {/* Phase 39 (2026-05-21) — category-driven metafield section.
+          Renders directly after BASIC INFORMATION so sellers see the
+          required fields right after picking a category. */}
+      <CategoryMetafieldFormSection
+        categoryId={form.categoryId || null}
+        values={metafieldValues}
+        onChange={setMetafieldValues}
+      />
 
       {/* Section 2: Product Type & Pricing */}
       <div className="form-card">

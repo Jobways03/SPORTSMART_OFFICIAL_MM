@@ -19,11 +19,14 @@ import {
   AdminAuthGuard,
   RolesGuard,
   PermissionsGuard,
+  AdminSellerScopeGuard,
   RequiresStepUp,
   StepUpGuard,
 } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { resolveSellerScope } from '../../../../core/authorization/seller-scope';
+import { ForbiddenAppException } from '../../../../core/exceptions/forbidden.exception';
 import { AdminListSellersUseCase } from '../../application/use-cases/admin-list-sellers.use-case';
 import { AdminGetSellerUseCase } from '../../application/use-cases/admin-get-seller.use-case';
 import { AdminEditSellerUseCase } from '../../application/use-cases/admin-edit-seller.use-case';
@@ -45,7 +48,7 @@ import { AdminUpdateSellerProfileDto } from '../dtos/admin-update-seller-profile
 
 @ApiTags('Admin Sellers')
 @Controller('admin/sellers')
-@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard, StepUpGuard)
+@UseGuards(AdminAuthGuard, RolesGuard, PermissionsGuard, AdminSellerScopeGuard, StepUpGuard)
 export class AdminSellersController {
   constructor(
     private readonly listSellersUseCase: AdminListSellersUseCase,
@@ -65,7 +68,24 @@ export class AdminSellersController {
 
   @Get()
   @Permissions('sellers.read')
-  async listSellers(@Query() query: AdminListSellersDto) {
+  async listSellers(@Query() query: AdminListSellersDto, @Req() req: Request) {
+    // Phase 38 (admin enforcement) — bound the list to the admin's
+    // authoritative seller-type scope (from permissions, not the header). A
+    // scoped admin that explicitly asks for a type outside its scope is
+    // rejected rather than silently widened.
+    const scope = resolveSellerScope((req as any).user?.permissions);
+    if (
+      !scope.unrestricted &&
+      query.sellerType &&
+      !scope.allowed.includes(query.sellerType)
+    ) {
+      throw new ForbiddenAppException(
+        `Your account is scoped to ${scope.allowed.join(', ')} sellers; ` +
+          `it cannot view ${query.sellerType} sellers.`,
+        'SELLER_TYPE_OUT_OF_SCOPE',
+      );
+    }
+
     const data = await this.listSellersUseCase.execute({
       page: query.page || 1,
       limit: query.limit || 20,
@@ -73,6 +93,7 @@ export class AdminSellersController {
       status: query.status,
       verificationStatus: query.verificationStatus,
       sellerType: query.sellerType,
+      allowedSellerTypes: scope.unrestricted ? undefined : scope.allowed,
       sortBy: query.sortBy,
       sortOrder: query.sortOrder,
       fromDate: query.fromDate,

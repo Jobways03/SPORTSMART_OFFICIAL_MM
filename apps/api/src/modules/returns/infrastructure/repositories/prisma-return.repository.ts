@@ -355,6 +355,7 @@ export class PrismaReturnRepository implements ReturnRepository {
       riskScoreMin,
       riskScoreMax,
       hasRiskScore,
+      allowedSellerTypes,
     } = params;
     const skip = (page - 1) * limit;
 
@@ -373,6 +374,14 @@ export class PrismaReturnRepository implements ReturnRepository {
       where.subOrder = {
         ...(where.subOrder as any),
         fulfillmentNodeType,
+      };
+    }
+    // Phase 38 (admin breadth) — scope to returns whose sub-order seller is in
+    // the admin's seller-type scope.
+    if (allowedSellerTypes && allowedSellerTypes.length > 0) {
+      where.subOrder = {
+        ...(where.subOrder as any),
+        seller: { sellerType: { in: allowedSellerTypes } },
       };
     }
     if (fromDate || toDate) {
@@ -893,12 +902,23 @@ export class PrismaReturnRepository implements ReturnRepository {
 
   // ── Analytics (Phase R6) ────────────────────────────────────────────────
 
-  async getAnalyticsSummary(params?: { fromDate?: Date; toDate?: Date }) {
+  async getAnalyticsSummary(params?: {
+    fromDate?: Date;
+    toDate?: Date;
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[];
+  }) {
     const dateFilter: Prisma.ReturnWhereInput = {};
     if (params?.fromDate || params?.toDate) {
       dateFilter.createdAt = {};
       if (params.fromDate) (dateFilter.createdAt as any).gte = params.fromDate;
       if (params.toDate) (dateFilter.createdAt as any).lte = params.toDate;
+    }
+    // Phase 38 (admin breadth) — scope to returns whose sub-order seller is in
+    // the admin's seller-type scope.
+    if (params?.allowedSellerTypes && params.allowedSellerTypes.length > 0) {
+      (dateFilter as any).subOrder = {
+        seller: { sellerType: { in: params.allowedSellerTypes } },
+      };
     }
 
     const returns = await this.prisma.return.findMany({
@@ -989,6 +1009,7 @@ export class PrismaReturnRepository implements ReturnRepository {
     fromDate: Date;
     toDate: Date;
     groupBy: 'day' | 'week' | 'month';
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[];
   }) {
     const truncFn =
       params.groupBy === 'day'
@@ -996,6 +1017,13 @@ export class PrismaReturnRepository implements ReturnRepository {
         : params.groupBy === 'week'
         ? 'week'
         : 'month';
+
+    // Phase 38 (admin breadth) — scope the trend to in-type sellers via a
+    // sub-order → seller subquery (keeps the outer columns unqualified).
+    const scopeClause =
+      params.allowedSellerTypes && params.allowedSellerTypes.length > 0
+        ? Prisma.sql`AND "sub_order_id" IN (SELECT so.id FROM sub_orders so JOIN sellers s ON s.id = so.seller_id WHERE s.seller_type::text IN (${Prisma.join(params.allowedSellerTypes)}))`
+        : Prisma.empty;
 
     const result = await this.prisma.$queryRaw<
       Array<{ period: Date; count: bigint; refund_amount: any }>
@@ -1005,7 +1033,7 @@ export class PrismaReturnRepository implements ReturnRepository {
         COUNT(*) as count,
         COALESCE(SUM("refund_amount"), 0) as refund_amount
       FROM returns
-      WHERE "created_at" >= ${params.fromDate} AND "created_at" <= ${params.toDate}
+      WHERE "created_at" >= ${params.fromDate} AND "created_at" <= ${params.toDate} ${scopeClause}
       GROUP BY period
       ORDER BY period ASC
     `;
@@ -1021,6 +1049,7 @@ export class PrismaReturnRepository implements ReturnRepository {
     limit: number,
     fromDate?: Date,
     toDate?: Date,
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[],
   ) {
     const where: Prisma.ReturnItemWhereInput = {};
     if (fromDate || toDate) {
@@ -1031,6 +1060,14 @@ export class PrismaReturnRepository implements ReturnRepository {
           ...((where.return as any).createdAt || {}),
           lte: toDate,
         };
+    }
+    // Phase 38 (admin breadth) — scope to in-type sellers (ReturnItem → return
+    // → subOrder → seller).
+    if (allowedSellerTypes && allowedSellerTypes.length > 0) {
+      where.return = {
+        ...((where.return as any) || {}),
+        subOrder: { seller: { sellerType: { in: allowedSellerTypes } } },
+      };
     }
 
     const results = await this.prisma.returnItem.groupBy({
@@ -1049,18 +1086,24 @@ export class PrismaReturnRepository implements ReturnRepository {
     }));
   }
 
-  async getReturnsByCustomer(customerId: string) {
+  async getReturnsByCustomer(customerId: string, allowedSellerTypes?: ('D2C' | 'RETAIL')[]) {
+    // Phase 38 (admin breadth) — scope to in-type sellers.
+    const sellerFilter: Prisma.ReturnWhereInput =
+      allowedSellerTypes && allowedSellerTypes.length > 0
+        ? { subOrder: { seller: { sellerType: { in: allowedSellerTypes } } } }
+        : {};
     const [totalReturns, refundedAgg, recentReturns] = await Promise.all([
-      this.prisma.return.count({ where: { customerId } }),
+      this.prisma.return.count({ where: { customerId, ...sellerFilter } }),
       this.prisma.return.aggregate({
         where: {
           customerId,
+          ...sellerFilter,
           status: { in: ['REFUNDED', 'COMPLETED'] },
         },
         _sum: { refundAmount: true },
       }),
       this.prisma.return.findMany({
-        where: { customerId },
+        where: { customerId, ...sellerFilter },
         include: {
           items: true,
           masterOrder: { select: { orderNumber: true } },

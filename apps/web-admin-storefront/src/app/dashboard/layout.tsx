@@ -7,8 +7,8 @@ import { apiClient } from '@/lib/api-client';
 import { PermissionsProvider, usePermissions } from '@/lib/permissions';
 import './dashboard.css';
 
-function getInitials(name: string): string {
-  return name
+function getInitials(name?: string | null): string {
+  return ((name ?? '').trim() || '?')
     .split(' ')
     .filter(Boolean)
     .map((w) => w[0])
