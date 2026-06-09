@@ -189,9 +189,21 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         ? body
         : (body as Record<string, unknown>)?.message as string ||
           err.message;
+    // Preserve an explicit `code` carried in the exception's response object —
+    // e.g. ForbiddenException({ code: 'STEP_UP_REQUIRED', ... }) thrown by the
+    // permissions / step-up guards. Hardcoding 'HTTP_ERROR' here dropped that
+    // code, which broke the client-side step-up interceptor (it keys on
+    // body.code === 'STEP_UP_REQUIRED' to auto-open the MFA TOTP prompt and
+    // retry). Falls back to 'HTTP_ERROR' when the exception carries no code.
+    const explicitCode =
+      typeof body === 'object' &&
+      body !== null &&
+      typeof (body as { code?: unknown }).code === 'string'
+        ? (body as { code: string }).code
+        : undefined;
     return {
       status,
-      code: 'HTTP_ERROR',
+      code: explicitCode ?? 'HTTP_ERROR',
       title: this.titleForStatus(status),
       detail,
     };

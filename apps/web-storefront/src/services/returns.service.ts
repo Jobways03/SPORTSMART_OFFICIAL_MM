@@ -16,7 +16,9 @@ export interface ReturnEligibility {
       sku: string | null;
       imageUrl: string | null;
       quantity: number;
-      unitPrice: number;
+      // API returns the unit price in PAISE as a string (Phase 92 —
+      // BigInt-safe). Divide by 100 for rupees before display.
+      unitPriceInPaise: string;
       alreadyReturnedQty: number;
       availableForReturn: number;
       eligible: boolean;

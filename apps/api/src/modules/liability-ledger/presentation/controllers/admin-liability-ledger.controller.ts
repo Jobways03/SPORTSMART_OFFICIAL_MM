@@ -33,11 +33,11 @@ import { randomUUID } from 'crypto';
  * on sourceType + sourceId let finance trace every cost attribution
  * back to the dispute or return that triggered it.
  *
- * Permission: `refunds.approve` — finance role already has this for
- * the RefundInstruction approval queue, and these tables are the
- * downstream record of the same decisions, so the same role gates
- * both surfaces. A separate `ledger.read` slug could be carved out
- * later if we want a stricter split.
+ * Permissions: reads use `liability_ledger.read` (MEDIUM — no MFA step-up,
+ * so the browse page loads); the manual-debit / cancel writes keep their
+ * dedicated `liability_ledger.write` / `liability_ledger.cancel` (HIGH).
+ * The read route previously reused `refunds.approve`, but that's CRITICAL
+ * and forced a fresh MFA step-up on every GET, 403-ing the whole view.
  */
 const VALID_TYPES = ['seller_debit', 'logistics_claim', 'platform_expense'] as const;
 type LedgerType = (typeof VALID_TYPES)[number];
@@ -61,7 +61,14 @@ export class AdminLiabilityLedgerController {
    * of the BigInt.prototype.toJSON shim).
    */
   @Get(':type')
-  @Permissions('refunds.approve')
+  // Read-only ledger browse. Gated on liability_ledger.read (MEDIUM) — the
+  // dedicated read permission carved out in Phase 150 and already used by
+  // pendingSummary below. It was previously `refunds.approve`, which is
+  // classified CRITICAL and therefore demands a fresh MFA step-up on EVERY
+  // request — that 403'd the whole page just to VIEW the ledger. Reads
+  // shouldn't require step-up; the sensitive WRITE/CANCEL routes keep their
+  // HIGH permissions.
+  @Permissions('liability_ledger.read')
   async list(
     @Param('type') type: string,
     @Query('sourceType') sourceType?: string,

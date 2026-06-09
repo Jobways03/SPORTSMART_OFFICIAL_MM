@@ -30,12 +30,12 @@ export interface CheckoutData {
 }
 
 export interface PlaceOrderPayload {
-  /** v1 mobile flow only supports ONLINE. COD support requires extra UI
-   *  for the cash-handling consent step which web has but mobile defers. */
   paymentMethod: 'ONLINE' | 'COD';
   shippingOptionId?: string | null;
   couponCode?: string;
   referralCode?: string;
+  // Wallet amount (paise) the buyer chose to apply. The server clamps it to
+  // min(balance, order total) and debits it at place-order; omit/0 = no wallet.
   walletApplyAmountInPaise?: number;
 }
 

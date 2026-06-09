@@ -1280,14 +1280,17 @@ export class ReturnService {
       ret.subOrderId,
       `Return ${ret.returnNumber} rejected by admin — commission reinstated`,
     );
-    // Lock commission immediately if it hasn't been processed yet.
-    // The cron only picks up sub-orders past `returnWindowEndsAt`;
-    // a same-day rejection would otherwise stall the seller's payout
-    // for the rest of the window even though the case is closed.
-    await this.triggerImmediateCommission(
-      ret.subOrderId,
-      `return-rejected:${ret.returnNumber}`,
-    );
+    // Policy (2026-06-08): a rejected return must NOT lock the seller's
+    // commission immediately. The commission instead completes the normal
+    // return-window timing (deliveredAt + RETURN_WINDOW_DAYS) and is locked
+    // by the per-minute cron once that window elapses — the return is now
+    // terminal (REJECTED), so the cron's active-return skip no longer
+    // applies and it picks the sub-order up at window close. This keeps a
+    // rejected-return order on the SAME commission clock as a no-return
+    // order instead of paying the seller early.
+    // (Commission that was ALREADY locked before the return is still
+    // reinstated above via unfreezeCommissionForSubOrder — that money has
+    // already cleared its window, so it is not re-deferred here.)
 
     try {
       await this.eventBus.publish({
@@ -2337,15 +2340,12 @@ export class ReturnService {
         ret.subOrderId,
         `Return ${ret.returnNumber} rejected at QC — commission reinstated`,
       );
-      // Same as the pre-pickup reject path: if commission hasn't
-      // been processed yet (rare for QC because by the time the
-      // item reaches the warehouse the window has usually elapsed,
-      // but still possible in dev with the 2-min window), lock it
-      // now so the seller doesn't sit on hold past case closure.
-      await this.triggerImmediateCommission(
-        ret.subOrderId,
-        `qc-rejected:${ret.returnNumber}`,
-      );
+      // Policy (2026-06-08): a QC-rejected return must NOT lock commission
+      // immediately. Like the pre-pickup reject path, the commission
+      // completes the normal return-window timing and the cron locks it at
+      // window close (the return is terminal, so the active-return skip no
+      // longer applies). Same commission clock as a no-return order.
+      // (Already-locked commission is reinstated above, not re-deferred.)
     }
 
     try {

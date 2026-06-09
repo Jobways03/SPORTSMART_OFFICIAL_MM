@@ -89,6 +89,11 @@ interface SubOrderDetail {
   masterOrder: {
     orderNumber: string;
     paymentMethod: string;
+    // Wallet-aware payment label derived by the API (getSellerOrder). Prefer
+    // this over the raw paymentMethod so a wallet-paid order isn't shown as
+    // "Cash on Delivery".
+    paymentMethodLabel?: string;
+    walletAmountUsedInPaise?: string;
     createdAt: string;
     shippingAddressSnapshot: {
       fullName: string;
@@ -1503,7 +1508,7 @@ const { id } = useParams<{ id: string }>();
             </p>
             <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.8 }}>
               <div>Order Number: <strong>{mo.orderNumber}</strong></div>
-              <div>Payment Method: {mo.paymentMethod}</div>
+              <div>Payment Method: {mo.paymentMethodLabel ?? (mo.paymentMethod === 'COD' ? 'Cash on Delivery' : mo.paymentMethod === 'ONLINE' ? 'Online' : mo.paymentMethod)}</div>
               <div>Customer: {mo.customer.firstName} {mo.customer.lastName}</div>
               <div>Email: {mo.customer.email}</div>
             </div>

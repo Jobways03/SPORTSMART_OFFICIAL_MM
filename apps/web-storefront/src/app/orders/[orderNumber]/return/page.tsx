@@ -591,7 +591,7 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                           </div>
                         )}
                         <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-                          Price: {formatPrice(Number(item.unitPrice))} &middot; Available:{' '}
+                          Price: {formatPrice(Number(item.unitPriceInPaise) / 100)} &middot; Available:{' '}
                           {item.availableForReturn}
                         </div>
                         {state.selected && (
@@ -952,7 +952,7 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                         </div>
                       )}
                       <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
-                        Qty: {state.quantity} x {formatPrice(Number(item.unitPrice))}
+                        Qty: {state.quantity} x {formatPrice(Number(item.unitPriceInPaise) / 100)}
                       </div>
                       <div style={{ fontSize: 12, color: '#374151', marginTop: 4 }}>
                         <strong>Reason:</strong> {reasonLabel}
@@ -964,7 +964,7 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                       )}
                     </div>
                     <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap' }}>
-                      {formatPrice(Number(item.unitPrice) * state.quantity)}
+                      {formatPrice((Number(item.unitPriceInPaise) / 100) * state.quantity)}
                     </div>
                   </div>
                 );

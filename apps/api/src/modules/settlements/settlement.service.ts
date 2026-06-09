@@ -1295,6 +1295,12 @@ export class SettlementService {
       orderBy: { paidAt: 'desc' },
       select: {
         totalSettlementAmount: true,
+        // Statutory + commission-GST deductions so the "Last Payout" KPI
+        // reflects the NET that actually hit the seller's bank, not the
+        // gross settlement amount.
+        tcsDeductedInPaise: true,
+        tdsDeductedInPaise: true,
+        totalCommissionGstInPaise: true,
         paidAt: true,
         utrReference: true,
       },
@@ -1325,7 +1331,16 @@ export class SettlementService {
       pendingSettlement: Number(pendingAgg._sum.totalSettlementAmount || 0),
       lastPayout: lastPayout
         ? {
-            amount: Number(lastPayout.totalSettlementAmount),
+            // NET actually wired = settlement − TCS − TDS − commission GST.
+            // (Mirrors the per-row net the seller UI computes; the gross
+            // settlement amount remains visible in the settlement history
+            // row + its breakdown.)
+            amount:
+              (Math.round(Number(lastPayout.totalSettlementAmount) * 100) -
+                Number(lastPayout.tcsDeductedInPaise ?? 0) -
+                Number(lastPayout.tdsDeductedInPaise ?? 0) -
+                Number(lastPayout.totalCommissionGstInPaise ?? 0)) /
+              100,
             paidAt: lastPayout.paidAt,
             utrReference: lastPayout.utrReference,
           }
@@ -1831,6 +1846,18 @@ export class SettlementService {
       if (adj.settlement.status === 'PAID' || adj.settlement.cycle.status === 'PAID') {
         throw new BadRequestAppException(
           'Cannot void an adjustment on a paid settlement/cycle; use the reversal flow.',
+        );
+      }
+      // Phase 153 — symmetry with recordAdjustment (lines 1708–1719): a
+      // settlement locked into an active payout batch has already had its net
+      // snapshotted onto the Payout row + (likely) exported to the bank file.
+      // Voiding an adjustment now moves the settlement net while the batch pays
+      // the stale amount — the same reconciliation break recordAdjustment
+      // refuses. Cancel the batch (which releases the lock), then void.
+      if (adj.settlement.payoutBatchId) {
+        throw new BadRequestAppException(
+          'Cannot void an adjustment on a settlement that is in an active payout batch ' +
+            `(${adj.settlement.payoutBatchId}). Cancel the batch to release it, or use the reversal flow.`,
         );
       }
 

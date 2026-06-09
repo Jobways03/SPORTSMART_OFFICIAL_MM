@@ -383,6 +383,10 @@ export const PERMISSIONS = {
   'franchise.approve':      'Approve franchise onboarding + verification',
   'franchise.suspend':      'Suspend / reactivate franchises',
   'franchise.finance':      'Adjustments + penalties on franchise ledger',
+  // Read-only view of a franchise's finance surface (ledger / balance /
+  // penalty-approval queue). Split from the CRITICAL `franchise.finance` so the
+  // browse pages don't demand an MFA step-up just to load.
+  'franchise.finance.read': 'View franchise ledger / balance / penalty-approval queue',
   // Phase 181 (#11) — approve/reject a high-value franchise penalty (2-person).
   'franchise.penalty.approve': 'Approve or reject a high-value franchise penalty',
   'franchise.inventory':    'View franchise inventory + ledger',
@@ -702,6 +706,10 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
   'customers.impersonate':  'CRITICAL',
   'franchise.suspend':      'HIGH',
   'franchise.finance':      'CRITICAL',
+  // Read-only — MEDIUM so the franchise finance browse pages load without an
+  // MFA step-up. The CRITICAL write perms above still gate the adjustment /
+  // penalty mutations.
+  'franchise.finance.read': 'MEDIUM',
   'franchise.penalty.approve': 'CRITICAL',
   'franchise.procurement_pricing': 'CRITICAL',
   'franchise.pincodes.write': 'HIGH',

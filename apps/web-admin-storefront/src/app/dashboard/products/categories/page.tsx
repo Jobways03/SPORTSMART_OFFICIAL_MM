@@ -313,25 +313,30 @@ const [categories, setCategories] = useState<Category[]>([]);
       ) : categories.length === 0 ? (
         <p style={{ fontSize: 13, color: '#9ca3af' }}>No categories found.</p>
       ) : (
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
-          <thead>
-            <tr style={{ borderBottom: '2px solid #e5e7eb', background: '#f9fafb' }}>
-              <th style={{ width: 30 }} aria-label="Drag handle" />
-              <th style={{ textAlign: 'left', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Name</th>
-              <th style={{ textAlign: 'left', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Slug</th>
-              <th style={{ textAlign: 'left', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Parent</th>
-              <th style={{ textAlign: 'center', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Products</th>
-              <th style={{ textAlign: 'center', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Children</th>
-              <th style={{ textAlign: 'center', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Attributes</th>
-              <th style={{ textAlign: 'center', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Active</th>
-              <th style={{ textAlign: 'center', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Actions</th>
-            </tr>
-          </thead>
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
-          >
+        // dnd-kit's <DndContext> renders hidden accessibility / live-region
+        // <div>s, so it must wrap the <table> from the OUTSIDE — a <div> can't
+        // be a direct child of <table> (that was the hydration error). The
+        // <SortableContext> renders no DOM of its own, so it safely sits
+        // between <table> and <tbody>.
+        <DndContext
+          sensors={sensors}
+          collisionDetection={closestCenter}
+          onDragEnd={handleDragEnd}
+        >
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, overflow: 'hidden' }}>
+            <thead>
+              <tr style={{ borderBottom: '2px solid #e5e7eb', background: '#f9fafb' }}>
+                <th style={{ width: 30 }} aria-label="Drag handle" />
+                <th style={{ textAlign: 'left', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Name</th>
+                <th style={{ textAlign: 'left', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Slug</th>
+                <th style={{ textAlign: 'left', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Parent</th>
+                <th style={{ textAlign: 'center', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Products</th>
+                <th style={{ textAlign: 'center', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Children</th>
+                <th style={{ textAlign: 'center', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Attributes</th>
+                <th style={{ textAlign: 'center', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Active</th>
+                <th style={{ textAlign: 'center', padding: '10px 14px', fontWeight: 600, color: '#6b7280' }}>Actions</th>
+              </tr>
+            </thead>
             <SortableContext items={categories.map((c) => c.id)} strategy={verticalListSortingStrategy}>
               <tbody>
                 {categories.map((cat) => (
@@ -345,8 +350,8 @@ const [categories, setCategories] = useState<Category[]>([]);
                 ))}
               </tbody>
             </SortableContext>
-          </DndContext>
-        </table>
+          </table>
+        </DndContext>
       )}
 
       {/* Pagination */}

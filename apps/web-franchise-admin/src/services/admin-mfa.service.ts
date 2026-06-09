@@ -42,16 +42,40 @@ export function completeMfaEnrollment(
 
 // ── Step-up ──────────────────────────────────────────────────────────────
 
+export interface MfaStepUpResponse {
+  stepUpVerifiedAt: string;
+  stepUpExpiresAt: string;
+  usedBackupCode: boolean;
+}
+
 /**
  * POST /admin/mfa/step-up — stamps stepUpVerifiedAt=now so @RequiresStepUp()
- * routes accept the session for the step-up window. Accepts a 6-digit TOTP or
- * a XXXXX-XXXXX backup code. (Used by the Accounts settlement actions later.)
+ * routes accept the session for the step-up window. Accepts a 6-digit TOTP, a
+ * XXXXX-XXXXX backup code, or a 6-digit emailed step-up code (see
+ * requestStepUpEmailOtp). Wired into the shared api-client's STEP_UP_REQUIRED
+ * interceptor via StepUpHandlerProvider.
  */
-export function stepUp(code: string): Promise<ApiResponse<null>> {
-  return apiClient<null>('/admin/mfa/step-up', {
+export function stepUp(
+  code: string,
+): Promise<ApiResponse<MfaStepUpResponse>> {
+  return apiClient<MfaStepUpResponse>('/admin/mfa/step-up', {
     method: 'POST',
     body: JSON.stringify({ code }),
   });
+}
+
+/**
+ * POST /admin/mfa/step-up/email/request — emails a 6-digit step-up code that
+ * stepUp() then accepts. The alternative to an authenticator app for admins
+ * without TOTP enrollment.
+ */
+export function requestStepUpEmailOtp(): Promise<
+  ApiResponse<{ otpExpiresIn: number; maskedEmail: string }>
+> {
+  return apiClient<{ otpExpiresIn: number; maskedEmail: string }>(
+    '/admin/mfa/step-up/email/request',
+    { method: 'POST' },
+  );
 }
 
 // ── Login challenge (called from the login page) ─────────────────────────
@@ -82,6 +106,31 @@ export function verifyMfaChallenge(
   input: MfaVerifyChallengeInput,
 ): Promise<ApiResponse<MfaVerifyChallengeResponse>> {
   return apiClient<MfaVerifyChallengeResponse>('/admin/auth/mfa-verify', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+// Email-OTP MFA alternative to the authenticator at login. requestMfaEmailOtp
+// emails a 6-digit code; verifyMfaEmailOtp redeems it (separate endpoint from
+// verifyMfaChallenge because an emailed OTP and a TOTP code are both 6 digits
+// and the backend can't tell them apart by shape).
+
+/** POST /admin/auth/mfa-email/request — emails a 6-digit login OTP. */
+export function requestMfaEmailOtp(
+  challengeToken: string,
+): Promise<ApiResponse<{ otpExpiresIn: number }>> {
+  return apiClient<{ otpExpiresIn: number }>('/admin/auth/mfa-email/request', {
+    method: 'POST',
+    body: JSON.stringify({ challengeToken }),
+  });
+}
+
+/** POST /admin/auth/mfa-email/verify — redeems the emailed login OTP. */
+export function verifyMfaEmailOtp(
+  input: MfaVerifyChallengeInput,
+): Promise<ApiResponse<MfaVerifyChallengeResponse>> {
+  return apiClient<MfaVerifyChallengeResponse>('/admin/auth/mfa-email/verify', {
     method: 'POST',
     body: JSON.stringify(input),
   });

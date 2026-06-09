@@ -311,6 +311,10 @@ export class PrismaOrderRepository implements OrderRepository {
             orderStatus: true,
             shippingAddressSnapshot: true,
             paymentMethod: true,
+            // Needed for the wallet-aware payment label so the seller view
+            // doesn't show a wallet-paid order as "Cash on Delivery".
+            totalAmount: true,
+            walletAmountUsedInPaise: true,
             createdAt: true,
             customer: {
               select: {

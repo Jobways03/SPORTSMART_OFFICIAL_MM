@@ -8,30 +8,27 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { registerStepUpHandler, type StepUpHandler } from '@sportsmart/shared-utils';
-import { adminMfaService } from '../services/admin-auth.service';
+import { registerStepUpHandler, type StepUpHandler } from '@/lib/api';
+import { adminMfaService } from '@/services/admin-mfa.service';
 
 /**
- * Phase 26 (2026-05-20) — Admin step-up recovery UX.
+ * Admin step-up recovery UX (mirrors web-admin-storefront's
+ * StepUpHandlerProvider). Plugs into this app's api-helper STEP_UP_REQUIRED
+ * interceptor (see src/lib/api.ts). When a destructive route returns 403
+ * with `code: 'STEP_UP_REQUIRED'`, the interceptor calls our handler, which:
  *
- * Plugs into the shared api-client's STEP_UP_REQUIRED interceptor.
- * When a destructive route returns 403 with `code: 'STEP_UP_REQUIRED'`,
- * the interceptor calls our handler, which:
- *
- *   1. Opens a modal with a TOTP / backup-code input. If the modal is
- *      already open (a parallel request is also stalled on step-up),
- *      the new caller awaits the same in-flight promise — one verify
- *      satisfies every queued request.
- *   2. POSTs the code to /admin/mfa/step-up. On success, resolves the
- *      handler with `true` so the interceptor retries the original
- *      request(s).
+ *   1. Opens a modal with a code input. If the modal is already open (a
+ *      parallel request is also stalled on step-up), the new caller awaits
+ *      the same in-flight promise — one verify satisfies every queued request.
+ *   2. POSTs the code to /admin/mfa/step-up. On success, resolves the handler
+ *      with `true` so the interceptor retries the original request(s).
  *   3. On cancel / dismiss, resolves with `false` so the original 403
  *      propagates to the caller (which surfaces the error normally).
  *
- * No timer ticking down inside the modal — the freshness window is a
- * backend concept; the modal closes as soon as step-up succeeds and
- * the user gets a normal countdown via /admin/mfa/status (rendered
- * outside this component when needed).
+ * NOTE: this app's apiFetch returns the unwrapped data on success and THROWS
+ * on failure (unlike the shared apiClient, which returns an envelope with
+ * `.success`). So success here is "the call didn't throw", and the catch
+ * block surfaces the ApiError message.
  */
 interface PendingRequest {
   resolve: (v: boolean) => void;
@@ -117,12 +114,9 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
       setSubmitting(true);
       setErrorText(null);
       try {
-        const res = await adminMfaService.stepUp(trimmed);
-        if (res?.success) {
-          resolveAll(true);
-        } else {
-          setErrorText(res?.message ?? 'Step-up failed. Try again.');
-        }
+        // apiFetch throws on failure, so reaching the next line means success.
+        await adminMfaService.stepUp(trimmed);
+        resolveAll(true);
       } catch (err) {
         const msg =
           (err as { body?: { message?: string } })?.body?.message ??
@@ -142,12 +136,8 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
     setEmailSending(true);
     setErrorText(null);
     try {
-      const res = await adminMfaService.requestStepUpEmailOtp();
-      if (res?.success) {
-        setEmailSentTo(res.data?.maskedEmail ?? 'your email');
-      } else {
-        setErrorText(res?.message ?? 'Could not email a code. Try again.');
-      }
+      const data = await adminMfaService.requestStepUpEmailOtp();
+      setEmailSentTo(data?.maskedEmail ?? 'your email');
     } catch (err) {
       const msg =
         (err as { body?: { message?: string } })?.body?.message ??

@@ -141,6 +141,9 @@ export class FranchiseOrdersService {
             shippingAddressSnapshot: true,
             totalAmount: true,
             paymentMethod: true,
+            // Needed for the wallet-aware payment label so a wallet-paid order
+            // isn't shown as "Cash on Delivery".
+            walletAmountUsedInPaise: true,
             paymentStatus: true,
             orderStatus: true,
             createdAt: true,
@@ -153,7 +156,7 @@ export class FranchiseOrdersService {
     if (!subOrder) {
       throw new NotFoundAppException('Order not found');
     }
-    return subOrder;
+    return this.withPaymentLabel(subOrder);
   }
 
   /**
@@ -173,6 +176,8 @@ export class FranchiseOrdersService {
             shippingAddressSnapshot: true,
             totalAmount: true,
             paymentMethod: true,
+            // Needed for the wallet-aware payment label (see getOrder).
+            walletAmountUsedInPaise: true,
             paymentStatus: true,
             orderStatus: true,
             createdAt: true,
@@ -185,7 +190,28 @@ export class FranchiseOrdersService {
     if (!subOrder) {
       throw new NotFoundAppException('Order not found');
     }
-    return subOrder;
+    return this.withPaymentLabel(subOrder);
+  }
+
+  /**
+   * Attach the wallet-aware payment label to a sub-order's master so the
+   * franchise portal + franchise-admin views don't show a wallet-paid order as
+   * "Cash on Delivery". Reuses OrdersService.deriveEffectivePaymentLabel so the
+   * logic stays in one place. The wallet amount is stringified (BigInt-safe).
+   */
+  private withPaymentLabel<T extends { masterOrder?: any }>(subOrder: T): T {
+    const master: any = subOrder.masterOrder ?? {};
+    return {
+      ...subOrder,
+      masterOrder: {
+        ...master,
+        paymentMethodLabel: this.ordersService.deriveEffectivePaymentLabel(master),
+        walletAmountUsedInPaise:
+          master.walletAmountUsedInPaise != null
+            ? master.walletAmountUsedInPaise.toString()
+            : '0',
+      },
+    };
   }
 
   // ── Accept order ──────────────────────────────────────────────────────

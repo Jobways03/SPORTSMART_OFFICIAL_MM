@@ -161,6 +161,29 @@ export class AdminMfaController {
     };
   }
 
+  // Email-OTP step-up — step A: email the logged-in admin a 6-digit code that
+  // POST /admin/mfa/step-up will then accept (alternative to TOTP/backup). No
+  // step-up guard here (this GRANTS step-up); just an authenticated session.
+  @Post('step-up/email/request')
+  @HttpCode(HttpStatus.OK)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  async requestStepUpEmail(@Req() req: Request) {
+    const adminId = (req as unknown as { adminId?: string }).adminId;
+    const sessionId = (req as unknown as { sessionId?: string }).sessionId;
+    if (!adminId || !sessionId) {
+      throw new UnauthorizedException('Admin session not found');
+    }
+    const data = await this.mfaService.requestStepUpEmailOtp(adminId, sessionId, {
+      ipAddress: req.ip ?? null,
+      userAgent: req.headers['user-agent'] ?? null,
+    });
+    return {
+      success: true,
+      message: 'A 6-digit step-up code has been emailed to you.',
+      data,
+    };
+  }
+
   // Phase 25 (2026-05-20) — MFA status read endpoint. Lets the
   // admin frontend show "MFA: Enabled • N backup codes left" without
   // having to attempt an operation. The /me endpoint deliberately

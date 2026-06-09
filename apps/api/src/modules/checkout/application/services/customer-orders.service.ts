@@ -1,4 +1,4 @@
-import { Injectable, Inject, Logger } from '@nestjs/common';
+import { Injectable, Inject, Logger, Optional } from '@nestjs/common';
 import {
   CHECKOUT_REPOSITORY,
   ICheckoutRepository,
@@ -9,6 +9,7 @@ import {
 } from '../../../../core/exceptions';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
+import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
 
 @Injectable()
 export class CustomerOrdersService {
@@ -22,6 +23,10 @@ export class CustomerOrdersService {
     // on customer-initiated cancel. AuditModule is @Global() so no
     // module wiring is required.
     private readonly audit: AuditPublicFacade,
+    // Wallet refund on cancel. WalletModule is imported by CheckoutModule;
+    // @Optional so the direct-construction spec harnesses still compile.
+    @Optional()
+    private readonly walletFacade?: WalletPublicFacade,
   ) {}
 
   // ── Legacy place-order ─────────────────────────────────────────────────
@@ -119,6 +124,37 @@ export class CustomerOrdersService {
     }
 
     await this.repo.cancelOrderTransaction(order);
+
+    // Refund the wallet portion. Wallet is debited at checkout (ORDER_REDEMPTION,
+    // master-level) regardless of payment status, so a wallet-paid order
+    // cancelled BEFORE delivery must have that money returned — otherwise the
+    // customer loses it for an order that never shipped. cancelOrderTransaction
+    // always cancels the WHOLE master + every sub, so a single full-amount
+    // refund is correct here. Routed through the durable, idempotent checkout-
+    // cancellation refund saga (dedups on orderId+customerId+amountInPaise,
+    // retries, finance-alerts on abandon) — NOT a one-shot credit that a
+    // transient failure would silently lose. The PAID/ONLINE split-refund saga
+    // does not run for these (PENDING) wallet orders, so there is no double
+    // refund; and the saga's tuple can't collide with a place-order-crash comp.
+    const walletPaise = Number(order.walletAmountUsedInPaise ?? 0);
+    if (walletPaise > 0 && this.walletFacade) {
+      try {
+        await this.walletFacade.enqueueCheckoutCancellationRefund({
+          customerId: userId,
+          orderId: order.id,
+          amountInPaise: walletPaise,
+          reason: `Order ${orderNumber} cancelled before delivery — wallet refund`,
+        });
+      } catch (err) {
+        // The saga row + retry cron own recovery; a synchronous enqueue hiccup
+        // must not block the cancel the customer already earned.
+        this.logger.error(
+          `Failed to enqueue wallet cancellation refund for order ${orderNumber}: ${
+            (err as Error)?.message
+          }`,
+        );
+      }
+    }
 
     // Propagate the cancellation to the courier. A Delhivery sub-order that was
     // already BOOKED (has an AWB — e.g. PACKED before this cancel) must have its

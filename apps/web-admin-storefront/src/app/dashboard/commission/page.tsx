@@ -276,6 +276,8 @@ export default function StorefrontCommissionPage() {
         </p>
       </div>
 
+      <CommissionRatePanel />
+
       <KpiStrip
         loading={loading && !data}
         totalRecords={data?.pagination.total ?? 0}
@@ -850,6 +852,98 @@ function Skeleton() {
           <div style={{ width: 80, height: 16, background: '#F3F4F6', borderRadius: 4 }} />
         </div>
       ))}
+    </div>
+  );
+}
+
+// Global platform commission rate (margin %). The seller-commission RATE has no
+// other admin UI — it lives in the commission_settings singleton, read/written
+// via GET/PUT /admin/commission/settings. The PUT is CRITICAL-gated so it forces
+// an MFA step-up; the shared StepUpHandler interceptor auto-prompts for the TOTP
+// and retries, so no manual step-up call is needed here.
+function CommissionRatePanel() {
+  const { hasPermission } = usePermissions();
+  const canEdit = hasPermission('settlements.approve');
+  const [rate, setRate] = useState('');
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [msg, setMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
+
+  useEffect(() => {
+    apiClient<{ commissionValue?: number | string }>('/admin/commission/settings')
+      .then((res) => {
+        if (res.data?.commissionValue != null) setRate(String(res.data.commissionValue));
+      })
+      .catch((err) => console.warn(err))
+      .finally(() => setLoaded(true));
+  }, []);
+
+  const save = async () => {
+    const value = Number(rate);
+    if (!Number.isFinite(value) || value < 0 || value > 100) {
+      setMsg({ kind: 'err', text: 'Enter a rate between 0 and 100 (%).' });
+      return;
+    }
+    setSaving(true);
+    setMsg(null);
+    try {
+      await apiClient('/admin/commission/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ commissionType: 'MARGIN_BASED', commissionValue: value }),
+      });
+      setMsg({ kind: 'ok', text: `Saved — platform keeps ${value}% of each item going forward.` });
+    } catch (err) {
+      setMsg({ kind: 'err', text: err instanceof Error ? err.message : 'Could not save the rate.' });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div style={{
+      background: '#fff', border: '1px solid #E5E7EB', borderRadius: 14,
+      padding: 16, marginBottom: 16,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 320px' }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: '#0F1115' }}>
+            Platform commission rate (margin)
+          </div>
+          <p style={{ marginTop: 4, fontSize: 12, color: '#525A65', lineHeight: 1.5, maxWidth: 640 }}>
+            Global default for new commissions — the platform keeps this % of each item and the
+            seller is paid the rest. Approved per-product seller mappings override it. Applies to
+            future records only; existing records are unchanged.
+          </p>
+        </div>
+        <Field label="Rate (%)" style={{ flex: '0 1 130px' }}>
+          <input
+            type="number" min={0} max={100} step="0.1"
+            value={rate}
+            onChange={(e) => setRate(e.target.value)}
+            disabled={!canEdit || !loaded || saving}
+            style={input}
+          />
+        </Field>
+        {canEdit && (
+          <button
+            onClick={save}
+            disabled={saving || !loaded}
+            style={saving ? { ...btnPrimary, opacity: 0.6, cursor: 'wait' } : btnPrimary}
+          >
+            {saving ? 'Saving…' : 'Save rate'}
+          </button>
+        )}
+      </div>
+      {!canEdit && loaded && (
+        <p style={{ marginTop: 8, fontSize: 12, color: '#9CA3AF' }}>
+          Read-only — the settlements.approve permission is required to change the rate.
+        </p>
+      )}
+      {msg && (
+        <p style={{ marginTop: 8, fontSize: 12, color: msg.kind === 'ok' ? '#0B8457' : '#DC2626' }}>
+          {msg.text}
+        </p>
+      )}
     </div>
   );
 }

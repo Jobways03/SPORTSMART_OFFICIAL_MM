@@ -72,7 +72,7 @@ interface SettlementCycle {
 }
 
 interface CycleListResponse {
-  cycles: SettlementCycle[];
+  items: SettlementCycle[];
   pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
@@ -886,7 +886,7 @@ export default function AdminCommissionPage() {
           )}
 
           {/* Cycles list */}
-          {!cycles || cycles.cycles.length === 0 ? (
+          {!cycles || cycles.items.length === 0 ? (
             <div style={{ textAlign: 'center', padding: 60 }}>
               <h3 style={{ fontWeight: 600, marginBottom: 8 }}>No settlement cycles yet</h3>
               <p style={{ color: '#6b7280' }}>Create a settlement cycle using the form above.</p>
@@ -908,7 +908,7 @@ export default function AdminCommissionPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {cycles.cycles.map((c, i) => (
+                      {cycles.items.map((c, i) => (
                         <tr key={c.id} style={{ borderBottom: '1px solid #f3f4f6', background: i % 2 === 0 ? '#fff' : '#fafbfc' }}>
                           <td style={tdStyle}>{fmtDate(c.periodStart)} - {fmtDate(c.periodEnd)}</td>
                           <td style={{ ...tdStyle, textAlign: 'center' }}>{c._count.sellerSettlements}</td>

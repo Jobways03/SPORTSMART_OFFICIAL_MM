@@ -38,6 +38,7 @@ import { EWayBillService } from '../../../tax/application/services/eway-bill.ser
 // instead of swallowing the inconsistency in a log line. PaymentOpsModule is
 // @Global so no OrdersModule.imports change is needed.
 import { PaymentOpsFacade } from '../../../payments-ops/application/facades/payment-ops.facade';
+import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
 
 export type ReassignTarget =
   | { nodeType: 'SELLER'; nodeId: string }
@@ -156,6 +157,11 @@ export class OrdersService {
     // path falls back to a warn log when undefined.
     @Optional()
     private readonly paymentOps?: PaymentOpsFacade,
+    // Wallet refund on full-master cancel. @Optional so spec harnesses that
+    // construct OrdersService directly don't break; WalletModule provides it
+    // in the real app.
+    @Optional()
+    private readonly walletFacade?: WalletPublicFacade,
   ) {
     const days = this.env.getNumber('RETURN_WINDOW_DAYS', 14);
     this.returnWindowMs = Math.round(days * 24 * 60 * 60 * 1000);
@@ -357,6 +363,11 @@ export class OrdersService {
 
     return {
       ...order,
+      // Wallet-aware payment label (mirrors the customer + seller views). A
+      // full-wallet order reads "Paid by Wallet" instead of the raw COD/ONLINE
+      // base method; a partial wallet order shows "… (Wallet ₹X applied)". The
+      // raw `paymentMethod` is still spread above for anything that needs it.
+      paymentMethodLabel: this.deriveEffectivePaymentLabel(order),
       reassignmentLogs: enrichedLogs,
       discount,
       // Phase B / Phase C — discount-aware financial breakdown
@@ -1316,6 +1327,8 @@ export class OrdersService {
         paymentStatus: true,
         paymentMethod: true,
         totalAmountInPaise: true,
+        // Wallet portion (paise) so a full-master cancel can refund it.
+        walletAmountUsedInPaise: true,
         orderStatus: true,
       },
     });
@@ -1643,6 +1656,42 @@ export class OrdersService {
       this.logger.error(
         `Sub-order ${subOrderId} cancelled with paymentStatus=PAID but RefundInstructionService not injected — manual refund required`,
       );
+    }
+
+    // Wallet-portion refund on cancel. Wallet is debited at checkout
+    // (ORDER_REDEMPTION, master-level) regardless of paymentStatus, so a
+    // wallet-paid order cancelled before delivery must get that money back.
+    // Fire ONLY when the WHOLE master is now cancelled (never on a partial
+    // multi-sub cancel) AND the PAID/ONLINE split-refund saga above did NOT
+    // already handle it (that path refunds the wallet portion via the split
+    // calculator — double-refunding here would be the bug). Routed through the
+    // SAME durable, idempotent checkout-cancellation refund saga the customer
+    // path uses (dedups on orderId+customerId+amount), so customer + admin
+    // cancels of one master collapse to a single wallet refund.
+    const splitSagaHandledWallet =
+      masterCtx.paymentStatus === 'PAID' &&
+      masterCtx.paymentMethod === 'ONLINE' &&
+      !!this.refundInstructions;
+    const masterWalletPaise = Number(masterCtx.walletAmountUsedInPaise ?? 0);
+    if (
+      newMasterStatus === 'CANCELLED' &&
+      !splitSagaHandledWallet &&
+      masterWalletPaise > 0 &&
+      this.walletFacade
+    ) {
+      try {
+        await this.walletFacade.enqueueCheckoutCancellationRefund({
+          customerId: masterCtx.customerId,
+          orderId: masterOrderId,
+          amountInPaise: masterWalletPaise,
+          reason: `Order ${masterCtx.orderNumber} cancelled before delivery — wallet refund`,
+        });
+      } catch (err) {
+        // Saga row + retry cron own recovery; never roll back the committed cancel.
+        this.logger.error(
+          `Failed to enqueue wallet cancellation refund for master ${masterOrderId}: ${(err as Error).message}`,
+        );
+      }
     }
 
     return result;
@@ -3569,7 +3618,21 @@ export class OrdersService {
       sellerId,
     );
     if (!subOrder) throw new NotFoundAppException('Order not found');
-    return subOrder;
+    // Surface the wallet-aware payment label on the master so the seller +
+    // seller-admin order views don't render a wallet-paid order as "Cash on
+    // Delivery". Derived from the master order's effective tender.
+    const master: any = (subOrder as any).masterOrder ?? {};
+    return {
+      ...subOrder,
+      masterOrder: {
+        ...master,
+        paymentMethodLabel: this.deriveEffectivePaymentLabel(master),
+        walletAmountUsedInPaise:
+          master.walletAmountUsedInPaise != null
+            ? master.walletAmountUsedInPaise.toString()
+            : '0',
+      },
+    };
   }
 
   async sellerAcceptOrder(
@@ -4939,7 +5002,9 @@ export class OrdersService {
    * — so derive the display string from walletAmountUsedInPaise vs the Decimal
    * total (the paise mirror is dual-write-gated and unreliable).
    */
-  private deriveEffectivePaymentLabel(o: any): string {
+  // Public so sibling services (e.g. FranchiseOrdersService, which injects
+  // OrdersService) can render the same wallet-aware payment label.
+  deriveEffectivePaymentLabel(o: any): string {
     const grossPaise = Math.round(Number(o?.totalAmount ?? 0) * 100);
     const walletPaise = Number(o?.walletAmountUsedInPaise ?? 0);
     const method = o?.paymentMethod;

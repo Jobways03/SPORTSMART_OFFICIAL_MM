@@ -50,6 +50,9 @@ import { TaxModule } from '../tax/module';
 // approve/reject now depend on for the ORDER_VERIFIED /
 // ORDER_REJECTED audit log rows.
 import { AuditModule } from '../audit/module';
+// Wallet refund on full-master cancel (OrdersService injects WalletPublicFacade).
+// WalletModule imports only Razorpay + Audit, so no cycle back to Orders.
+import { WalletModule } from '../wallet/module';
 // Phase 88 (2026-05-23) — Shipment Evidence Flow. Local provider so
 // the orders module's controllers + orders.service.ts can call the
 // typed-evidence orchestrator without creating an import cycle with
@@ -67,6 +70,7 @@ import { ShipmentEvidenceService } from '../shipping/application/services/shipme
     MoneyModule,
     forwardRef(() => TaxModule),
     AuditModule,
+    WalletModule,
   ],
   controllers: [
     AdminOrdersController,

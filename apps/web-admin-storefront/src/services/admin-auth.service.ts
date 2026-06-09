@@ -180,6 +180,17 @@ export const adminMfaService = {
     });
   },
 
+  // Email-OTP step-up — emails a 6-digit code that stepUp() then accepts.
+  // The alternative to an authenticator app (no TOTP enrollment needed).
+  requestStepUpEmailOtp(): Promise<
+    ApiResponse<{ otpExpiresIn: number; maskedEmail: string }>
+  > {
+    return apiClient<{ otpExpiresIn: number; maskedEmail: string }>(
+      '/admin/mfa/step-up/email/request',
+      { method: 'POST' },
+    );
+  },
+
   status(): Promise<ApiResponse<MfaStatusResponse>> {
     return apiClient<MfaStatusResponse>('/admin/mfa/status');
   },
