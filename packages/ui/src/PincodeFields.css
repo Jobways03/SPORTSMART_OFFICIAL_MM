@@ -1,0 +1,69 @@
+/* Shared PIN-code → address auto-fill block. Self-contained styling so the
+   component looks identical in every app (seller onboarding, profile pages,
+   storefront checkout/addresses). */
+
+.pin {
+  display: grid;
+  gap: 4px;
+}
+.pin__grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+.pin__field {
+  display: flex;
+  flex-direction: column;
+}
+.pin label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  margin: 14px 0 6px;
+  display: block;
+}
+.pin input,
+.pin select {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 13px;
+  font-size: 14px;
+  color: #111827;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 9px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.pin input::placeholder {
+  color: #9ca3af;
+}
+.pin input:focus,
+.pin select:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+/* a successfully auto-filled field gets a soft green wash but stays editable */
+.pin__input--filled {
+  background: #f0fdf4 !important;
+  border-color: #86efac !important;
+}
+.pin__note {
+  font-size: 12px;
+  margin-top: 5px;
+  color: #6b7280;
+}
+.pin__note--ok {
+  color: #16a34a;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.pin__note--err {
+  color: #dc2626;
+}
+
+@media (max-width: 560px) {
+  .pin__grid {
+    grid-template-columns: 1fr;
+  }
+}

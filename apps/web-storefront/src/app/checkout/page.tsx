@@ -18,6 +18,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
+import { usePincodeLookup } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
 import {
@@ -218,15 +219,18 @@ export default function CheckoutPage() {
     city: '', state: '', postalCode: '', locality: '',
   });
 
-  const [pincodeData, setPincodeData] = useState<{
-    district: string;
-    state: string;
-    places: { name: string; type: string; delivery: string }[];
-  } | null>(null);
-  const [pincodeLoading, setPincodeLoading] = useState(false);
-  const [pincodeError, setPincodeError] = useState('');
+  // Pincode lookup logic comes from the shared @sportsmart/ui hook; the returns
+  // are aliased to the existing names so the bespoke checkout markup is unchanged.
+  const {
+    loading: pincodeLoading,
+    error: pincodeError,
+    result: pincodeData,
+    autoFilled: pincodeAutoFilled,
+    lookup: runPincodeLookup,
+    reset: resetPincodeLookup,
+    setAutoFilled: setPincodeAutoFilled,
+  } = usePincodeLookup();
   const [selectedPlace, setSelectedPlace] = useState('');
-  const [pincodeAutoFilled, setPincodeAutoFilled] = useState(false);
 
   // B2B tax profile — Phase 37 picker. Buyers with 2+ tax profiles can
   // pick which GSTIN this order's invoice goes against; the chosen ID
@@ -259,36 +263,14 @@ export default function CheckoutPage() {
     };
   }, [authStatus]);
 
-  async function lookupPincode(pincode: string) {
-    if (pincode.length !== 6 || !/^\d{6}$/.test(pincode)) {
-      setPincodeData(null);
-      setPincodeError('');
-      setPincodeAutoFilled(false);
-      setSelectedPlace('');
-      return;
-    }
-    setPincodeLoading(true);
-    setPincodeError('');
-    try {
-      const data = await apiClient<any>(`/pincodes/${pincode}`);
-      if (data.success && data.data) {
-        setPincodeData(data.data);
-        setPincodeAutoFilled(true);
-        setSelectedPlace('');
-        setForm((prev) => ({ ...prev, city: data.data.district, state: data.data.state }));
-      } else {
-        setPincodeError('Invalid pincode');
-        setPincodeData(null);
-        setPincodeAutoFilled(false);
-        setSelectedPlace('');
-        setForm((prev) => ({ ...prev, city: '', state: '' }));
-      }
-    } catch {
-      setPincodeError('Failed to lookup pincode');
-      setPincodeData(null);
-      setPincodeAutoFilled(false);
-    } finally {
-      setPincodeLoading(false);
+  async function lookupPincode(raw: string) {
+    setSelectedPlace('');
+    const data = await runPincodeLookup(raw);
+    const clean = raw.replace(/\D/g, '').slice(0, 6);
+    if (data) {
+      setForm((prev) => ({ ...prev, city: data.district, state: data.state }));
+    } else if (clean.length === 6) {
+      setForm((prev) => ({ ...prev, city: '', state: '' }));
     }
   }
 
@@ -373,9 +355,7 @@ export default function CheckoutPage() {
   const resetAddressForm = () => {
     setForm({ fullName: '', phone: '', addressLine1: '', addressLine2: '', city: '', state: '', postalCode: '', locality: '' });
     setFieldErrors({});
-    setPincodeData(null);
-    setPincodeError('');
-    setPincodeAutoFilled(false);
+    resetPincodeLookup();
     setSelectedPlace('');
     setEditingAddressId(null);
   };
@@ -393,9 +373,7 @@ export default function CheckoutPage() {
       locality: '',
     });
     setFieldErrors({});
-    setPincodeData(null);
-    setPincodeError('');
-    setPincodeAutoFilled(false);
+    resetPincodeLookup();
     setSelectedPlace('');
     setShowNewAddress(true);
     setError('');
