@@ -21,7 +21,7 @@ import {
   ConflictAppException,
   NotFoundAppException,
 } from '../../../../../core/exceptions';
-import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
+import { AdminAuthGuard, PermissionsGuard, AdminProductSellerScopeGuard } from '../../../../../core/guards';
 import { Permissions } from '../../../../../core/decorators/permissions.decorator';
 import { Idempotent } from '../../../../../core/decorators/idempotent.decorator';
 import type { Prisma } from '@prisma/client';
@@ -46,7 +46,7 @@ import {
 
 @ApiTags('Admin Products')
 @Controller('admin/products/:productId/variants')
-@UseGuards(AdminAuthGuard, PermissionsGuard)
+@UseGuards(AdminAuthGuard, PermissionsGuard, AdminProductSellerScopeGuard)
 @Permissions('catalog.write')
 export class AdminProductVariantsController {
   constructor(

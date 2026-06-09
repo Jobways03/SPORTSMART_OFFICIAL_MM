@@ -93,7 +93,7 @@ export interface MediaUploadResponse {
 }
 
 export const sellerProfileService = {
-  getProfile(token: string): Promise<ApiResponse<SellerProfileData>> {
+  getProfile(token: string | null): Promise<ApiResponse<SellerProfileData>> {
     return apiClient<SellerProfileData>('/seller/profile', {
       method: 'GET',
       headers: authHeaders(token),
@@ -101,7 +101,7 @@ export const sellerProfileService = {
   },
 
   updateProfile(
-    token: string,
+    token: string | null,
     payload: UpdateProfilePayload,
   ): Promise<ApiResponse<SellerProfileData>> {
     return apiClient<SellerProfileData>('/seller/profile', {
@@ -112,7 +112,7 @@ export const sellerProfileService = {
   },
 
   uploadProfileImage(
-    token: string,
+    token: string | null,
     file: File,
   ): Promise<ApiResponse<MediaUploadResponse>> {
     const formData = new FormData();
@@ -125,7 +125,7 @@ export const sellerProfileService = {
   },
 
   async deleteProfileImage(
-    token: string,
+    token: string | null,
   ): Promise<ApiResponse<MediaUploadResponse>> {
     return apiClient<MediaUploadResponse>('/seller/profile/media/profile-image', {
       method: 'DELETE',
@@ -134,7 +134,7 @@ export const sellerProfileService = {
   },
 
   uploadShopLogo(
-    token: string,
+    token: string | null,
     file: File,
   ): Promise<ApiResponse<MediaUploadResponse>> {
     const formData = new FormData();
@@ -147,7 +147,7 @@ export const sellerProfileService = {
   },
 
   async deleteShopLogo(
-    token: string,
+    token: string | null,
   ): Promise<ApiResponse<MediaUploadResponse>> {
     return apiClient<MediaUploadResponse>('/seller/profile/media/shop-logo', {
       method: 'DELETE',
@@ -155,7 +155,7 @@ export const sellerProfileService = {
     });
   },
 
-  sendEmailVerificationOtp(token: string): Promise<ApiResponse<void>> {
+  sendEmailVerificationOtp(token: string | null): Promise<ApiResponse<void>> {
     return apiClient<void>('/seller/profile/verify-email/send-otp', {
       method: 'POST',
       headers: authHeaders(token),
@@ -164,7 +164,7 @@ export const sellerProfileService = {
   },
 
   verifyEmail(
-    token: string,
+    token: string | null,
     otp: string,
   ): Promise<ApiResponse<{ isEmailVerified: boolean }>> {
     return apiClient<{ isEmailVerified: boolean }>('/seller/profile/verify-email/verify', {
@@ -175,7 +175,7 @@ export const sellerProfileService = {
   },
 
   changePassword(
-    token: string,
+    token: string | null,
     currentPassword: string,
     newPassword: string,
     confirmPassword: string,

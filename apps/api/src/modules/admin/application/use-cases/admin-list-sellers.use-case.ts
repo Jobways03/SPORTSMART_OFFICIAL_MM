@@ -15,6 +15,10 @@ interface ListSellersInput {
   // seller class. Each admin frontend (web-d2c-seller-admin /
   // web-retail-seller-admin) always pins this to its own type.
   sellerType?: 'D2C' | 'RETAIL';
+  // Phase 38 (admin enforcement) — the admin's authoritative seller-type
+  // scope (from permissions). When set, the query is hard-bounded to these
+  // types; the optional client `sellerType` above can only narrow within it.
+  allowedSellerTypes?: ('D2C' | 'RETAIL')[];
   sortBy?: string;
   sortOrder?: 'asc' | 'desc';
   fromDate?: string;
@@ -46,6 +50,7 @@ export class AdminListSellersUseCase {
       status,
       verificationStatus,
       sellerType,
+      allowedSellerTypes,
       sortBy = 'createdAt',
       sortOrder = 'desc',
       fromDate,
@@ -67,8 +72,17 @@ export class AdminListSellersUseCase {
       where.verificationStatus = verificationStatus as any;
     }
 
-    if (sellerType) {
-      // Phase 38 — narrows to D2C or RETAIL.
+    // Phase 38 (admin enforcement) — apply the admin's authoritative
+    // seller-type scope first; the optional client `sellerType` may only
+    // narrow within it (the controller 403s an out-of-scope request, so a
+    // `sellerType` that reaches here is always inside the scope).
+    if (allowedSellerTypes && allowedSellerTypes.length > 0) {
+      (where as any).sellerType =
+        sellerType && allowedSellerTypes.includes(sellerType)
+          ? sellerType
+          : { in: allowedSellerTypes };
+    } else if (sellerType) {
+      // Unscoped admin — honour the optional client filter as before.
       (where as any).sellerType = sellerType;
     }
 

@@ -7,9 +7,9 @@
 //   - return_tax_reversal_lines (refund impact)
 //   - discount_redemptions (lifecycle counts)
 //
-// Stubs (rendered as "Coming soon" / "0"):
-//   - Abuse attempts → ships with P1.4 fraud controls (coupon_attempts).
-//   - Remaining budget per campaign → ships with P2.1 budget enforcement.
+// Abuse attempts are LIVE (P1.4 — real coupon_attempts data from FraudService,
+// returned by the summary endpoint). Still pending a backend, not surfaced
+// here yet: remaining budget per campaign (P2.1 budget enforcement).
 
 'use client';
 
@@ -57,7 +57,7 @@ interface AnalyticsSummary {
       totalReversalInPaise: string;
     }>;
   };
-  abuse: { attemptCount: number; blockedCount: number };
+  abuse: { attemptCount: number; blockedCount: number; validCount?: number };
 }
 
 const fmtPaise = (v: string | number): string => {
@@ -253,8 +253,8 @@ export default function DiscountAnalyticsPage() {
             <KpiCard
               title="Abuse attempts"
               value={fmtCount(summary.abuse.attemptCount)}
-              subtitle="P1.4 — fraud tracking ships next"
-              tone="muted"
+              subtitle={`${fmtCount(summary.abuse.blockedCount)} blocked`}
+              tone={summary.abuse.attemptCount > 0 ? 'danger' : 'neutral'}
             />
           </div>
 

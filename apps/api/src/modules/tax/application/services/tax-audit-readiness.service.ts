@@ -259,7 +259,10 @@ export class TaxAuditReadinessService {
     // which Prisma rejects with "Argument `gstRateBps` is missing", 500-ing the
     // entire audit-readiness endpoint.
     const where = this.activeProductWhere(
-      { supplyTaxability: 'TAXABLE', gstRateBps: { lte: 0 } },
+      // gstRateBps is a non-nullable Int @default(0); filtering `null` on it
+      // throws "Invalid `count()` invocation" (Prisma rejects null for a
+      // non-nullable scalar). "No rate set" is simply gstRateBps == 0.
+      { supplyTaxability: 'TAXABLE', gstRateBps: 0 },
       filter,
     );
     const { count, sampleIds } = await this.countAndSample(this.prisma.product, where);

@@ -98,6 +98,8 @@ export interface ListAllReturnsParams {
   riskScoreMin?: number;
   riskScoreMax?: number;
   hasRiskScore?: boolean;
+  // Phase 38 (admin breadth) — restrict to the admin's seller-type scope.
+  allowedSellerTypes?: ('D2C' | 'RETAIL')[];
 }
 
 export interface SchedulePickupInput {
@@ -3677,24 +3679,37 @@ export class ReturnService {
 
   // ── Analytics (Phase R6) ───────────────────────────────────────────────
 
-  async getAnalytics(fromDate?: Date, toDate?: Date) {
-    return this.returnRepo.getAnalyticsSummary({ fromDate, toDate });
+  async getAnalytics(
+    fromDate?: Date,
+    toDate?: Date,
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[],
+  ) {
+    return this.returnRepo.getAnalyticsSummary({ fromDate, toDate, allowedSellerTypes });
   }
 
   async getReturnsTrend(
     fromDate: Date,
     toDate: Date,
     groupBy: 'day' | 'week' | 'month',
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[],
   ) {
-    return this.returnRepo.getReturnsByPeriod({ fromDate, toDate, groupBy });
+    return this.returnRepo.getReturnsByPeriod({ fromDate, toDate, groupBy, allowedSellerTypes });
   }
 
-  async getTopReturnReasons(limit: number, fromDate?: Date, toDate?: Date) {
-    return this.returnRepo.getTopReturnReasons(limit, fromDate, toDate);
+  async getTopReturnReasons(
+    limit: number,
+    fromDate?: Date,
+    toDate?: Date,
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[],
+  ) {
+    return this.returnRepo.getTopReturnReasons(limit, fromDate, toDate, allowedSellerTypes);
   }
 
-  async getCustomerReturnHistory(customerId: string) {
-    return this.returnRepo.getReturnsByCustomer(customerId);
+  async getCustomerReturnHistory(
+    customerId: string,
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[],
+  ) {
+    return this.returnRepo.getReturnsByCustomer(customerId, allowedSellerTypes);
   }
 
   // ── Commission freeze / unfreeze helpers ──────────────────────────────

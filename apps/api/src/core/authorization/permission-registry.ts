@@ -112,6 +112,17 @@ export const PERMISSIONS = {
   'sellers.approve':        'Approve seller onboarding',
   'sellers.suspend':        'Suspend / activate sellers',
   'sellers.penalize':       'Record financial penalty against a seller',
+  // Phase 38 (admin enforcement) — seller-type scope gates. Holding one
+  // restricts an admin's /admin/sellers visibility + actions to that
+  // population (D2C xor RETAIL); holding neither = legacy unrestricted (all).
+  // Enforced server-side from req.user.permissions (AdminSellerScopeGuard),
+  // NOT the forgeable X-Seller-Type header. Granted to a (custom) role to
+  // create a hard per-team boundary; SUPER_ADMIN holds both via ALL_PERMISSION_KEYS.
+  'sellers.scope.d2c':      'Restrict an admin to D2C sellers only (seller-type scope gate)',
+  'sellers.scope.retail':   'Restrict an admin to RETAIL sellers only (seller-type scope gate)',
+  // Phase 89 (logistics partner) — register a seller / franchise with a courier
+  // partner + update its pickup address (admin/logistics-partner controller).
+  'sellers.logistics.register': 'Register a seller/franchise with a logistics partner + update pickup address',
 
   // Logistics
   'logistics.claim':        'File / manage logistics damage / loss claims',
@@ -702,6 +713,14 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
   'sellers.suspend':        'HIGH',
   'sellers.penalize':       'HIGH',
   'sellers.approve':        'HIGH',
+  // Seller-type scope gates — widen/narrow which seller population an admin
+  // can see + act on. MEDIUM: not a money/destructive action itself, but it
+  // governs the blast radius of every other sellers.* permission.
+  'sellers.scope.d2c':      'MEDIUM',
+  'sellers.scope.retail':   'MEDIUM',
+  // Configures a seller's courier registration + pickup address — an ops write,
+  // not money/destructive → MEDIUM.
+  'sellers.logistics.register': 'MEDIUM',
   'customers.suspend':      'HIGH',
   'customers.impersonate':  'CRITICAL',
   'franchise.suspend':      'HIGH',
@@ -941,10 +960,24 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
   ],
   SELLER_ADMIN: [
     'sellers.read', 'sellers.approve', 'sellers.suspend', 'sellers.penalize',
+    // Phase 89 — register sellers/franchises with a courier partner (same
+    // seller-management tier that approves/suspends them).
+    'sellers.logistics.register',
     'products.read', 'products.approve',
     'orders.read', 'returns.read',
     'catalog.read', 'catalog.write', 'catalog.approve',
     'analytics.read',
+    // The seller-admin portal exposes the platform finance surface
+    // (Accounts dashboard, Commission, Settlement statements) and the
+    // admin-commission controller's @Roles already lists SELLER_ADMIN —
+    // but the role was never granted the matching keys, so those pages
+    // 403'd. Grant the finance READ permissions (read-only; approve /
+    // createCycle / markPaid stay SUPER_ADMIN via ALL_PERMISSION_KEYS).
+    'accounts.read', 'settlements.read', 'settlements.history.read',
+    // Inventory dashboard (Nova warehouses / stock levels) is in the
+    // seller-admin portal nav; grant the read key (inventory.adjust
+    // stays SUPER_ADMIN via ALL_PERMISSION_KEYS).
+    'nova.read',
   ],
   SELLER_SUPPORT: [
     'wallets.read', 'disputes.read',

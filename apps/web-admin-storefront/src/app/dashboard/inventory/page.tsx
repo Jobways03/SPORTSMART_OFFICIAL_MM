@@ -261,6 +261,47 @@ export default function InventoryPage() {
     [handle401],
   );
 
+  // Franchise nodes keep their movements on the FranchiseInventoryLedger,
+  // exposed by GET /admin/franchises/:franchiseId/inventory/ledger. Map those
+  // rows onto the shared MovementRow shape so the same timeline renders them.
+  const fetchFranchiseMovements = useCallback(
+    async (franchiseId: string, productId: string) => {
+      setMovementsLoading(true);
+      setMovementsError('');
+      setMovements([]);
+      try {
+        const res = await apiClient<{ entries: any[]; total: number }>(
+          `/admin/franchises/${franchiseId}/inventory/ledger?productId=${productId}&page=1&limit=50`,
+        );
+        const entries = res.data?.entries ?? [];
+        setMovements(
+          entries.map((e: any) => ({
+            id: e.id,
+            kind: e.movementType,
+            quantityDelta: e.quantityDelta,
+            beforeStockQty: e.beforeQty,
+            afterStockQty: e.afterQty,
+            beforeReservedQty: null,
+            afterReservedQty: null,
+            reason: e.remarks || e.movementType,
+            referenceType: e.referenceType ?? null,
+            referenceId: e.referenceId ?? null,
+            actorId: e.actorId ?? null,
+            actorRole: e.actorType ?? null,
+            createdAt: e.createdAt,
+          })),
+        );
+      } catch (err) {
+        if (!handle401(err)) {
+          setMovementsError('Failed to load franchise movement history.');
+        }
+      } finally {
+        setMovementsLoading(false);
+      }
+    },
+    [handle401],
+  );
+
   /* ── Effects ─────────────────────────────────────────────── */
 
   useEffect(() => {
@@ -307,14 +348,12 @@ export default function InventoryPage() {
 
   const openRow = (row: InventoryRow) => {
     setDrawerRow(row);
-    // Only seller mappings have stock_movement history (franchise
-    // movements live on the FranchiseInventoryLedger table — flagged
-    // for a follow-up).
+    // Seller mappings use the marketplace stock_movement history; franchise
+    // nodes use the FranchiseInventoryLedger (node.id is the franchiseId).
     if (row.node.type === 'SELLER') {
       fetchMovements(row.id);
     } else {
-      setMovements([]);
-      setMovementsError('');
+      fetchFranchiseMovements(row.node.id, row.productId);
     }
   };
 
@@ -1010,13 +1049,7 @@ function Drawer({
 
         {/* Timeline body */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '14px 22px 24px' }}>
-          {row.node.type === 'FRANCHISE' ? (
-            <div style={{ padding: '40px 0', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
-              Franchise movement history lives on the franchise ledger.
-              <br />
-              <span style={{ fontSize: 12 }}>(Cross-source timeline coming soon.)</span>
-            </div>
-          ) : loading ? (
+          {loading ? (
             <div style={{ padding: '40px 0', textAlign: 'center', color: '#94a3b8', fontSize: 13 }}>
               Loading history…
             </div>

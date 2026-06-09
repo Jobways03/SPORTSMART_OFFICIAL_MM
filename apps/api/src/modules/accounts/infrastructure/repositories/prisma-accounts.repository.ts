@@ -799,6 +799,10 @@ export class PrismaAccountsRepository implements AccountsRepository {
     // franchise_settlements.status threw 22P02 ("invalid input value for enum
     // FranchiseSettlementStatus") — the 500 on this endpoint. So use a per-enum
     // list: only the seller branch includes READY_FOR_PAYOUT.
+    // Outstanding = unpaid, not-frozen states. NOTE: SellerSettlementStatus
+    // has READY_FOR_PAYOUT but FranchiseSettlementStatus does NOT — sharing a
+    // single list cast READY_FOR_PAYOUT against the franchise enum and 500'd
+    // with Postgres 22P02 (invalid enum input). Keep the two lists separate.
     const SELLER_OUTSTANDING = Prisma.sql`('PENDING','APPROVED','READY_FOR_PAYOUT','FAILED','PARTIALLY_PAID')`;
     const FRANCHISE_OUTSTANDING = Prisma.sql`('PENDING','APPROVED','FAILED','PARTIALLY_PAID')`;
     const SELLER_NET = Prisma.sql`(total_settlement_amount_in_paise - tcs_deducted_in_paise - tds_deducted_in_paise - total_commission_gst_in_paise - paid_amount_in_paise)`;

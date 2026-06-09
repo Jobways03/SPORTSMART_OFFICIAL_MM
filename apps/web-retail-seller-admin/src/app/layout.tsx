@@ -4,8 +4,8 @@ import { StepUpHandlerProvider } from '../components/StepUpHandlerProvider';
 import '../styles/globals.css';
 
 export const metadata: Metadata = {
-  title: 'SPORTSMART Seller Admin',
-  description: 'Seller admin panel for SPORTSMART marketplace',
+  title: 'SPORTSMART Retail Seller Admin',
+  description: 'Retail seller admin panel for SPORTSMART marketplace',
 };
 
 export default function RootLayout({

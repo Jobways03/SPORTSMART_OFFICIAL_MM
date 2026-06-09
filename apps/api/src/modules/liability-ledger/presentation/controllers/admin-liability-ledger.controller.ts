@@ -68,6 +68,10 @@ export class AdminLiabilityLedgerController {
   // request — that 403'd the whole page just to VIEW the ledger. Reads
   // shouldn't require step-up; the sensitive WRITE/CANCEL routes keep their
   // HIGH permissions.
+  // Read of the liability ledger — the matching read permission, same as the
+  // sibling /seller-debits/pending-summary route. (Was 'refunds.approve', a
+  // copy-paste from the refund flow: it's CRITICAL, so it tripped the auto
+  // step-up gate and 403'd even SUPER_ADMIN on a plain list read.)
   @Permissions('liability_ledger.read')
   async list(
     @Param('type') type: string,
