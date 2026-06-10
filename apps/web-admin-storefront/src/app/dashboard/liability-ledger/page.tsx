@@ -7,6 +7,7 @@
 // what's still pending recovery.
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import Link from 'next/link';
 import {
   adminLiabilityLedgerService,
   LedgerType,
@@ -399,7 +400,7 @@ function SellerDebitTable({ rows }: { rows: SellerDebitRow[] }) {
           {rows.map((r) => (
             <tr key={r.id} style={styles.tr}>
               <td style={styles.td}>
-                <SourceCell sourceType={r.sourceType} sourceId={r.sourceId} />
+                <SourceCell sourceType={r.sourceType} sourceId={r.sourceId} orderId={r.orderId} />
               </td>
               <td style={styles.td}>
                 <IdChip id={r.sellerId} />
@@ -502,28 +503,90 @@ function PlatformExpenseTable({ rows }: { rows: PlatformExpenseRow[] }) {
 
 /* ── Reusable cells ─────────────────────────────────────────── */
 
-function SourceCell({ sourceType, sourceId }: { sourceType: string; sourceId: string }) {
+/**
+ * Resolve the detail page a ledger row's source points at, using only the
+ * IDs actually present on the row.
+ *   DISPUTE         → sourceId IS the dispute id     → /dashboard/disputes/:id
+ *   RETURN          → sourceId IS the return id      → /dashboard/returns/:id
+ *   RTO / SELLER_REVERSAL / MANUAL → no dedicated route; the most useful
+ *     existing view is the master order, which only seller-debit rows carry
+ *     (orderId). Logistics/platform rows lack orderId → no link.
+ *   GOODWILL / unknown → no reliable single target → no link (copy the id).
+ */
+function sourceHref(
+  sourceType: string,
+  sourceId: string,
+  orderId?: string | null,
+): string | null {
+  switch (sourceType) {
+    case 'DISPUTE':
+      return `/dashboard/disputes/${sourceId}`;
+    case 'RETURN':
+      return `/dashboard/returns/${sourceId}`;
+    case 'RTO':
+    case 'SELLER_REVERSAL':
+    case 'MANUAL':
+      return orderId ? `/dashboard/orders/${orderId}` : null;
+    default:
+      return null;
+  }
+}
+
+function SourceCell({
+  sourceType,
+  sourceId,
+  orderId,
+}: {
+  sourceType: string;
+  sourceId: string;
+  orderId?: string | null;
+}) {
+  const [hover, setHover] = useState(false);
   const toneByType: Record<string, { bg: string; fg: string }> = {
     DISPUTE: { bg: '#fef2f2', fg: '#b91c1c' },
     RETURN: { bg: '#eff6ff', fg: '#1d4ed8' },
     GOODWILL: { bg: '#f0fdf4', fg: '#15803d' },
   };
   const t = toneByType[sourceType] ?? { bg: '#f1f5f9', fg: '#475569' };
+  const href = sourceHref(sourceType, sourceId, orderId);
+  const badge = (
+    <span
+      style={{
+        fontSize: 10.5,
+        fontWeight: 700,
+        padding: '2px 6px',
+        background: t.bg,
+        color: t.fg,
+        borderRadius: 4,
+        letterSpacing: '0.04em',
+      }}
+    >
+      {sourceType}
+    </span>
+  );
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      <span
-        style={{
-          fontSize: 10.5,
-          fontWeight: 700,
-          padding: '2px 6px',
-          background: t.bg,
-          color: t.fg,
-          borderRadius: 4,
-          letterSpacing: '0.04em',
-        }}
-      >
-        {sourceType}
-      </span>
+      {href ? (
+        <Link
+          href={href}
+          title={`View ${sourceType.replace(/_/g, ' ').toLowerCase()} details`}
+          onMouseEnter={() => setHover(true)}
+          onMouseLeave={() => setHover(false)}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4,
+            color: t.fg,
+            textDecoration: hover ? 'underline' : 'none',
+            textUnderlineOffset: 2,
+          }}
+        >
+          {badge}
+          <span aria-hidden style={{ fontSize: 11, fontWeight: 700 }}>↗</span>
+        </Link>
+      ) : (
+        badge
+      )}
       <IdChip id={sourceId} />
     </div>
   );

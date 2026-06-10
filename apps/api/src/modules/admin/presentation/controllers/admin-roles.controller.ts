@@ -36,6 +36,10 @@ interface UpdateRoleDto {
   permissions?: PermissionKey[];
 }
 
+interface SetRoleActiveDto {
+  active: boolean;
+}
+
 @ApiTags('Admin Roles & Permissions')
 @Controller('admin/roles')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
@@ -78,6 +82,25 @@ export class AdminRolesController {
   ) {
     const data = await this.service.updateRole(id, body, actorFromReq(req));
     return { success: true, message: 'Role updated', data };
+  }
+
+  // Enable/disable a role (the frontend's enable/disable toggle). A disabled
+  // role keeps its permissions + assignments but grants nothing at resolve
+  // time — see AdminPermissionResolverService. Body: { active: boolean }.
+  @Patch(':id/active')
+  @Permissions('roles.write')
+  async setActive(
+    @Param('id') id: string,
+    @Body() body: SetRoleActiveDto,
+    @Req() req: Request,
+  ) {
+    const active = body?.active === true;
+    const data = await this.service.setActive(id, active, actorFromReq(req));
+    return {
+      success: true,
+      message: active ? 'Role enabled' : 'Role disabled',
+      data,
+    };
   }
 
   @Delete(':id')

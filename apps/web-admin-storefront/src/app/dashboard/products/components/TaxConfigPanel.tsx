@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
+import { usePermissions } from '@/lib/permissions';
 
 /**
  * Phase 45 (2026-05-21) — admin per-product tax-config attestation
@@ -58,12 +59,24 @@ interface AttestationLogEntry {
 
 export function TaxConfigPanel({ productId }: Props) {
   const { notify } = useModal();
+  // HSN / GST rate (and the rest of the tax cluster) is super-admin-only,
+  // set per product. Sellers and non-super-admins never see the editor.
+  const { isSuperAdmin } = usePermissions();
   const [config, setConfig] = useState<TaxConfig | null>(null);
   const [log, setLog] = useState<AttestationLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [verifying, setVerifying] = useState(false);
   const [reviewerNote, setReviewerNote] = useState('');
   const [err, setErr] = useState<string | null>(null);
+  // Per-product tax editor (super-admin). Strings, form-input convention.
+  const [edit, setEdit] = useState({
+    hsnCode: '',
+    gstRateBps: '',
+    supplyTaxability: '',
+    cessRateBps: '',
+    defaultUqcCode: '',
+  });
+  const [saving, setSaving] = useState(false);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -73,7 +86,16 @@ export function TaxConfigPanel({ productId }: Props) {
         apiClient<TaxConfig>(`/admin/products/${productId}`),
         apiClient<AttestationLogEntry[]>(`/admin/products/${productId}/tax-attestation-log?limit=10`),
       ]);
-      setConfig((productRes.data as unknown as { data?: TaxConfig })?.data ?? (productRes.data as any));
+      const cfg = ((productRes.data as unknown as { data?: TaxConfig })?.data ??
+        (productRes.data as any)) as TaxConfig;
+      setConfig(cfg);
+      setEdit({
+        hsnCode: cfg?.hsnCode ?? '',
+        gstRateBps: cfg?.gstRateBps != null ? String(cfg.gstRateBps) : '',
+        supplyTaxability: cfg?.supplyTaxability ?? '',
+        cessRateBps: cfg?.cessRateBps != null ? String(cfg.cessRateBps) : '',
+        defaultUqcCode: cfg?.defaultUqcCode ?? '',
+      });
       setLog(Array.isArray(logRes.data) ? logRes.data : []);
     } catch (e: any) {
       setErr(e?.body?.message || e?.message || 'Failed to load tax config');
@@ -85,6 +107,45 @@ export function TaxConfigPanel({ productId }: Props) {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  const setField = (k: keyof typeof edit, v: string) =>
+    setEdit((prev) => ({ ...prev, [k]: v }));
+
+  // Save HSN / GST / supply-type / cess / UQC for THIS product only via the
+  // SUPER_ADMIN-gated bulk endpoint (productIds: [this one]). Resets the
+  // attestation, so the admin then re-verifies below.
+  const handleSaveTax = async () => {
+    setSaving(true);
+    setErr(null);
+    try {
+      const body: Record<string, unknown> = { productIds: [productId] };
+      if (edit.hsnCode.trim()) body.hsnCode = edit.hsnCode.trim();
+      if (edit.gstRateBps.trim()) body.gstRateBps = Number(edit.gstRateBps);
+      if (edit.cessRateBps.trim()) body.cessRateBps = Number(edit.cessRateBps);
+      if (edit.supplyTaxability) body.supplyTaxability = edit.supplyTaxability;
+      if (edit.defaultUqcCode.trim()) body.defaultUqcCode = edit.defaultUqcCode.trim();
+      if (Object.keys(body).length === 1) {
+        setErr('Enter at least one tax field (HSN, GST rate, supply type, cess, or UQC).');
+        setSaving(false);
+        return;
+      }
+      if (body.hsnCode && !/^\d{4,8}$/.test(String(body.hsnCode))) {
+        setErr('HSN must be 4–8 digits.');
+        setSaving(false);
+        return;
+      }
+      await apiClient('/admin/products/bulk/tax-config', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+      await refresh();
+      notify('Tax config saved for this product');
+    } catch (e: any) {
+      setErr(e?.body?.message || e?.message || 'Failed to save tax config');
+    } finally {
+      setSaving(false);
+    }
+  };
 
   const handleVerify = async () => {
     if (!config) return;
@@ -174,6 +235,102 @@ export function TaxConfigPanel({ productId }: Props) {
         <Field label="UQC" value={config.defaultUqcCode || '—'} />
         <Field label="Tax category" value={config.taxCategory || '—'} />
       </div>
+
+      {isSuperAdmin && (
+        <div style={editBox}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 4 }}>
+            Set tax config (super-admin)
+          </div>
+          <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
+            HSN / GST rate is set per product by a super-admin. Saving updates
+            this product only and resets attestation — re-verify below.
+          </div>
+          <div style={editGrid}>
+            <label style={editLabel}>
+              HSN / SAC code
+              <input
+                type="text"
+                value={edit.hsnCode}
+                onChange={(e) => setField('hsnCode', e.target.value)}
+                placeholder="e.g. 95069900"
+                maxLength={8}
+                inputMode="numeric"
+                style={inputStyle}
+              />
+            </label>
+            <label style={editLabel}>
+              GST rate
+              <select
+                value={edit.gstRateBps}
+                onChange={(e) => setField('gstRateBps', e.target.value)}
+                style={inputStyle}
+              >
+                <option value="">Select rate</option>
+                <option value="0">0%</option>
+                <option value="500">5%</option>
+                <option value="1200">12%</option>
+                <option value="1800">18%</option>
+                <option value="2800">28%</option>
+              </select>
+            </label>
+            <label style={editLabel}>
+              Supply type
+              <select
+                value={edit.supplyTaxability}
+                onChange={(e) => setField('supplyTaxability', e.target.value)}
+                style={inputStyle}
+              >
+                <option value="">Select supply type</option>
+                <option value="TAXABLE">Taxable (standard)</option>
+                <option value="NIL_RATED">Nil-rated</option>
+                <option value="EXEMPT">Exempt</option>
+                <option value="NON_GST">Non-GST</option>
+                <option value="ZERO_RATED">Zero-rated</option>
+                <option value="OUT_OF_SCOPE">Out of scope</option>
+              </select>
+            </label>
+            <label style={editLabel}>
+              UQC
+              <select
+                value={edit.defaultUqcCode}
+                onChange={(e) => setField('defaultUqcCode', e.target.value)}
+                style={inputStyle}
+              >
+                <option value="">Select unit</option>
+                <option value="NOS">NOS — Numbers</option>
+                <option value="PCS">PCS — Pieces</option>
+                <option value="PAR">PAR — Pair</option>
+                <option value="SET">SET — Set</option>
+                <option value="BOX">BOX — Box</option>
+                <option value="KGS">KGS — Kilograms</option>
+                <option value="MTR">MTR — Metres</option>
+                <option value="DOZ">DOZ — Dozen</option>
+              </select>
+            </label>
+            <label style={editLabel}>
+              Compensation cess (bps)
+              <input
+                type="number"
+                value={edit.cessRateBps}
+                onChange={(e) => setField('cessRateBps', e.target.value)}
+                placeholder="0"
+                min="0"
+                max="10000"
+                step="1"
+                style={inputStyle}
+              />
+            </label>
+          </div>
+          <button
+            type="button"
+            onClick={handleSaveTax}
+            disabled={saving}
+            style={btnPrimary(saving)}
+          >
+            {saving ? 'Saving…' : 'Save tax config for this product'}
+          </button>
+        </div>
+      )}
 
       {!verified && (
         <div style={attestBox}>
@@ -275,6 +432,17 @@ const fieldsGrid: React.CSSProperties = {
 };
 const attestBox: React.CSSProperties = {
   marginTop: 16, padding: 14, background: '#fffbeb', border: '1px solid #fde68a', borderRadius: 8,
+};
+const editBox: React.CSSProperties = {
+  marginTop: 16, padding: 14, background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: 8,
+};
+const editGrid: React.CSSProperties = {
+  display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+  gap: 12, marginBottom: 12,
+};
+const editLabel: React.CSSProperties = {
+  display: 'flex', flexDirection: 'column', gap: 4, fontSize: 11, fontWeight: 600,
+  color: '#374151', textTransform: 'uppercase', letterSpacing: '0.03em',
 };
 const inputStyle: React.CSSProperties = {
   width: '100%', height: 32, padding: '0 10px', fontSize: 13,

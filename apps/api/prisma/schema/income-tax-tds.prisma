@@ -62,7 +62,12 @@ model Section194OTdsLedger {
 
   // Business key. We never create rows for OWN_BRAND / SPORTSMART
   // suppliers (the platform doesn't deduct TDS on itself).
-  sellerId     String @map("seller_id")
+  sellerId     String? @map("seller_id")
+  // Phase 250 (Franchise tax) — party generalization (see GstTcsSettlementLedger).
+  // This §194-O ledger now serves sellers AND franchises; exactly one of
+  // (sellerId, franchiseId) is set; existing rows default to MARKETPLACE_SELLER.
+  partyType    SupplierType @default(MARKETPLACE_SELLER) @map("party_type")
+  franchiseId  String?      @map("franchise_id")
   // Quarter string "YYYY-Qn": "2026-Q1" = Apr-Jun, Q2 = Jul-Sep,
   // Q3 = Oct-Dec, Q4 = Jan-Mar (Indian FY).
   filingPeriod String @map("filing_period")
@@ -109,12 +114,18 @@ model Section194OTdsLedger {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  seller            Seller             @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  seller            Seller?            @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  // Phase 250 (Franchise tax) — franchise party (party-generic ledger).
+  franchise            FranchisePartner?    @relation(fields: [franchiseId], references: [id], onDelete: Restrict)
   // Back-link to the settlement(s) that withheld this TDS row.
   // Usually 1:1; N permitted for correction-flow flexibility.
   sellerSettlements SellerSettlement[]
+  // Phase 250 (Franchise tax) — back-link to the franchise settlement(s).
+  franchiseSettlements FranchiseSettlement[]
 
   @@index([sellerId, filingPeriod])
+  // Phase 250 (Franchise tax) — franchise active-row lookup.
+  @@index([franchiseId, filingPeriod])
   @@index([filingPeriod])
   @@index([status])
   @@map("section_194o_tds_ledger")

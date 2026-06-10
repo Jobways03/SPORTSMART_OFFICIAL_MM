@@ -79,6 +79,11 @@ model TaxDocument {
   masterOrderId String?      @map("master_order_id")
   subOrderId    String?      @map("sub_order_id")
   sellerId      String?      @map("seller_id")
+  // Phase 250 (Franchise tax) — party key for FRANCHISE supplier rows, mirroring
+  // sellerId for marketplace sellers (scalar, no FK — same as sellerId). Lets the
+  // §52 TCS aggregation select a franchise's taxable supply directly instead of
+  // joining through sub_orders / pos_sales. Backfilled in the migration.
+  franchiseId   String?      @map("franchise_id")
   // Follow-up #133 — nullable for POS sales (walk-in customer, no User
   // row). The e-commerce path still populates this. Either subOrderId
   // OR posSaleId is set; never both.
@@ -264,6 +269,8 @@ model TaxDocument {
   @@index([subOrderId])
   @@index([posSaleId])
   @@index([sellerId])
+  // Phase 250 (Franchise tax) — franchise TCS taxable-supply aggregation.
+  @@index([franchiseId])
   @@index([customerId])
   // Phase 161 (Platform GST Profile audit B3) — "all invoices under profile X".
   @@index([platformGstProfileId])

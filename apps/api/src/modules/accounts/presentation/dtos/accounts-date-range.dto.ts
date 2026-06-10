@@ -1,4 +1,10 @@
-import { IsOptional, IsDateString, IsString, MaxLength } from 'class-validator';
+import {
+  IsOptional,
+  IsDateString,
+  IsString,
+  IsNumberString,
+  MaxLength,
+} from 'class-validator';
 
 export class AccountsDateRangeDto {
   @IsOptional()
@@ -36,14 +42,8 @@ export class AccountsDateRangeDto {
  * here whitelists them; the handlers still parse the raw strings themselves.
  */
 export class AccountsPagedQueryDto extends AccountsDateRangeDto {
-  @IsOptional()
-  @IsString()
-  page?: string;
-
-  @IsOptional()
-  @IsString()
-  limit?: string;
-
+  // page / limit are inherited from AccountsDateRangeDto (validated there as
+  // numeric strings). This subclass only adds the extra drill-down filters.
   @IsOptional()
   @IsString()
   @MaxLength(64)

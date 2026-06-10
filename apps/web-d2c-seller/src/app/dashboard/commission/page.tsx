@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, Fragment } from 'react';
-import { apiClient } from '@/lib/api-client';
+import { apiClient, API_BASE } from '@/lib/api-client';
 
 interface EarningsSummary {
   totalEarned: number;
@@ -70,6 +70,9 @@ interface SettlementRecord {
   sgstOnCommissionInPaise?: string;
   igstOnCommissionInPaise?: string;
   totalCommissionGstInPaise?: string;
+  // Commission tax invoice (SAC 9985) issued at cycle approval. Present ⇒
+  // the seller can download it from the payout breakdown.
+  commissionInvoiceNumber?: string | null;
 }
 
 interface SettlementResponse {
@@ -643,6 +646,23 @@ function SettlementBreakdown({
     !!settlement.tdsDeductedInPaise &&
     settlement.tdsDeductedInPaise !== '0';
 
+  // Open a settlement document (commission tax invoice or the full
+  // settlement statement) in a new tab. These GET routes authenticate via
+  // the httpOnly `sm_access_seller` cookie, which the browser sends
+  // automatically on a top-level navigation — so we open the URL directly
+  // instead of fetching with a bearer token. A raw fetch would send the
+  // (possibly stale / absent) sessionStorage token, which the guard
+  // prefers over the cookie and rejects with a 401.
+  const openDoc = (kind: 'invoice' | 'statement') => {
+    const path =
+      kind === 'invoice' ? 'commission-invoice' : 'settlement-statement';
+    window.open(
+      `${API_BASE}/api/v1/seller/earnings/settlements/${settlement.id}/${path}`,
+      '_blank',
+      'noopener',
+    );
+  };
+
   return (
     <div
       style={{
@@ -784,6 +804,45 @@ function SettlementBreakdown({
           <li>Reconcile TCS in your GSTR-2A/2B; reconcile TDS via Form 16A.</li>
           <li>Commission GST is claimable as ITC.</li>
         </ul>
+        {(settlement.status === 'APPROVED' ||
+          settlement.status === 'PAID' ||
+          settlement.commissionInvoiceNumber) && (
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: '1px solid #e5e7eb', display: 'grid', gap: 8 }}>
+            {(settlement.status === 'APPROVED' || settlement.status === 'PAID') && (
+              <button
+                type="button"
+                onClick={() => openDoc('statement')}
+                title="Settlement / payout statement"
+                style={{
+                  width: '100%', padding: '8px 12px', borderRadius: 6,
+                  border: '1px solid #2563eb', background: '#fff',
+                  color: '#2563eb', fontWeight: 600, fontSize: 12, cursor: 'pointer',
+                }}
+              >
+                ⬇  Download settlement statement
+              </button>
+            )}
+            {settlement.commissionInvoiceNumber && (
+              <button
+                type="button"
+                onClick={() => openDoc('invoice')}
+                title={`Commission tax invoice ${settlement.commissionInvoiceNumber}`}
+                style={{
+                  width: '100%', padding: '8px 12px', borderRadius: 6,
+                  border: '1px solid #2563eb', background: '#fff',
+                  color: '#2563eb', fontWeight: 600, fontSize: 12, cursor: 'pointer',
+                }}
+              >
+                ⬇  Download commission invoice
+              </button>
+            )}
+            {settlement.commissionInvoiceNumber && (
+              <div style={{ fontSize: 10, color: '#9ca3af', textAlign: 'center' }}>
+                Invoice {settlement.commissionInvoiceNumber}
+              </div>
+            )}
+          </div>
+        )}
       </aside>
     </div>
   );

@@ -170,6 +170,9 @@ model FranchisePartner {
   catalogMappingEvents  FranchiseCatalogMappingEvent[]
   /// Logistics-partner (e.g. Delhivery) pickup-warehouse registrations.
   partnerRegistrations  FranchisePartnerRegistration[]
+  /// Phase 250 (Franchise tax) — party-generic statutory ledgers (§52 TCS / §194-O TDS).
+  gstTcsLedgers         GstTcsSettlementLedger[]
+  tds194OLedgers        Section194OTdsLedger[]
 
   @@index([status])
   @@index([isProfileCompleted])
@@ -1078,6 +1081,32 @@ model FranchiseSettlement {
   totalPlatformEarning  Decimal @default(0) @map("total_platform_earning") @db.Decimal(12, 2)
   netPayableToFranchise Decimal @default(0) @map("net_payable_to_franchise") @db.Decimal(12, 2)
 
+  // Phase 250 (Franchise tax) — §52 TCS / §194-O TDS / commission-GST deduction
+  // snapshots, mirroring SellerSettlement. Applied to the ONLINE-facilitated
+  // portion only (POS counter sales are not operator-facilitated supplies). The
+  // franchise net wired = netPayableToFranchise − tcsDeducted − tdsDeducted −
+  // totalCommissionGst. The ledger rows carry the statutory lifecycle; these
+  // denorm columns keep the payout statement a single-table read.
+  tcsLedgerId        String? @map("tcs_ledger_id")
+  tcsDeductedInPaise BigInt  @default(0) @map("tcs_deducted_in_paise")
+  tcsRateBpsSnapshot Int     @default(100) @map("tcs_rate_bps_snapshot")
+  tcsFilingPeriod    String? @map("tcs_filing_period")
+
+  tdsLedgerId        String? @map("tds_ledger_id")
+  tdsDeductedInPaise BigInt  @default(0) @map("tds_deducted_in_paise")
+  tdsRateBpsSnapshot Int     @default(100) @map("tds_rate_bps_snapshot")
+  tdsFilingPeriod    String? @map("tds_filing_period")
+  tdsSkipReason      String? @map("tds_skip_reason")
+
+  commissionGstRateBps              Int     @default(1800) @map("commission_gst_rate_bps")
+  commissionGstSplitType            String? @map("commission_gst_split_type")
+  cgstOnCommissionInPaise           BigInt  @default(0) @map("cgst_on_commission_in_paise")
+  sgstOnCommissionInPaise           BigInt  @default(0) @map("sgst_on_commission_in_paise")
+  igstOnCommissionInPaise           BigInt  @default(0) @map("igst_on_commission_in_paise")
+  totalCommissionGstInPaise         BigInt  @default(0) @map("total_commission_gst_in_paise")
+  commissionGstMarketplaceStateCode String? @map("commission_gst_marketplace_state_code")
+  commissionGstFranchiseStateCode   String? @map("commission_gst_franchise_state_code")
+
   status           FranchiseSettlementStatus @default(PENDING)
   paidAt           DateTime?                 @map("paid_at")
   paymentReference String?                   @map("payment_reference")
@@ -1098,6 +1127,9 @@ model FranchiseSettlement {
   paidByAdmin   Admin?                   @relation("FranchiseSettlementPaidBy", fields: [paidByAdminId], references: [id], onDelete: SetNull)
   // Phase 177 (#4) — itemized adjustments behind the net `adjustmentAmount`.
   adjustments   FranchiseSettlementAdjustment[]
+  // Phase 250 (Franchise tax) — party-generic statutory ledger links.
+  tcsLedger     GstTcsSettlementLedger? @relation(fields: [tcsLedgerId], references: [id], onDelete: Restrict)
+  tdsLedger     Section194OTdsLedger?   @relation(fields: [tdsLedgerId], references: [id], onDelete: Restrict)
 
   @@unique([cycleId, franchiseId])
   @@index([cycleId])

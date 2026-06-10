@@ -488,19 +488,8 @@ const router = useRouter();
     payload.returnPolicy = form.returnPolicy.trim() || null;
     payload.warrantyInfo = form.warrantyInfo.trim() || null;
 
-    // Tax fields — always send the current form state. The seller
-    // controller diffs against the stored value, so an unchanged
-    // field is a no-op and the audit stamp only fires on real
-    // changes. Empty optional strings clear the column via null;
-    // numeric defaults fall back to 0 (schema default), not null,
-    // because the columns are non-nullable.
-    payload.hsnCode = form.hsnCode.trim() || null;
-    payload.gstRateBps = form.gstRateBps !== '' ? Number(form.gstRateBps) : 0;
-    payload.supplyTaxability = form.supplyTaxability || 'TAXABLE';
-    payload.cessRateBps = form.cessRateBps !== '' ? Number(form.cessRateBps) : 0;
-    payload.defaultUqcCode = form.defaultUqcCode || null;
-    payload.taxCategory = form.taxCategory.trim() || null;
-    payload.taxInclusivePricing = form.taxInclusivePricing;
+    // Tax fields (HSN, GST rate, supply type, cess, UQC, tax category) are
+    // super-admin-only and not sent from the seller edit form.
 
     payload.tags = form.tags;
 
@@ -1651,135 +1640,8 @@ const router = useRouter();
         </div>
       </div>
 
-      {/* Section: Tax & GST Classification */}
-      <div className="form-card">
-        <div className="form-card-title">TAX &amp; GST CLASSIFICATION</div>
-        <div className="info-box">
-          Required for tax-invoice generation. Changes here are treated as
-          content and re-enter the admin approval queue.
-        </div>
-        <div className="form-grid">
-          <div className="form-group">
-            <label className="form-label">HSN / SAC Code</label>
-            <input
-              type="text"
-              className="form-input"
-              value={form.hsnCode}
-              onChange={e => updateField('hsnCode', e.target.value)}
-              placeholder="e.g. 95069900"
-              maxLength={8}
-              inputMode="numeric"
-              disabled={!isEditable}
-            />
-            <span className="form-hint">4&ndash;8 digit code per CBIC. Sports goods sit under 9506xx.</span>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">GST Rate</label>
-            <select
-              className="form-select"
-              value={form.gstRateBps}
-              onChange={e => updateField('gstRateBps', e.target.value)}
-              disabled={!isEditable}
-            >
-              <option value="">Select rate</option>
-              <option value="0">0%</option>
-              <option value="500">5%</option>
-              <option value="1200">12%</option>
-              <option value="1800">18%</option>
-              <option value="2800">28%</option>
-            </select>
-            <span className="form-hint">Standard CBIC slabs. Contact admin for non-standard HSN.</span>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Supply Type</label>
-            <select
-              className="form-select"
-              value={form.supplyTaxability}
-              onChange={e => updateField('supplyTaxability', e.target.value)}
-              disabled={!isEditable}
-            >
-              <option value="">Select supply type</option>
-              <option value="TAXABLE">Taxable (standard)</option>
-              <option value="NIL_RATED">Nil-rated</option>
-              <option value="EXEMPT">Exempt</option>
-              <option value="NON_GST">Non-GST</option>
-              <option value="ZERO_RATED">Zero-rated (exports under LUT)</option>
-              <option value="OUT_OF_SCOPE">Out of scope</option>
-            </select>
-            <span className="form-hint">Drives the document type: Tax Invoice vs Bill of Supply.</span>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Unit of Measure (UQC)</label>
-            <select
-              className="form-select"
-              value={form.defaultUqcCode}
-              onChange={e => updateField('defaultUqcCode', e.target.value)}
-              disabled={!isEditable}
-            >
-              <option value="">Select unit</option>
-              <option value="NOS">NOS &mdash; Numbers</option>
-              <option value="PCS">PCS &mdash; Pieces</option>
-              <option value="PAR">PAR &mdash; Pair</option>
-              <option value="SET">SET &mdash; Set</option>
-              <option value="BOX">BOX &mdash; Box</option>
-              <option value="KGS">KGS &mdash; Kilograms</option>
-              <option value="MTR">MTR &mdash; Metres</option>
-              <option value="DOZ">DOZ &mdash; Dozen</option>
-            </select>
-            <span className="form-hint">Appears on invoice line items per CBIC UQC list.</span>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Tax Category</label>
-            <input
-              type="text"
-              className="form-input"
-              value={form.taxCategory}
-              onChange={e => updateField('taxCategory', e.target.value)}
-              placeholder="e.g. apparel-under-1000, footwear, equipment"
-              disabled={!isEditable}
-            />
-            <span className="form-hint">Optional. Internal grouping for admin bulk operations and reports.</span>
-          </div>
-
-          <div className="form-group">
-            <label className="form-label">Compensation Cess Rate</label>
-            <input
-              type="number"
-              className="form-input"
-              value={form.cessRateBps}
-              onChange={e => updateField('cessRateBps', e.target.value)}
-              placeholder="0"
-              min="0"
-              max="10000"
-              step="1"
-              disabled={!isEditable}
-            />
-            <span className="form-hint">Basis points (1800 = 18%). Default 0; rare for sports goods.</span>
-          </div>
-
-          <div className="form-group full-width">
-            <div className="form-checkbox-group">
-              <input
-                type="checkbox"
-                id="taxInclusivePricing"
-                checked={form.taxInclusivePricing}
-                onChange={e => updateField('taxInclusivePricing', e.target.checked)}
-                disabled={!isEditable}
-              />
-              <label htmlFor="taxInclusivePricing">
-                Listed price includes GST (B2C inclusive pricing &mdash; default)
-              </label>
-            </div>
-            <span className="form-hint">
-              Uncheck only if your listed prices exclude GST (rare in B2C).
-            </span>
-          </div>
-        </div>
-      </div>
+      {/* Tax & GST classification is managed by a super-admin per product
+          (HSN, GST rate, supply type, cess, UQC) — not editable by sellers. */}
 
       {/* Phase 44 (2026-05-21) — volume pricing tiers. */}
       <PricingTiersSection

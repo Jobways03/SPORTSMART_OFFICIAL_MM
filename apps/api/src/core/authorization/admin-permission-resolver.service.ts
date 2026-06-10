@@ -59,6 +59,10 @@ export class AdminPermissionResolver {
         include: { role: { include: { permissions: true } } },
       });
       for (const a of assignments) {
+        // A disabled role grants nothing: skip its permissions AND omit it
+        // from the admin's reported custom-role list. Re-enabling restores
+        // both on the next resolve.
+        if (a.role?.isActive === false) continue;
         if (a.role?.name) customRoleNames.push(a.role.name);
         for (const p of a.role?.permissions ?? []) {
           if (p?.permissionKey) set.add(p.permissionKey);

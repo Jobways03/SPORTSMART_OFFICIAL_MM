@@ -73,6 +73,8 @@ describe('FranchiseSettlementService.createSettlementCycle — atomic claim', ()
         }),
       },
       discountLiabilityLedger: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountInPaise: null } }) },
+      // Phase 250 (Franchise tax) — commission-GST place-of-supply lookup.
+      platformGstProfile: { findFirst: jest.fn().mockResolvedValue(null) },
     };
     const prisma: any = {
       $transaction: (cb: any) => cb(tx),
@@ -81,12 +83,30 @@ describe('FranchiseSettlementService.createSettlementCycle — atomic claim', ()
     const financeRepo: any = {};
     const eventBus: any = { publish: jest.fn().mockResolvedValue(undefined) };
     const logger: any = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+    const tdsHook: any = {
+      applyToFranchiseSettlementOnApprove: jest
+        .fn()
+        .mockResolvedValue({ stamped: false, skipped: true, tdsInPaise: 0n }),
+      markWithheldOnPayFranchise: jest
+        .fn()
+        .mockResolvedValue({ ledgerId: null, flipped: false }),
+    };
+    const tcsHook: any = {
+      applyToFranchiseSettlementOnApprove: jest
+        .fn()
+        .mockResolvedValue({ stamped: false, skipped: true, tcsInPaise: 0n }),
+      markCollectedOnPayFranchise: jest
+        .fn()
+        .mockResolvedValue({ ledgerId: null, flipped: false }),
+    };
     const svc = new FranchiseSettlementService(
       financeRepo,
       franchiseRepo,
       eventBus,
       logger,
       prisma,
+      tdsHook,
+      tcsHook,
     );
     return { svc, calls, tx };
   };

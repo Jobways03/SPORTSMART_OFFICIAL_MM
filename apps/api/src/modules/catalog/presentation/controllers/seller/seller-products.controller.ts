@@ -101,19 +101,10 @@ export class SellerProductsController {
     const slug = await this.slugService.generateUniqueSlug(dto.title);
     const productCode = await this.productCodeService.generateProductCode();
 
-    // Tax columns supplied by the seller flow through unchanged. Admin
-    // moderation (existing approval workflow) is the safety net if the
-    // seller misclassifies HSN / rate. Stamp the audit fields when any
-    // tax data was supplied so the trail shows the seller as the
-    // origin until admin overrides.
-    const taxFieldsTouched =
-      dto.hsnCode !== undefined ||
-      dto.gstRateBps !== undefined ||
-      dto.supplyTaxability !== undefined ||
-      dto.taxInclusivePricing !== undefined ||
-      dto.cessRateBps !== undefined ||
-      dto.defaultUqcCode !== undefined ||
-      dto.taxCategory !== undefined;
+    // Tax-config (HSN / GST rate / supply taxability / cess / UQC / tax
+    // category) is NOT set by sellers — it's super-admin-only and applied
+    // later via the SUPER_ADMIN tax-config endpoints. The product is
+    // created with the schema defaults for those columns.
 
     // Phase 30 (2026-05-21) — atomic create + optional submit. The
     // pre-Phase-30 flow required a separate POST .../submit call so a
@@ -149,15 +140,6 @@ export class SellerProductsController {
         dimensionUnit: dto.dimensionUnit,
         returnPolicy: dto.returnPolicy,
         warrantyInfo: dto.warrantyInfo,
-        hsnCode: dto.hsnCode,
-        gstRateBps: dto.gstRateBps,
-        supplyTaxability: dto.supplyTaxability,
-        taxInclusivePricing: dto.taxInclusivePricing,
-        cessRateBps: dto.cessRateBps,
-        defaultUqcCode: dto.defaultUqcCode,
-        taxCategory: dto.taxCategory,
-        taxConfigUpdatedBy: taxFieldsTouched ? sellerId : undefined,
-        taxConfigUpdatedAt: taxFieldsTouched ? new Date() : undefined,
       },
       dto.tags,
       dto.seo,
@@ -428,17 +410,9 @@ export class SellerProductsController {
       { key: 'dimensionUnit', dtoKey: 'dimensionUnit' },
       { key: 'returnPolicy', dtoKey: 'returnPolicy' },
       { key: 'warrantyInfo', dtoKey: 'warrantyInfo' },
-      // Tax columns — same change-detection as the rest. Re-approval
-      // classifier (re-approval.service) treats anything not on the
-      // self-serve allowlist as content, so a tax change correctly
-      // forces admin review.
-      { key: 'hsnCode', dtoKey: 'hsnCode' },
-      { key: 'gstRateBps', dtoKey: 'gstRateBps' },
-      { key: 'supplyTaxability', dtoKey: 'supplyTaxability' },
-      { key: 'taxInclusivePricing', dtoKey: 'taxInclusivePricing' },
-      { key: 'cessRateBps', dtoKey: 'cessRateBps' },
-      { key: 'defaultUqcCode', dtoKey: 'defaultUqcCode' },
-      { key: 'taxCategory', dtoKey: 'taxCategory' },
+      // Tax columns (HSN, GST rate, supply taxability, cess, UQC, tax
+      // category) are intentionally NOT on the seller allowlist — they are
+      // super-admin-only and set via the SUPER_ADMIN tax-config endpoints.
     ];
     for (const { key, dtoKey } of simpleFields) {
       const dtoVal = dto[dtoKey];
@@ -453,63 +427,10 @@ export class SellerProductsController {
       }
     }
 
-    // Stamp the tax-config audit fields once if any tax column actually
-    // ended up in updateData (changed vs. current). No-op writes do not
-    // bump the stamp.
-    const TAX_KEYS = [
-      'hsnCode',
-      'gstRateBps',
-      'supplyTaxability',
-      'taxInclusivePricing',
-      'cessRateBps',
-      'defaultUqcCode',
-      'taxCategory',
-    ] as const;
-    const taxChanged = TAX_KEYS.some((k) => k in updateData);
-    if (taxChanged) {
-      // Phase 30 (2026-05-21) — once an admin attests the tax config
-      // (taxConfigVerified=true), sellers can no longer edit tax
-      // fields via self-service. Tax-data mistakes have downstream
-      // consequences (GST invoices, GSTR-1/3B reports) so subsequent
-      // edits require admin intervention. Pre-Phase-30 a seller could
-      // ping-pong tax values, repeatedly resetting taxConfigVerified
-      // and bottlenecking the admin queue.
-      if ((current as any)?.taxConfigVerified === true) {
-        throw new ForbiddenAppException(
-          'Tax fields (HSN, GST rate, supply taxability, cess, UQC, tax category) ' +
-            'cannot be edited after admin attestation. Open a support ticket for ' +
-            'tax corrections.',
-        );
-      }
-
-      updateData.taxConfigUpdatedBy = sellerId;
-      updateData.taxConfigUpdatedAt = new Date();
-      // Phase 37 — a seller edit to any tax field resets the
-      // admin attestation. Sellers cannot self-attest; the product
-      // re-enters the admin queue for tax-config review.
-      updateData.taxConfigVerified = false;
-      updateData.taxConfigVerifiedAt = null;
-      updateData.taxConfigVerifiedBy = null;
-      // Phase 45 (2026-05-21) — bump the monotonic version + queue
-      // an audit-log entry post-write (best-effort, doesn't block
-      // the update).
-      updateData.taxConfigVersion = { increment: 1 };
-      // Append-only audit row for the RESET transition. The seller
-      // can't attest, so this is the only audit trace we get for a
-      // seller-driven tax change.
-      this.taxAttestation
-        .recordReset({
-          productId,
-          actorId: sellerId,
-          actorRole: 'SELLER',
-          reason: 'Seller edited tax field',
-        })
-        .catch((err) =>
-          this.logger.warn(
-            `Failed to write tax-attestation audit row for ${productId}: ${err}`,
-          ),
-        );
-    }
+    // Tax-config columns are not seller-editable (removed from the
+    // allowlist above), so no tax-attestation reset / audit handling runs
+    // on a seller update. Tax changes happen only through the SUPER_ADMIN
+    // tax-config endpoints.
 
     // Compare tags — only include if actually different
     let tagsChanged = false;
@@ -848,20 +769,11 @@ export class SellerProductsController {
       missing.push('weight');
     }
 
-    // GST data — required for TAXABLE supply. EXEMPT / NIL_RATED /
-    // NON_GST products skip the HSN+rate check. Null supplyTaxability
-    // is treated as TAXABLE (the schema default) — sellers cannot opt
-    // out of GST identification by leaving the field blank.
-    const taxability = product.supplyTaxability ?? 'TAXABLE';
-    if (taxability === 'TAXABLE') {
-      if (!product.hsnCode) missing.push('hsnCode (TAXABLE supply requires HSN)');
-      if (
-        product.gstRateBps == null ||
-        Number.isNaN(Number(product.gstRateBps))
-      ) {
-        missing.push('gstRateBps (TAXABLE supply requires GST rate)');
-      }
-    }
+    // Tax data (HSN + GST rate) is NO LONGER checked at seller submit:
+    // sellers can't set it (it's super-admin-only), so blocking their
+    // submission on it would be a dead end. A super-admin sets the
+    // tax-config via the SUPER_ADMIN tax-config endpoints; until then the
+    // tax snapshot flags the line INCOMPLETE for review.
 
     if (missing.length > 0) {
       throw new BadRequestAppException(

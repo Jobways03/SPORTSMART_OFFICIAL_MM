@@ -93,30 +93,7 @@ export default function DisputeQueuePage() {
               <tr><td colSpan={6} style={{ ...td, textAlign: 'center', color: '#7A828F', padding: 32 }}>No disputes match these filters.</td></tr>
             ) : (
               items.map((d) => (
-                <tr key={d.id} style={{ borderBottom: '1px solid #F3F4F6', cursor: 'pointer' }} onClick={() => router.push(`/dashboard/disputes/${d.id}`)}>
-                  <td style={td}>
-                    <div style={{ fontFamily: 'ui-monospace, monospace', fontSize: 12, color: '#525A65' }}>{d.disputeNumber}</div>
-                    <Link href={`/dashboard/disputes/${d.id}`} style={{ color: '#0F1115', fontWeight: 600, textDecoration: 'none' }}>
-                      {d.summary.length > 60 ? d.summary.slice(0, 57) + '…' : d.summary}
-                    </Link>
-                  </td>
-                  <td style={td}>{KIND_LABEL[d.kind]}</td>
-                  <td style={td}>
-                    <div style={{ fontWeight: 600, color: '#0F1115' }}>{d.filedByName}</div>
-                    <div style={{ fontSize: 11, color: '#7A828F' }}>{d.filedByType.toLowerCase()}</div>
-                  </td>
-                  <td style={td}>
-                    <span style={{
-                      display: 'inline-flex', alignItems: 'center', height: 22, padding: '0 8px', borderRadius: 9999,
-                      background: STATUS_COLOR[d.status] + '22', color: STATUS_COLOR[d.status],
-                      fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em',
-                    }}>{d.status.replace('_', ' ').toLowerCase()}</span>
-                  </td>
-                  <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: d.severity >= 80 ? '#b91c1c' : '#0F1115' }}>{d.severity}</td>
-                  <td style={{ ...td, color: '#525A65', whiteSpace: 'nowrap' }}>
-                    {new Date(d.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                  </td>
-                </tr>
+                <DisputeRow key={d.id} d={d} onOpen={() => router.push(`/dashboard/disputes/${d.id}`)} />
               ))
             )}
           </tbody>
@@ -131,6 +108,63 @@ export default function DisputeQueuePage() {
         </div>
       )}
     </div>
+  );
+}
+
+// One dispute row. The whole row is clickable (router.push to the detail
+// page); a hover highlight + the link-styled dispute number + the trailing
+// chevron make it obvious the row drills in. The inner dispute-number <Link>
+// stops propagation so a direct click on it (or right-click → open in new
+// tab) doesn't also fire the row's onOpen.
+function DisputeRow({ d, onOpen }: { d: Dispute; onOpen: () => void }) {
+  const [hover, setHover] = useState(false);
+  return (
+    <tr
+      onClick={onOpen}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      style={{
+        borderBottom: '1px solid #F3F4F6',
+        cursor: 'pointer',
+        background: hover ? '#F6F8FA' : 'transparent',
+        transition: 'background 120ms',
+      }}
+    >
+      <td style={td}>
+        <Link
+          href={`/dashboard/disputes/${d.id}`}
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            fontFamily: 'ui-monospace, monospace', fontSize: 12, fontWeight: 600,
+            color: '#2563EB', textDecoration: hover ? 'underline' : 'none',
+          }}
+        >
+          {d.disputeNumber}
+        </Link>
+        <div style={{ color: '#0F1115', fontWeight: 600, marginTop: 2 }}>
+          {d.summary.length > 60 ? d.summary.slice(0, 57) + '…' : d.summary}
+        </div>
+      </td>
+      <td style={td}>{KIND_LABEL[d.kind]}</td>
+      <td style={td}>
+        <div style={{ fontWeight: 600, color: '#0F1115' }}>{d.filedByName}</div>
+        <div style={{ fontSize: 11, color: '#7A828F' }}>{d.filedByType.toLowerCase()}</div>
+      </td>
+      <td style={td}>
+        <span style={{
+          display: 'inline-flex', alignItems: 'center', height: 22, padding: '0 8px', borderRadius: 9999,
+          background: STATUS_COLOR[d.status] + '22', color: STATUS_COLOR[d.status],
+          fontSize: 11, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em',
+        }}>{d.status.replace('_', ' ').toLowerCase()}</span>
+      </td>
+      <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums', fontWeight: 600, color: d.severity >= 80 ? '#b91c1c' : '#0F1115' }}>{d.severity}</td>
+      <td style={{ ...td, color: '#525A65', whiteSpace: 'nowrap' }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 10 }}>
+          {new Date(d.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
+          <span aria-hidden style={{ fontSize: 16, fontWeight: 700, color: hover ? '#2563EB' : '#C2C8D0', transition: 'color 120ms' }}>›</span>
+        </span>
+      </td>
+    </tr>
   );
 }
 

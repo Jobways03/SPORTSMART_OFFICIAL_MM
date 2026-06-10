@@ -122,41 +122,10 @@ export class SellerCreateProductDto {
   @IsString()
   warrantyInfo?: string;
 
-  @IsOptional()
-  @Matches(/^\d{4,8}$/, {
-    message: 'hsnCode must be 4-8 digits (HSN hierarchical levels) with no spaces or punctuation',
-  })
-  hsnCode?: string;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Max(10_000)
-  gstRateBps?: number;
-
-  @IsOptional()
-  @IsEnum(SupplyTaxability)
-  supplyTaxability?: SupplyTaxability;
-
-  @IsOptional()
-  @IsBoolean()
-  taxInclusivePricing?: boolean;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Max(10_000)
-  cessRateBps?: number;
-
-  @IsOptional()
-  @Matches(/^[A-Z]{2,6}$/, {
-    message: 'defaultUqcCode must be 2-6 uppercase letters per CBIC UQC list (e.g. NOS, PCS, KGS)',
-  })
-  defaultUqcCode?: string;
-
-  @IsOptional()
-  @IsString()
-  taxCategory?: string;
+  // Tax-config cluster (HSN, GST rate, supply taxability, cess, UQC, tax
+  // category) is set ONLY by a super-admin via the SUPER_ADMIN-gated
+  // tax-config endpoints — never by sellers. Removed from this DTO so a
+  // seller request carrying these fields is rejected (forbidNonWhitelisted).
 
   @IsOptional()
   @IsArray()

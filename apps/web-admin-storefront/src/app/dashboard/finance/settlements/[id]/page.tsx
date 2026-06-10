@@ -30,6 +30,11 @@ interface SellerSettlementRow {
   totalSettlementAmountInPaise: string | number;
   totalPlatformMargin: string | number;
   totalPlatformMarginInPaise: string | number;
+  // Statutory deductions (set at cycle approval) — used to show the NET amount
+  // actually wired to the seller = gross settlement − TCS − TDS − commission GST.
+  tcsDeductedInPaise?: string | number;
+  tdsDeductedInPaise?: string | number;
+  totalCommissionGstInPaise?: string | number;
   status: string;
   paidAt?: string | null;
   utrReference?: string | null;
@@ -38,6 +43,9 @@ interface SellerSettlementRow {
   // Phase 153 — a settlement locked into an active payout batch can't be
   // adjusted until the batch is cancelled (mirrors the backend guard).
   payoutBatchId?: string | null;
+  // Commission tax invoice (SAC 9985) issued at cycle approval. Present ⇒
+  // the "Invoice" button can render/serve it from the backend.
+  commissionInvoiceNumber?: string | null;
 }
 
 interface CycleDetail {
@@ -104,6 +112,20 @@ interface ClawbackDebit {
   createdAt: string;
 }
 
+// Net amount actually wired to the seller (paise) = gross settlement − TCS −
+// TDS − commission GST. Base computed from the decimal × 100 so it's correct
+// even on legacy rows whose *_in_paise mirror is 0; deductions read the paise
+// columns the backend writes at approval.
+function netPayablePaise(s: SellerSettlementRow): number {
+  const gross = Math.round(Number(s.totalSettlementAmount) * 100);
+  return (
+    gross -
+    Number(s.tcsDeductedInPaise ?? 0) -
+    Number(s.tdsDeductedInPaise ?? 0) -
+    Number(s.totalCommissionGstInPaise ?? 0)
+  );
+}
+
 export default function SettlementCycleDetailPage() {
   const params = useParams();
   const cycleId = params?.id as string;
@@ -114,6 +136,9 @@ export default function SettlementCycleDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  // Per-row "Opening…" state while a settlement document is fetched.
+  // Keyed `${settlementId}:${kind}` so each button shows its own spinner.
+  const [docLoadingKey, setDocLoadingKey] = useState<string | null>(null);
 
   const { hasPermission } = usePermissions();
   const canApprove = hasPermission('settlements.approve');
@@ -513,6 +538,50 @@ export default function SettlementCycleDetailPage() {
     }
   };
 
+  // Open a settlement document — the commission tax invoice (SAC 9985) or
+  // the full settlement / payout statement — in a new tab. The endpoints
+  // serve authed HTML, so we fetch with the bearer token and hand the
+  // blob to the tab, opened synchronously (inside the click gesture) to
+  // dodge popup blockers; if it's blocked we fall back to a download.
+  const openSettlementDoc = async (
+    settlementId: string,
+    kind: 'invoice' | 'statement',
+  ) => {
+    setDocLoadingKey(`${settlementId}:${kind}`);
+    const win = window.open('', '_blank');
+    try {
+      const token = sessionStorage.getItem('adminAccessToken');
+      const apiBase =
+        process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const path =
+        kind === 'invoice' ? 'commission-invoice' : 'settlement-statement';
+      const res = await fetch(
+        `${apiBase}/api/v1/admin/settlements/${settlementId}/${path}`,
+        { headers: { Authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) throw new Error(`Server returned ${res.status}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      if (win) {
+        win.location.href = url;
+      } else {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${settlementId.slice(0, 8)}-${kind}.html`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      }
+      // Revoke later so the new tab has time to load the document.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (err) {
+      if (win) win.close();
+      setError((err as Error).message);
+    } finally {
+      setDocLoadingKey(null);
+    }
+  };
+
   if (loading) return <main style={{ padding: 32 }}>Loading…</main>;
   if (error)
     return (
@@ -599,8 +668,19 @@ export default function SettlementCycleDetailPage() {
       >
         <Stat label="Sellers in cycle" value={String(cycle.sellerSettlements.length)} />
         <Stat
-          label="Settlement total"
-          value={paiseToRupeesString(cycle.totalAmountInPaise)}
+          label="Net payout"
+          value={paiseToRupeesString(
+            cycle.sellerSettlements.reduce(
+              (sum, s) => sum + netPayablePaise(s),
+              0,
+            ) as never,
+          )}
+          sub={
+            cycle.sellerSettlements.some((s) => s.status === 'PENDING')
+              ? `gross ${paiseToRupeesString(cycle.totalAmountInPaise)} · before TCS/TDS`
+              : `gross ${paiseToRupeesString(cycle.totalAmountInPaise)}`
+          }
+          accent
         />
         <Stat
           label="Platform margin"
@@ -722,6 +802,38 @@ export default function SettlementCycleDetailPage() {
                   </td>
                   <td style={{ ...td, textAlign: 'right', fontWeight: 600 }}>
                     {paiseToRupeesString(s.totalSettlementAmountInPaise as never)}
+                    {netPayablePaise(s) !==
+                      Math.round(Number(s.totalSettlementAmount) * 100) && (
+                      <div
+                        title={
+                          s.status === 'PENDING'
+                            ? 'Provisional — only commission GST is known before approval. TCS (1%) and TDS (1% / 5% if no PAN) are computed when the cycle is approved, and the final net is wired at payout.'
+                            : "Statutory deductions are remitted to the government on the seller's behalf (the seller reclaims them). The NET is what you wire to the seller's bank."
+                        }
+                        style={{ fontSize: 10, fontWeight: 400, color: '#5b6066', marginTop: 3, lineHeight: 1.6 }}
+                      >
+                        {Number(s.totalCommissionGstInPaise ?? 0) > 0 && (
+                          <div>− GST (18%) {paiseToRupeesString(Number(s.totalCommissionGstInPaise) as never)}</div>
+                        )}
+                        {Number(s.tcsDeductedInPaise ?? 0) > 0 && (
+                          <div>− TCS (1%) {paiseToRupeesString(Number(s.tcsDeductedInPaise) as never)}</div>
+                        )}
+                        {Number(s.tdsDeductedInPaise ?? 0) > 0 && (
+                          <div>− TDS {paiseToRupeesString(Number(s.tdsDeductedInPaise) as never)}</div>
+                        )}
+                        <div style={{ fontWeight: 700, color: '#0F1115', marginTop: 1 }}>
+                          net pay{s.status === 'PENDING' ? ' (before TCS & TDS)' : ''}{' '}
+                          {paiseToRupeesString(netPayablePaise(s) as never)}
+                        </div>
+                        {s.status === 'PENDING' && (
+                          <div
+                            style={{ fontSize: 9.5, fontWeight: 400, fontStyle: 'italic', color: '#8a9099', marginTop: 2 }}
+                          >
+                            TCS (1%) and TDS (1% / 5% no-PAN) deducted at approval
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </td>
                   <td
                     style={{ ...td, textAlign: 'right', color: '#2e7d32' }}
@@ -779,6 +891,28 @@ export default function SettlementCycleDetailPage() {
                       >
                         View / Add
                       </button>
+                      {(s.status === 'APPROVED' || s.status === 'PAID') && (
+                        <button
+                          type="button"
+                          onClick={() => openSettlementDoc(s.id, 'statement')}
+                          disabled={docLoadingKey === `${s.id}:statement`}
+                          style={{ ...rowBtn, borderColor: '#1565c0', color: '#1565c0' }}
+                          title="Settlement / payout statement"
+                        >
+                          {docLoadingKey === `${s.id}:statement` ? 'Opening…' : 'Statement'}
+                        </button>
+                      )}
+                      {s.commissionInvoiceNumber && (
+                        <button
+                          type="button"
+                          onClick={() => openSettlementDoc(s.id, 'invoice')}
+                          disabled={docLoadingKey === `${s.id}:invoice`}
+                          style={{ ...rowBtn, borderColor: '#1565c0', color: '#1565c0' }}
+                          title={`Commission tax invoice ${s.commissionInvoiceNumber}`}
+                        >
+                          {docLoadingKey === `${s.id}:invoice` ? 'Opening…' : 'Invoice'}
+                        </button>
+                      )}
                       {canCancelClawback && cb && cb.count > 0 && (
                         <button
                           type="button"
@@ -900,9 +1034,11 @@ export default function SettlementCycleDetailPage() {
               Mark payout as paid
             </h3>
             <p style={{ fontSize: 13, color: '#525A65', marginTop: 8, lineHeight: 1.5 }}>
-              <strong>{payFor.sellerName ?? payFor.sellerId}</strong> · settlement amount{' '}
-              <strong>₹{paiseToRupeesString(payFor.totalSettlementAmountInPaise as never)}</strong>{' '}
-              (gross; net of TCS/TDS/GST is wired). This is final — enter the bank UTR.
+              <strong>{payFor.sellerName ?? payFor.sellerId}</strong> · gross settlement{' '}
+              <strong>₹{paiseToRupeesString(payFor.totalSettlementAmountInPaise as never)}</strong>.{' '}
+              Wire the <strong>net ₹{paiseToRupeesString(netPayablePaise(payFor) as never)}</strong>{' '}
+              (after TCS / TDS / commission GST — those are remitted to the government on the
+              seller&apos;s behalf). This is final — enter the bank UTR.
             </p>
             <input
               value={payUtr}
@@ -1405,16 +1541,18 @@ function Stat({
   label,
   value,
   accent,
+  sub,
 }: {
   label: string;
   value: string;
   accent?: boolean;
+  sub?: string;
 }) {
   return (
     <div
       style={{
-        background: '#fff',
-        border: '1px solid #d0d7de',
+        background: accent ? '#f0fdf4' : '#fff',
+        border: `1px solid ${accent ? '#bbf7d0' : '#d0d7de'}`,
         borderRadius: 8,
         padding: '14px 16px',
       }}
@@ -1440,6 +1578,11 @@ function Stat({
       >
         {value}
       </div>
+      {sub && (
+        <div style={{ marginTop: 3, fontSize: 11, color: '#94a3b8', fontVariantNumeric: 'tabular-nums' }}>
+          {sub}
+        </div>
+      )}
     </div>
   );
 }

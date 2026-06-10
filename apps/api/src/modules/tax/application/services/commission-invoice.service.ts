@@ -37,6 +37,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import {
+  renderCommissionInvoiceHtml,
+  renderSettlementStatementHtml,
+} from '../../domain/tax-document-html-template';
 import { DocumentSequenceService } from './document-sequence.service';
 import { PlatformGstProfileService } from './platform-gst-profile.service';
 import { TaxConfigService } from './tax-config.service';
@@ -80,6 +84,20 @@ export interface ApplyToCycleResult {
   invoicesSkipped: number;
   invoicesFailed: number;
   failedSettlementIds: string[];
+}
+
+/** Thrown by renderHtmlForSettlement when there's nothing to render: the
+ *  settlement doesn't exist, or its commission invoice hasn't been issued
+ *  yet (invoices are issued at cycle approval). `code` lets the HTTP layer
+ *  pick the right message without string-matching. */
+export class CommissionInvoiceUnavailableError extends Error {
+  constructor(
+    public readonly code: 'NOT_FOUND' | 'NOT_ISSUED',
+    message: string,
+  ) {
+    super(message);
+    this.name = 'CommissionInvoiceUnavailableError';
+  }
 }
 
 @Injectable()
@@ -323,6 +341,297 @@ export class CommissionInvoiceService {
   }
 
   /**
+   * Render the printable commission tax invoice (HTML) for one
+   * settlement. Renders fresh from the persisted invoice snapshot every
+   * call — no stored artifact to go stale. Throws
+   * CommissionInvoiceUnavailableError when the settlement is missing or
+   * its invoice hasn't been issued yet (issued at cycle approval).
+   */
+  async renderHtmlForSettlement(
+    settlementId: string,
+  ): Promise<{ documentNumber: string; html: string }> {
+    const settlement = await this.prisma.sellerSettlement.findUnique({
+      where: { id: settlementId },
+      include: {
+        seller: {
+          select: {
+            legalBusinessName: true,
+            sellerShopName: true,
+            gstin: true,
+            gstStateCode: true,
+            registeredBusinessAddressJson: true,
+            panNumber: true,
+            panLast4: true,
+          },
+        },
+        cycle: { select: { periodStart: true, periodEnd: true } },
+        adjustments: {
+          where: { status: 'ACTIVE' },
+          orderBy: { createdAt: 'asc' },
+          select: { adjustmentType: true, reason: true, amountInPaise: true },
+        },
+      },
+    });
+    if (!settlement) {
+      throw new CommissionInvoiceUnavailableError(
+        'NOT_FOUND',
+        `Settlement ${settlementId} not found.`,
+      );
+    }
+    if (!settlement.commissionInvoiceNumber) {
+      throw new CommissionInvoiceUnavailableError(
+        'NOT_ISSUED',
+        `Settlement ${settlementId} has no commission invoice yet — invoices are issued when the settlement cycle is approved.`,
+      );
+    }
+
+    const platform = await this.platformGstProfile.requireDefault();
+    // Invoice date drives the displayed FY; fall back to paidAt then now
+    // for the rare legacy row issued before the date column existed.
+    const invoiceDate =
+      settlement.commissionInvoiceDate ?? settlement.paidAt ?? new Date();
+
+    const maskPan = (
+      full?: string | null,
+      last4?: string | null,
+    ): string | null => full ?? (last4 ? `••••${last4}` : null);
+
+    const html = renderCommissionInvoiceHtml({
+      mode: 'OFF',
+      invoiceNumber: settlement.commissionInvoiceNumber,
+      invoiceDate,
+      financialYear: DocumentSequenceService.financialYearOf(invoiceDate),
+      filingPeriod: settlement.commissionInvoiceFilingPeriod ?? '',
+      sacCode: settlement.commissionInvoiceSacCode ?? '9985',
+      gstRateBps: settlement.commissionGstRateBps,
+      splitType: settlement.commissionGstSplitType,
+
+      marketplaceLegalName: platform.legalBusinessName,
+      marketplaceGstin:
+        settlement.commissionInvoiceSupplierGstin ?? platform.gstin,
+      // requireDefault() never returns the full PAN (only panLast4 — see
+      // PlatformGstProfileItem); show the masked form.
+      marketplacePan: maskPan(null, platform.panLast4),
+      marketplaceStateCode: platform.gstStateCode,
+      marketplaceAddressJson: normalizeAddress(platform.registeredAddressJson),
+
+      sellerLegalName:
+        settlement.seller?.legalBusinessName ?? settlement.sellerName,
+      sellerShopName: settlement.seller?.sellerShopName ?? null,
+      sellerGstin:
+        settlement.commissionInvoiceRecipientGstin ??
+        settlement.seller?.gstin ??
+        null,
+      sellerPan: maskPan(
+        settlement.seller?.panNumber,
+        settlement.seller?.panLast4,
+      ),
+      sellerIsB2c: settlement.commissionRecipientIsB2c,
+      sellerStateCode: settlement.seller?.gstStateCode ?? null,
+      sellerAddressJson: normalizeAddress(
+        settlement.seller?.registeredBusinessAddressJson,
+      ),
+      placeOfSupplyStateCode:
+        settlement.commissionPlaceOfSupplyStateCode ?? '—',
+
+      settlementId: settlement.id,
+      settlementStatementRef: `SM-STMT-${settlement.id.slice(0, 8).toUpperCase()}`,
+      cyclePeriodStart: settlement.cycle?.periodStart ?? null,
+      cyclePeriodEnd: settlement.cycle?.periodEnd ?? null,
+      totalOrders: settlement.totalOrders,
+      totalItems: settlement.totalItems,
+      grossGmvInPaise: settlement.totalPlatformAmountInPaise,
+
+      commissionTaxableInPaise: settlement.totalPlatformMarginInPaise,
+      cgstInPaise: settlement.cgstOnCommissionInPaise,
+      sgstInPaise: settlement.sgstOnCommissionInPaise,
+      igstInPaise: settlement.igstOnCommissionInPaise,
+      totalGstInPaise: settlement.totalCommissionGstInPaise,
+
+      adjustments: settlement.adjustments.map((a) => ({
+        label: commissionAdjustmentLabel(a.adjustmentType),
+        reason: a.reason,
+        amountInPaise: a.amountInPaise,
+      })),
+
+      irn: settlement.commissionInvoiceIrn,
+    });
+
+    return { documentNumber: settlement.commissionInvoiceNumber, html };
+  }
+
+  /**
+   * Render the settlement / payout statement (HTML) for one settlement —
+   * the full reconciliation (gross → commission → GST → TCS → TDS → net)
+   * the seller sees on screen, as a downloadable document. NOT a tax
+   * invoice (the commission GST tax invoice is separate); this statement
+   * cross-references the commission invoice number when present. Available
+   * for any settlement that exists. Throws CommissionInvoiceUnavailableError
+   * (NOT_FOUND) when the settlement is missing.
+   */
+  async renderSettlementStatementForSettlement(
+    settlementId: string,
+  ): Promise<{ documentNumber: string; html: string }> {
+    const settlement = await this.prisma.sellerSettlement.findUnique({
+      where: { id: settlementId },
+      include: {
+        seller: {
+          select: {
+            legalBusinessName: true,
+            sellerShopName: true,
+            gstin: true,
+            gstStateCode: true,
+            registeredBusinessAddressJson: true,
+            panNumber: true,
+            panLast4: true,
+            bankDetails: {
+              select: {
+                accountHolderName: true,
+                accountNumberLast4: true,
+                ifscCode: true,
+                bankName: true,
+              },
+            },
+          },
+        },
+        cycle: {
+          select: {
+            periodStart: true,
+            periodEnd: true,
+            approvedAt: true,
+            status: true,
+          },
+        },
+        commissionRecords: {
+          orderBy: { createdAt: 'asc' },
+          select: {
+            orderNumber: true,
+            productTitle: true,
+            quantity: true,
+            totalPlatformAmountInPaise: true,
+            platformMarginInPaise: true,
+            status: true,
+            createdAt: true,
+          },
+        },
+        adjustments: {
+          where: { status: 'ACTIVE' },
+          orderBy: { createdAt: 'asc' },
+          select: { adjustmentType: true, reason: true, amountInPaise: true },
+        },
+      },
+    });
+    if (!settlement) {
+      throw new CommissionInvoiceUnavailableError(
+        'NOT_FOUND',
+        `Settlement ${settlementId} not found.`,
+      );
+    }
+
+    const platform = await this.platformGstProfile.requireDefault();
+    const maskPan = (
+      full?: string | null,
+      last4?: string | null,
+    ): string | null => full ?? (last4 ? `••••${last4}` : null);
+
+    // Net mirrors SettlementTds194OHookService.computeNetPayoutInPaise,
+    // clamped at zero (a misconfigured deduction shouldn't render a
+    // negative payout — same clamp the seller UI applies).
+    let netPayoutInPaise =
+      settlement.totalSettlementAmountInPaise -
+      settlement.tcsDeductedInPaise -
+      settlement.tdsDeductedInPaise -
+      settlement.totalCommissionGstInPaise;
+    if (netPayoutInPaise < 0n) netPayoutInPaise = 0n;
+
+    const statementDate =
+      settlement.paidAt ?? settlement.cycle?.approvedAt ?? settlement.createdAt;
+    const statementRef = `SM-STMT-${settlement.id.slice(0, 8).toUpperCase()}`;
+
+    const bank = settlement.seller?.bankDetails;
+    const returnedOrderCount = settlement.commissionRecords.filter(
+      (r) => r.status === 'REFUNDED',
+    ).length;
+
+    const html = renderSettlementStatementHtml({
+      mode: 'OFF',
+      statementRef,
+      settlementId: settlement.id,
+      statementDate,
+      periodStart: settlement.cycle?.periodStart ?? null,
+      periodEnd: settlement.cycle?.periodEnd ?? null,
+      payoutDate: settlement.paidAt ?? settlement.payoutDueBy ?? null,
+      status: settlement.status,
+      totalOrders: settlement.totalOrders,
+      totalItems: settlement.totalItems,
+
+      marketplaceLegalName: platform.legalBusinessName,
+      marketplaceGstin:
+        settlement.commissionInvoiceSupplierGstin ?? platform.gstin,
+      marketplaceStateCode: platform.gstStateCode,
+      marketplaceAddressJson: normalizeAddress(platform.registeredAddressJson),
+
+      sellerLegalName:
+        settlement.seller?.legalBusinessName ?? settlement.sellerName,
+      sellerShopName: settlement.seller?.sellerShopName ?? null,
+      sellerGstin: settlement.seller?.gstin ?? null,
+      sellerPan: maskPan(
+        settlement.seller?.panNumber,
+        settlement.seller?.panLast4,
+      ),
+      // No human seller code in the model — fall back to the seller ID.
+      sellerCode: settlement.sellerId,
+      sellerStateCode: settlement.seller?.gstStateCode ?? null,
+      sellerAddressJson: normalizeAddress(
+        settlement.seller?.registeredBusinessAddressJson,
+      ),
+
+      orders: settlement.commissionRecords.map((r) => ({
+        orderNumber: r.orderNumber,
+        date: r.createdAt,
+        productTitle: r.productTitle,
+        quantity: r.quantity,
+        grossInPaise: r.totalPlatformAmountInPaise,
+        commissionInPaise: r.platformMarginInPaise,
+        status: r.status,
+      })),
+      returnedOrderCount,
+
+      grossGmvInPaise: settlement.totalPlatformAmountInPaise,
+      commissionInPaise: settlement.totalPlatformMarginInPaise,
+      settlementAmountInPaise: settlement.totalSettlementAmountInPaise,
+      commissionGstInPaise: settlement.totalCommissionGstInPaise,
+      commissionGstSplitType: settlement.commissionGstSplitType,
+      cgstOnCommissionInPaise: settlement.cgstOnCommissionInPaise,
+      sgstOnCommissionInPaise: settlement.sgstOnCommissionInPaise,
+      igstOnCommissionInPaise: settlement.igstOnCommissionInPaise,
+      commissionGstRateBps: settlement.commissionGstRateBps,
+      tcsInPaise: settlement.tcsDeductedInPaise,
+      tcsRateBps: settlement.tcsRateBpsSnapshot,
+      tdsInPaise: settlement.tdsDeductedInPaise,
+      tdsRateBps: settlement.tdsRateBpsSnapshot,
+      netPayoutInPaise,
+
+      adjustments: settlement.adjustments.map((a) => ({
+        label: commissionAdjustmentLabel(a.adjustmentType),
+        reason: a.reason,
+        amountInPaise: a.amountInPaise,
+      })),
+
+      utrReference: settlement.utrReference,
+      paidAt: settlement.paidAt,
+      paymentMethod: settlement.paymentMethod,
+      bankAccountHolder: bank?.accountHolderName ?? null,
+      bankName: bank?.bankName ?? null,
+      bankIfsc: bank?.ifscCode ?? null,
+      bankAccountLast4: bank?.accountNumberLast4 ?? null,
+      commissionInvoiceNumber: settlement.commissionInvoiceNumber,
+    });
+
+    return { documentNumber: statementRef, html };
+  }
+
+  /**
    * Issue a §9B credit-note number for a commission reversal. Used by
    * the GSTR-1 exporter when a settlement carries a negative commission
    * (return-driven). Reuses the same MKTCOM scope but with the
@@ -365,4 +674,42 @@ function toFilingPeriod(date: Date): string {
   const y = ist.getUTCFullYear();
   const m = ist.getUTCMonth() + 1;
   return `${y}-${m.toString().padStart(2, '0')}`;
+}
+
+/**
+ * Normalise an address JSON to the shape the template's formatter reads
+ * ({line1,line2,city,state,pincode,country}). PlatformGstProfile stores
+ * `addressLine1/addressLine2`; sellers store `line1/line2` — fold both
+ * into one shape so the supplier line renders regardless of source.
+ */
+/** Human label for a SettlementAdjustment type on the commission invoice's
+ *  Adjustments & Recoveries section (maps to the seller-facing wording). */
+function commissionAdjustmentLabel(type: string): string {
+  switch (type) {
+    case 'COURIER_PENALTY':
+      return 'Logistics Recovery (courier penalty)';
+    case 'SLA_FINE':
+      return 'SLA Breach Penalty';
+    case 'GOODWILL':
+      return 'Goodwill Credit';
+    case 'MANUAL_CORRECTION':
+      return 'Manual Adjustment';
+    case 'CLAWBACK':
+      return 'Commission Clawback';
+    default:
+      return 'Other Adjustment';
+  }
+}
+
+function normalizeAddress(json: unknown): Prisma.JsonValue | null {
+  if (!json || typeof json !== 'object' || Array.isArray(json)) return null;
+  const o = json as Record<string, unknown>;
+  return {
+    line1: (o.line1 ?? o.addressLine1 ?? '') as string,
+    line2: (o.line2 ?? o.addressLine2 ?? '') as string,
+    city: (o.city ?? '') as string,
+    state: (o.state ?? '') as string,
+    pincode: (o.pincode ?? '') as string,
+    country: (o.country ?? '') as string,
+  };
 }

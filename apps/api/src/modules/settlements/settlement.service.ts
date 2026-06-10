@@ -22,7 +22,10 @@ import { SettlementTds194OHookService } from '../tax/application/services/settle
 // from the marketplace-commission-gstr flow audit). Same hook pattern
 // as TCS / TDS — runs after the APPROVED cascade, errors don't roll
 // back the cycle.
-import { CommissionInvoiceService } from '../tax/application/services/commission-invoice.service';
+import {
+  CommissionInvoiceService,
+  CommissionInvoiceUnavailableError,
+} from '../tax/application/services/commission-invoice.service';
 import { computeCommissionGst } from '../tax/domain/commission-gst-calculator';
 
 // Phase 142 — the per-seller aggregation shape shared by createCycle (writes)
@@ -651,6 +654,67 @@ export class SettlementService {
   }
 
   /* ── T3: List cycles ── */
+  /**
+   * Render the commission tax invoice (HTML) for one seller settlement.
+   * Delegates to CommissionInvoiceService, which renders fresh from the
+   * persisted invoice snapshot. Throws CommissionInvoiceUnavailableError
+   * (mapped to 404 at the controller) when the invoice isn't issued.
+   */
+  async getCommissionInvoiceHtml(settlementId: string) {
+    return this.commissionInvoice.renderHtmlForSettlement(settlementId);
+  }
+
+  /**
+   * Seller-facing variant. Verifies the settlement belongs to the
+   * requesting seller BEFORE rendering — a seller may only download their
+   * own commission invoice. An ownership miss throws NOT_FOUND (not a
+   * "forbidden") so we don't leak the existence of other sellers' rows.
+   */
+  async getSellerCommissionInvoiceHtml(
+    sellerId: string,
+    settlementId: string,
+  ) {
+    const owned = await this.prisma.sellerSettlement.findFirst({
+      where: { id: settlementId, sellerId },
+      select: { id: true },
+    });
+    if (!owned) {
+      throw new CommissionInvoiceUnavailableError(
+        'NOT_FOUND',
+        `Settlement ${settlementId} not found.`,
+      );
+    }
+    return this.commissionInvoice.renderHtmlForSettlement(settlementId);
+  }
+
+  /** Settlement / payout statement (full breakdown) for one settlement. */
+  async getSettlementStatementHtml(settlementId: string) {
+    return this.commissionInvoice.renderSettlementStatementForSettlement(
+      settlementId,
+    );
+  }
+
+  /** Seller-facing settlement statement — ownership-checked (see
+   *  getSellerCommissionInvoiceHtml for the why-404-not-403 reasoning). */
+  async getSellerSettlementStatementHtml(
+    sellerId: string,
+    settlementId: string,
+  ) {
+    const owned = await this.prisma.sellerSettlement.findFirst({
+      where: { id: settlementId, sellerId },
+      select: { id: true },
+    });
+    if (!owned) {
+      throw new CommissionInvoiceUnavailableError(
+        'NOT_FOUND',
+        `Settlement ${settlementId} not found.`,
+      );
+    }
+    return this.commissionInvoice.renderSettlementStatementForSettlement(
+      settlementId,
+    );
+  }
+
   async listCycles(page: number, limit: number) {
     const skip = (page - 1) * limit;
     const [cycles, total] = await Promise.all([
@@ -1065,6 +1129,21 @@ export class SettlementService {
 
     const trimmedUtr = utrReference.trim();
 
+    // Record the NET amount actually wired to the seller = settlement gross
+    // − TCS − TDS − commission GST. Pre-fix this column stayed 0, so the admin
+    // side had no record of what was actually paid (only the gross settlement,
+    // which is why "₹1,439.20 admin vs ₹1,202.55 seller" looked inconsistent).
+    // The tax fields are populated at cycle approval, so they're present here.
+    const grossPaise = BigInt(
+      Math.round(Number(settlement.totalSettlementAmount) * 100),
+    );
+    const netPaidPaise =
+      grossPaise -
+      BigInt(settlement.tcsDeductedInPaise ?? 0) -
+      BigInt(settlement.tdsDeductedInPaise ?? 0) -
+      BigInt(settlement.totalCommissionGstInPaise ?? 0);
+    const paidAmountInPaise = netPaidPaise > 0n ? netPaidPaise : 0n;
+
     try {
       await this.prisma.$transaction(async (tx) => {
         // Phase 145 — version-CAS: only an APPROVED (or previously-FAILED, i.e.
@@ -1076,6 +1155,8 @@ export class SettlementService {
             status: 'PAID',
             paidAt: new Date(),
             utrReference: trimmedUtr,
+            // The net amount actually wired (gross − TCS − TDS − commission GST).
+            paidAmountInPaise,
             // Phase 145 — denormalise the actor + payment metadata onto the row
             // (list/CSV "paid by X" without an audit_logs join). Clear any prior
             // failure reason on a successful retry.

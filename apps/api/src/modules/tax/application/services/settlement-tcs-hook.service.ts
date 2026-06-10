@@ -99,6 +99,9 @@ export class SettlementTcsHookService {
         continue;
       }
       try {
+        // Monthly GSTR-8 ledger — the figure deposited ONCE for the seller's
+        // whole filing period. This is the reporting aggregate, NOT the amount
+        // deducted from this single settlement.
         const { ledger } = await this.tcs.computeForSeller({
           sellerId: s.sellerId,
           filingPeriod,
@@ -107,16 +110,28 @@ export class SettlementTcsHookService {
             `Settlement cycle ${cycle.id} approved → filing period ${filingPeriod}`,
         });
 
+        // Per-settlement TCS = rate × THIS settlement's OWN taxable supply (its
+        // orders' tax-invoice taxable value). Pre-fix this stamped the whole
+        // month's TCS (ledger.totalTcsInPaise) on every settlement, so a seller
+        // settled weekly was charged the full monthly TCS on each weekly
+        // payout. Now each settlement bears only its own slice; summed across
+        // the period's settlements it reconciles to the monthly ledger.
+        const perSettlementTcsInPaise = await this.computeSettlementTcs(
+          s.id,
+          s.sellerId,
+          ledger.tcsRateBps,
+        );
+
         await this.prisma.sellerSettlement.update({
           where: { id: s.id },
           data: {
             tcsLedgerId: ledger.id,
-            tcsDeductedInPaise: ledger.totalTcsInPaise,
+            tcsDeductedInPaise: perSettlementTcsInPaise,
             tcsRateBpsSnapshot: ledger.tcsRateBps,
             tcsFilingPeriod: filingPeriod,
           },
         });
-        total += ledger.totalTcsInPaise;
+        total += perSettlementTcsInPaise;
         processed++;
       } catch (err) {
         // Per-settlement failure is captured so the caller can see the
@@ -157,6 +172,158 @@ export class SettlementTcsHookService {
   }
 
   /**
+   * TCS attributable to a SINGLE settlement = rate × the taxable value of the
+   * tax invoices for the orders in that settlement (invoices + debit notes add,
+   * credit notes subtract). This is the amount deducted from THIS payout —
+   * distinct from the monthly GSTR-8 ledger total (deposited to the government
+   * once for the whole period). Uses the same document basis as the monthly
+   * ledger so per-settlement amounts reconcile to it.
+   */
+  private async computeSettlementTcs(
+    settlementId: string,
+    sellerId: string,
+    rateBps: number,
+  ): Promise<bigint> {
+    const recs = await this.prisma.commissionRecord.findMany({
+      where: { settlementId },
+      select: { masterOrderId: true },
+      distinct: ['masterOrderId'],
+    });
+    const masterOrderIds = recs
+      .map((r) => r.masterOrderId)
+      .filter((id): id is string => !!id);
+    if (masterOrderIds.length === 0) return 0n;
+
+    const docs = await this.prisma.taxDocument.findMany({
+      where: {
+        sellerId,
+        masterOrderId: { in: masterOrderIds },
+        documentType: {
+          in: [
+            'TAX_INVOICE',
+            'INVOICE_CUM_BILL_OF_SUPPLY',
+            'DEBIT_NOTE',
+            'CREDIT_NOTE',
+          ],
+        },
+        status: { notIn: ['VOIDED_DRAFT', 'SUPERSEDED'] },
+      },
+      select: { documentType: true, taxableAmountInPaise: true },
+    });
+
+    let taxable = 0n;
+    for (const d of docs) {
+      if (d.documentType === 'CREDIT_NOTE') taxable -= d.taxableAmountInPaise;
+      else taxable += d.taxableAmountInPaise;
+    }
+    if (taxable <= 0n) return 0n;
+    // rate is in basis points (100 = 1%); round half-up.
+    return (taxable * BigInt(rateBps) + 5000n) / 10000n;
+  }
+
+  /**
+   * Phase 250 (Franchise tax) — apply §52 TCS to ONE FranchiseSettlement at
+   * approval (the franchise flow approves one at a time). Computes the
+   * franchise's monthly ledger (idempotent) and stamps THIS settlement's own
+   * per-settlement slice. Base = the franchise's ONLINE tax invoices only.
+   */
+  async applyToFranchiseSettlementOnApprove(args: {
+    settlementId: string;
+    actorId?: string;
+  }): Promise<{ stamped: boolean; skipped: boolean; tcsInPaise: bigint }> {
+    const s = await this.prisma.franchiseSettlement.findUnique({
+      where: { id: args.settlementId },
+      select: {
+        id: true,
+        franchiseId: true,
+        tcsLedgerId: true,
+        cycle: { select: { periodEnd: true } },
+      },
+    });
+    if (!s) {
+      throw new Error(`FranchiseSettlement ${args.settlementId} not found`);
+    }
+    if (s.tcsLedgerId) {
+      // Idempotent — already stamped on a prior approval pass.
+      return { stamped: false, skipped: true, tcsInPaise: 0n };
+    }
+
+    const filingPeriod = TcsService.filingPeriodOf(s.cycle.periodEnd);
+    // Monthly GSTR-8 ledger (deposited once for the period). NOT the amount
+    // deducted from this single settlement.
+    const { ledger } = await this.tcs.computeForFranchise({
+      franchiseId: s.franchiseId,
+      filingPeriod,
+      computedBy: args.actorId,
+      computedReason:
+        `Franchise settlement ${s.id} approved → filing period ${filingPeriod}`,
+    });
+
+    const perSettlementTcsInPaise = await this.computeFranchiseSettlementTcs(
+      s.id,
+      s.franchiseId,
+      ledger.tcsRateBps,
+    );
+    await this.prisma.franchiseSettlement.update({
+      where: { id: s.id },
+      data: {
+        tcsLedgerId: ledger.id,
+        tcsDeductedInPaise: perSettlementTcsInPaise,
+        tcsRateBpsSnapshot: ledger.tcsRateBps,
+        tcsFilingPeriod: filingPeriod,
+      },
+    });
+    return { stamped: true, skipped: false, tcsInPaise: perSettlementTcsInPaise };
+  }
+
+  /**
+   * Franchise per-settlement TCS slice = rate × the taxable value of THIS
+   * settlement's ONLINE tax invoices. The settlement's online orders are the
+   * sub-order ids on its ONLINE_ORDER finance-ledger entries (sourceId =
+   * subOrderId); invoices + debit notes add, credit notes subtract. Same
+   * document basis as the monthly franchise ledger so the slices reconcile.
+   */
+  private async computeFranchiseSettlementTcs(
+    settlementId: string,
+    franchiseId: string,
+    rateBps: number,
+  ): Promise<bigint> {
+    const entries = await this.prisma.franchiseFinanceLedger.findMany({
+      where: { settlementBatchId: settlementId, sourceType: 'ONLINE_ORDER' },
+      select: { sourceId: true },
+    });
+    const subOrderIds = entries
+      .map((e) => e.sourceId)
+      .filter((id): id is string => !!id);
+    if (subOrderIds.length === 0) return 0n;
+
+    const docs = await this.prisma.taxDocument.findMany({
+      where: {
+        franchiseId,
+        subOrderId: { in: subOrderIds },
+        documentType: {
+          in: [
+            'TAX_INVOICE',
+            'INVOICE_CUM_BILL_OF_SUPPLY',
+            'DEBIT_NOTE',
+            'CREDIT_NOTE',
+          ],
+        },
+        status: { notIn: ['VOIDED_DRAFT', 'SUPERSEDED'] },
+      },
+      select: { documentType: true, taxableAmountInPaise: true },
+    });
+
+    let taxable = 0n;
+    for (const d of docs) {
+      if (d.documentType === 'CREDIT_NOTE') taxable -= d.taxableAmountInPaise;
+      else taxable += d.taxableAmountInPaise;
+    }
+    if (taxable <= 0n) return 0n;
+    return (taxable * BigInt(rateBps) + 5000n) / 10000n;
+  }
+
+  /**
    * Mark the TCS ledger row COMPUTED → COLLECTED when its linked
    * SellerSettlement is paid. Idempotent.
    */
@@ -189,6 +356,41 @@ export class SettlementTcsHookService {
       return { ledgerId: settlement.tcsLedgerId, flipped: false };
     }
 
+    await this.tcs.markCollected({
+      ledgerId: settlement.tcsLedgerId,
+      settlementId: args.settlementId,
+    });
+    return { ledgerId: settlement.tcsLedgerId, flipped: true };
+  }
+
+  /**
+   * Phase 250 (Franchise tax) — flip the §52 TCS ledger COMPUTED → COLLECTED
+   * when a FranchiseSettlement is paid. Mirrors markCollectedOnPay (seller).
+   */
+  async markCollectedOnPayFranchise(args: {
+    settlementId: string;
+  }): Promise<{ ledgerId: string | null; flipped: boolean }> {
+    const settlement = await this.prisma.franchiseSettlement.findUnique({
+      where: { id: args.settlementId },
+      select: { tcsLedgerId: true },
+    });
+    if (!settlement?.tcsLedgerId) {
+      return { ledgerId: null, flipped: false };
+    }
+    const before = await this.prisma.gstTcsSettlementLedger.findUnique({
+      where: { id: settlement.tcsLedgerId },
+      select: { status: true },
+    });
+    if (!before) {
+      this.logger.warn(
+        `Franchise settlement ${args.settlementId} references missing TCS ledger ` +
+          `${settlement.tcsLedgerId} — orphan link, skipping mark-collected.`,
+      );
+      return { ledgerId: settlement.tcsLedgerId, flipped: false };
+    }
+    if (before.status !== 'COMPUTED') {
+      return { ledgerId: settlement.tcsLedgerId, flipped: false };
+    }
     await this.tcs.markCollected({
       ledgerId: settlement.tcsLedgerId,
       settlementId: args.settlementId,
