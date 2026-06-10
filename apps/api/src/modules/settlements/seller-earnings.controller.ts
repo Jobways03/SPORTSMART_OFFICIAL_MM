@@ -1,13 +1,19 @@
 import {
   Controller,
   Get,
+  Header,
+  NotFoundException,
+  Param,
+  ParseUUIDPipe,
   Query,
+  Res,
   UseGuards,
   Req,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { SellerAuthGuard } from '../../core/guards';
 import { SettlementService } from './settlement.service';
+import { CommissionInvoiceUnavailableError } from '../tax/application/services/commission-invoice.service';
 
 @ApiTags('Seller Earnings')
 @Controller('seller/earnings')
@@ -75,6 +81,68 @@ export class SellerEarningsController {
       message: 'Settlement history retrieved',
       data,
     };
+  }
+
+  /* ── GET /seller/earnings/settlements/:settlementId/commission-invoice ──
+   * The seller's own copy of the marketplace commission tax invoice (SAC
+   * 9985) for one settlement, served inline as HTML to view / print /
+   * save. Ownership is enforced in the service (a seller can only fetch
+   * their own settlement); 404 if it isn't theirs or the invoice hasn't
+   * been issued yet (invoices are issued at cycle approval). */
+  @Get('settlements/:settlementId/commission-invoice')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  async getCommissionInvoice(
+    @Req() req: any,
+    @Param('settlementId', ParseUUIDPipe) settlementId: string,
+    @Res() res: any,
+  ) {
+    let result: { documentNumber: string; html: string };
+    try {
+      result = await this.settlementService.getSellerCommissionInvoiceHtml(
+        req.sellerId,
+        settlementId,
+      );
+    } catch (err) {
+      if (err instanceof CommissionInvoiceUnavailableError) {
+        throw new NotFoundException(err.message);
+      }
+      throw err;
+    }
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${result.documentNumber}.html"`,
+    );
+    res.send(result.html);
+  }
+
+  /* ── GET /seller/earnings/settlements/:settlementId/settlement-statement ──
+   * The seller's own settlement / payout statement (full breakdown) for
+   * one settlement, served inline as HTML. Ownership enforced in the
+   * service. Remittance advice, not a tax invoice. */
+  @Get('settlements/:settlementId/settlement-statement')
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  async getSettlementStatement(
+    @Req() req: any,
+    @Param('settlementId', ParseUUIDPipe) settlementId: string,
+    @Res() res: any,
+  ) {
+    let result: { documentNumber: string; html: string };
+    try {
+      result = await this.settlementService.getSellerSettlementStatementHtml(
+        req.sellerId,
+        settlementId,
+      );
+    } catch (err) {
+      if (err instanceof CommissionInvoiceUnavailableError) {
+        throw new NotFoundException(err.message);
+      }
+      throw err;
+    }
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${result.documentNumber}.html"`,
+    );
+    res.send(result.html);
   }
 
   /* ── Phase B (P0.5) — GET /seller/earnings/discount-deductions ──

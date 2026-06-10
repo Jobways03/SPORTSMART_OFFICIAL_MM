@@ -514,6 +514,9 @@ export class TaxDocumentService {
           masterOrderId: subOrder.masterOrder.id,
           subOrderId: subOrder.id,
           sellerId: subOrder.sellerId,
+          // Phase 250 (Franchise tax) — franchise party key for FRANCHISE rows
+          // (null for marketplace-seller rows), mirroring sellerId.
+          franchiseId: subOrder.franchiseId,
           customerId: subOrder.masterOrder.customerId,
           supplierType: summary.supplierType ?? ('MARKETPLACE_SELLER' as SupplierType),
           invoiceType,
@@ -792,6 +795,9 @@ export class TaxDocumentService {
           financialYear: fy,
           // POS rows leave master/sub null and use posSaleId.
           posSaleId: sale.id,
+          // Phase 250 (Franchise tax) — franchise party key (POS is always a
+          // franchise supply). Mirrors sellerId on the e-commerce path.
+          franchiseId: sale.franchiseId,
           customerId: null,
           supplierType: 'FRANCHISE' as SupplierType,
           // Walk-in B2C is the default; B2B GSTIN capture at register

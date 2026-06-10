@@ -66,6 +66,14 @@ model GstTcsSettlementLedger {
   // Calendar month "YYYY-MM". Per CBIC, GSTR-8 is monthly.
   filingPeriod String  @map("filing_period")
 
+  // Phase 250 (Franchise tax) — party generalization. This §52 TCS ledger now
+  // serves BOTH marketplace sellers and franchises. `partyType` disambiguates;
+  // exactly one of (sellerId, franchiseId) is set. Existing rows default to
+  // MARKETPLACE_SELLER. Per-party active-row uniqueness (excluding REVERSED) is
+  // enforced by raw partial indexes created in the migration.
+  partyType   SupplierType @default(MARKETPLACE_SELLER) @map("party_type")
+  franchiseId String?      @map("franchise_id")
+
   // Frozen snapshot at compute time so a later GSTIN/state change
   // doesn't rewrite filed history.
   supplierGstin     String? @map("supplier_gstin")
@@ -166,11 +174,15 @@ model GstTcsSettlementLedger {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   seller            Seller?            @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  // Phase 250 (Franchise tax) — franchise party (party-generic ledger).
+  franchise            FranchisePartner?    @relation(fields: [franchiseId], references: [id], onDelete: Restrict)
   // Phase 17 GST — back-link to the settlement(s) that collected this
   // TCS row. Usually 1:1 (one settlement → one ledger row), but the
   // schema allows N to keep the correction-flow flexibility (a
   // REVERSED row's predecessor settlement still points back).
   sellerSettlements SellerSettlement[]
+  // Phase 250 (Franchise tax) — back-link to the franchise settlement(s).
+  franchiseSettlements FranchiseSettlement[]
   // Phase 160 (§52 lifecycle audit #6 + #8) — append-only status history.
   events            GstTcsLedgerEvent[]
 
@@ -180,6 +192,8 @@ model GstTcsSettlementLedger {
   // EXCLUDING REVERSED rows is created in the migration via raw SQL
   // (Prisma's @@unique doesn't support WHERE clauses).
   @@index([sellerId, filingPeriod])
+  // Phase 250 (Franchise tax) — franchise active-row lookup (mirror of seller).
+  @@index([franchiseId, filingPeriod])
   @@index([status])
   // Phase 163 (Tax Audit Readiness audit #7) — the readiness TCS-unfiled
   // scan selects `status IN (COMPUTED, COLLECTED) AND filingPeriod <= cutoff`;

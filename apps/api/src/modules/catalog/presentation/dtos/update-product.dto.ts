@@ -169,44 +169,9 @@ export class UpdateProductDto {
   allowPartialReturn?: boolean;
 
   // ─── Tax fields (Phase 1 GST) ──────────────────────────────────
-  // See CreateProductDto for the equivalent block + rationale.
-  // `taxConfigUpdatedBy` / `taxConfigUpdatedAt` are stamped by the
-  // controller from the actor — never accepted from input.
-  @IsOptional()
-  @Matches(/^\d{4,8}$/, {
-    message: 'hsnCode must be 4-8 digits (HSN hierarchical levels) with no spaces or punctuation',
-  })
-  hsnCode?: string;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Max(10_000)
-  gstRateBps?: number;
-
-  @IsOptional()
-  @IsEnum(SupplyTaxability)
-  supplyTaxability?: SupplyTaxability;
-
-  @IsOptional()
-  @IsBoolean()
-  taxInclusivePricing?: boolean;
-
-  @IsOptional()
-  @IsInt()
-  @Min(0)
-  @Max(10_000)
-  cessRateBps?: number;
-
-  @IsOptional()
-  @Matches(/^[A-Z]{2,6}$/, {
-    message: 'defaultUqcCode must be 2-6 uppercase letters per CBIC UQC list (e.g. NOS, PCS, KGS)',
-  })
-  defaultUqcCode?: string;
-
-  @IsOptional()
-  @IsString()
-  taxCategory?: string;
+  // Tax-config is SUPER_ADMIN-only — set via POST /admin/products/bulk/
+  // tax-config, never via product update. Removed here so a request
+  // carrying these fields is rejected (forbidNonWhitelisted).
 
   @IsOptional()
   @IsArray()

@@ -23,6 +23,7 @@ import { Roles } from '../../core/decorators/roles.decorator';
 import { Permissions } from '../../core/decorators/permissions.decorator';
 import { Idempotent } from '../../core/decorators/idempotent.decorator';
 import { SettlementService } from './settlement.service';
+import { CommissionInvoiceUnavailableError } from '../tax/application/services/commission-invoice.service';
 import {
   CreateCycleDto,
   CancelCycleDto,
@@ -373,6 +374,68 @@ export class AdminSettlementController {
       message: 'Reconciliation report generated',
       data,
     };
+  }
+
+  /* ── GET /admin/settlements/:settlementId/commission-invoice ──
+   * Renders the marketplace's commission tax invoice (SAC 9985) for one
+   * seller settlement as HTML, served inline so the admin can view /
+   * print / save it. The invoice itself is issued (numbered + snapshotted)
+   * at cycle approval; this only renders the persisted snapshot. 404 if
+   * the settlement is missing or its invoice hasn't been issued yet. */
+  @Get(':settlementId/commission-invoice')
+  @Permissions('settlements.read')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  async getCommissionInvoice(
+    @Param('settlementId', ParseUUIDPipe) settlementId: string,
+    @Res() res: any,
+  ) {
+    let result: { documentNumber: string; html: string };
+    try {
+      result = await this.settlementService.getCommissionInvoiceHtml(
+        settlementId,
+      );
+    } catch (err) {
+      if (err instanceof CommissionInvoiceUnavailableError) {
+        throw new NotFoundException(err.message);
+      }
+      throw err;
+    }
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${result.documentNumber}.html"`,
+    );
+    res.send(result.html);
+  }
+
+  /* ── GET /admin/settlements/:settlementId/settlement-statement ──
+   * The full settlement / payout statement (gross → commission → GST →
+   * TCS → TDS → net) for one seller settlement, served inline as HTML.
+   * This is a remittance advice, not a tax invoice. 404 if missing. */
+  @Get(':settlementId/settlement-statement')
+  @Permissions('settlements.read')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @Header('Content-Type', 'text/html; charset=utf-8')
+  async getSettlementStatement(
+    @Param('settlementId', ParseUUIDPipe) settlementId: string,
+    @Res() res: any,
+  ) {
+    let result: { documentNumber: string; html: string };
+    try {
+      result = await this.settlementService.getSettlementStatementHtml(
+        settlementId,
+      );
+    } catch (err) {
+      if (err instanceof CommissionInvoiceUnavailableError) {
+        throw new NotFoundException(err.message);
+      }
+      throw err;
+    }
+    res.setHeader(
+      'Content-Disposition',
+      `inline; filename="${result.documentNumber}.html"`,
+    );
+    res.send(result.html);
   }
 
   /* ── Manual adjustments on a settlement ── */

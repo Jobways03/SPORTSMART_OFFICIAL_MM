@@ -15,6 +15,10 @@ import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
+// Phase 250 (Franchise tax) — reuse the seller commission-GST calculator.
+import { computeCommissionGst } from '../../../tax/domain/commission-gst-calculator';
+import { SettlementTds194OHookService } from '../../../tax/application/services/settlement-tds-194o-hook.service';
+import { SettlementTcsHookService } from '../../../tax/application/services/settlement-tcs-hook.service';
 
 @Injectable()
 export class FranchiseSettlementService {
@@ -26,6 +30,12 @@ export class FranchiseSettlementService {
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
     private readonly prisma: PrismaService,
+    // Phase 250 (Franchise tax) — §194-O TDS hook (TaxModule export). Stamps the
+    // per-settlement TDS at approval; flips the ledger WITHHELD at pay.
+    private readonly tdsHook: SettlementTds194OHookService,
+    // Phase 250 (Franchise tax) — §52 TCS hook. Stamps per-settlement TCS at
+    // approval; flips the ledger COLLECTED at pay.
+    private readonly tcsHook: SettlementTcsHookService,
   ) {
     this.logger.setContext('FranchiseSettlementService');
   }
@@ -167,6 +177,8 @@ export class FranchiseSettlementService {
               id: true,
               businessName: true,
               franchiseCode: true,
+              // Phase 250 (Franchise tax) — place-of-supply state for commission-GST.
+              gstStateCode: true,
             },
           },
         },
@@ -185,6 +197,15 @@ export class FranchiseSettlementService {
 
       // 4. For each franchise, aggregate and create settlement
       const settlements: any[] = [];
+
+      // Phase 250 (Franchise tax) — resolve the marketplace GST state once for
+      // the commission-GST place-of-supply split (IGST §12(2)(a)). Empty when
+      // no PlatformGstProfile is seeded → calculator falls back to inter-state IGST.
+      const platformProfile = await tx.platformGstProfile.findFirst({
+        where: { isDefault: true, isActive: true },
+        select: { gstStateCode: true },
+      });
+      const marketplaceStateCode = platformProfile?.gstStateCode ?? '';
 
       for (const [franchiseId, entries] of grouped) {
         // Determine franchise name from the first entry's relation or look up
@@ -296,6 +317,22 @@ export class FranchiseSettlementService {
           .minus(discountDeductionRupees)
           .toDecimalPlaces(2);
 
+        // Phase 250 (Franchise tax) — 18% GST on the platform's ONLINE
+        // commission service to the franchise (SAC 9985, §9 CGST). Place of
+        // supply = franchise state (IGST §12(2)(a)): intra → CGST+SGST, inter →
+        // IGST. Snapshotted (frozen) so a later state-code change can't rewrite
+        // history. POS/procurement fees are excluded (online-only base). The GST
+        // is subtracted from the wired payout at mark-paid, not from this net.
+        const franchiseStateCode: string =
+          (firstEntry.franchise?.gstStateCode as string | undefined) ?? '';
+        const commissionGst = computeCommissionGst({
+          commissionAmountInPaise: BigInt(
+            totalOnlineCommission.mul(100).toFixed(0),
+          ),
+          marketplaceStateCode,
+          sellerStateCode: franchiseStateCode,
+        });
+
         // Create settlement within transaction
         const settlement = await tx.franchiseSettlement.create({
           data: {
@@ -316,6 +353,17 @@ export class FranchiseSettlementService {
             grossFranchiseEarning: grossFranchiseEarning.toDecimalPlaces(2),
             totalPlatformEarning: totalPlatformEarning.toDecimalPlaces(2),
             netPayableToFranchise,
+            // Phase 250 (Franchise tax) — commission-GST snapshot (online base),
+            // frozen with the state codes used for the split. Subtracted from
+            // the wired payout at mark-paid (Phase 4), not from this net.
+            commissionGstRateBps: commissionGst.rateBps,
+            commissionGstSplitType: commissionGst.splitType,
+            cgstOnCommissionInPaise: commissionGst.cgstInPaise,
+            sgstOnCommissionInPaise: commissionGst.sgstInPaise,
+            igstOnCommissionInPaise: commissionGst.igstInPaise,
+            totalCommissionGstInPaise: commissionGst.totalGstInPaise,
+            commissionGstMarketplaceStateCode: marketplaceStateCode || null,
+            commissionGstFranchiseStateCode: franchiseStateCode || null,
             status: 'PENDING',
           },
         });
@@ -433,6 +481,25 @@ export class FranchiseSettlementService {
       return u;
     });
 
+    // Phase 250 (Franchise tax) — compute + stamp §194-O TDS for this settlement
+    // now it's APPROVED (mirrors the seller approveCycle hooks). Post-commit,
+    // best-effort: a failure leaves the row APPROVED without a tdsLedgerId for
+    // finance to re-run — it must NOT roll back the approval.
+    try {
+      await this.tcsHook.applyToFranchiseSettlementOnApprove({ settlementId });
+    } catch (err) {
+      this.logger.error(
+        `§52 TCS apply failed for franchise settlement ${settlementId}: ${(err as Error).message}`,
+      );
+    }
+    try {
+      await this.tdsHook.applyToFranchiseSettlementOnApprove({ settlementId });
+    } catch (err) {
+      this.logger.error(
+        `194-O TDS apply failed for franchise settlement ${settlementId}: ${(err as Error).message}`,
+      );
+    }
+
     await this.eventBus.publish({
       eventName: 'franchise.settlement.approved',
       aggregate: 'FranchiseSettlement',
@@ -479,10 +546,28 @@ export class FranchiseSettlementService {
     //       (count===1); the loser sees count===0 and aborts cleanly. This is
     //       the authoritative guard, enforced at the DB, not just configured.
     const entryIds: string[] = (settlement.ledgerEntries ?? []).map((e: any) => e.id);
+    // Phase 250 (Franchise tax) — the ACTUAL amount wired = net payable minus the
+    // withheld statutory taxes (commission-GST + TCS + TDS), floored at 0.
+    // Mirrors the seller markSettlementPaid. Pre-250 paidAmountInPaise was never
+    // written, so aging/reconciliation read every franchise payout as ₹0 paid.
+    const grossPaise = BigInt(
+      new Prisma.Decimal(settlement.netPayableToFranchise).mul(100).toFixed(0),
+    );
+    const netPaidPaise =
+      grossPaise -
+      BigInt(settlement.totalCommissionGstInPaise ?? 0) -
+      BigInt(settlement.tcsDeductedInPaise ?? 0) -
+      BigInt(settlement.tdsDeductedInPaise ?? 0);
+    const paidAmountInPaise = netPaidPaise > 0n ? netPaidPaise : 0n;
     const updated = await this.prisma.$transaction(async (tx) => {
       const flip = await tx.franchiseSettlement.updateMany({
         where: { id: settlementId, status: 'APPROVED' },
-        data: { status: 'PAID', paidAt: new Date(), paymentReference },
+        data: {
+          status: 'PAID',
+          paidAt: new Date(),
+          paymentReference,
+          paidAmountInPaise,
+        },
       });
       if (flip.count !== 1) {
         throw new BadRequestAppException(
@@ -500,6 +585,24 @@ export class FranchiseSettlementService {
       });
       return u!;
     });
+
+    // Phase 250 (Franchise tax) — flip the §194-O TDS ledger COMPUTED → WITHHELD
+    // now the franchise has been paid (the TDS was withheld from the payout).
+    // Best-effort, post-commit (re-runnable via admin if it fails).
+    try {
+      await this.tcsHook.markCollectedOnPayFranchise({ settlementId });
+    } catch (err) {
+      this.logger.error(
+        `§52 TCS mark-collected failed for franchise settlement ${settlementId}: ${(err as Error).message}`,
+      );
+    }
+    try {
+      await this.tdsHook.markWithheldOnPayFranchise({ settlementId });
+    } catch (err) {
+      this.logger.error(
+        `194-O TDS mark-withheld failed for franchise settlement ${settlementId}: ${(err as Error).message}`,
+      );
+    }
 
     await this.eventBus.publish({
       eventName: 'franchise.settlement.paid',

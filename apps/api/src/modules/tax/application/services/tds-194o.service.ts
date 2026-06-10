@@ -76,6 +76,15 @@ export interface ComputeForSellerArgs {
   computedReason?: string;
 }
 
+// Phase 250 (Franchise tax) — §194-O for a franchise party. Same lifecycle as
+// the seller; only the gross-sale base aggregation + party key differ.
+export interface ComputeForFranchiseArgs {
+  franchiseId: string;
+  filingPeriod: string; // "YYYY-Qn"
+  computedBy?: string;
+  computedReason?: string;
+}
+
 export interface ComputeResult {
   ledger: Section194OTdsLedger | null;
   isNew: boolean;
@@ -268,6 +277,152 @@ export class Tds194OService {
     );
 
     return { ledger: created, isNew: true, skipped: false };
+  }
+
+  /**
+   * Phase 250 (Franchise tax) — §194-O TDS for a franchise, mirroring
+   * computeForSeller on the franchise's ONLINE-facilitated gross. Reuses the
+   * SAME pure calculator (computeTds194O) + clamp/carry-forward; only the base
+   * aggregation and the party key differ. POS / procurement streams are
+   * excluded — they are not operator-facilitated e-commerce sales.
+   *
+   * Base: Σ FranchiseSettlement.totalOnlineAmount (the online sale gross) for
+   * cycles whose periodEnd falls in the quarter, less Σ reversalAmount (return
+   * clawbacks). Rate: 1% with a verified PAN, 5% (§206AA) otherwise.
+   */
+  async computeForFranchise(
+    args: ComputeForFranchiseArgs,
+  ): Promise<ComputeResult> {
+    const existing = await this.prisma.section194OTdsLedger.findFirst({
+      where: {
+        franchiseId: args.franchiseId,
+        filingPeriod: args.filingPeriod,
+        status: { not: 'REVERSED' },
+      },
+    });
+    if (existing) {
+      return { ledger: existing, isNew: false, skipped: false };
+    }
+
+    const franchise = await this.prisma.franchisePartner.findUnique({
+      where: { id: args.franchiseId },
+      select: {
+        businessName: true,
+        franchiseCode: true,
+        ownerName: true,
+        panNumber: true,
+        panLast4: true,
+        verificationStatus: true,
+      },
+    });
+    if (!franchise) {
+      throw new Error(
+        `Tds194OService.computeForFranchise: franchise ${args.franchiseId} not found`,
+      );
+    }
+
+    const { startUtc, endUtc } = quarterRangeUtc(args.filingPeriod);
+    const settlements = await this.prisma.franchiseSettlement.findMany({
+      where: {
+        franchiseId: args.franchiseId,
+        cycle: { periodEnd: { gte: startUtc, lt: endUtc } },
+      },
+      select: { totalOnlineAmount: true, reversalAmount: true },
+    });
+
+    let grossSaleInPaise = 0n;
+    let refundReversalInPaise = 0n;
+    for (const s of settlements) {
+      // Decimal rupees → paise (BigInt) without IEEE-754 drift.
+      grossSaleInPaise += BigInt(s.totalOnlineAmount.mul(100).toFixed(0));
+      refundReversalInPaise += BigInt(s.reversalAmount.mul(100).toFixed(0));
+    }
+
+    const priorCarryForward = await this.priorCarryForwardForFranchise(
+      args.franchiseId,
+      args.filingPeriod,
+    );
+
+    const { netSaleInPaise, carryForwardInPaise } =
+      clampNetSaleWithCarryForward({
+        grossSaleInPaise,
+        refundReversalInPaise,
+        priorCarryForwardInPaise: priorCarryForward,
+      });
+
+    // A franchise has a verified PAN when the KYC verification is VERIFIED and
+    // a PAN is on file (the §206AA precondition the seller side keys off
+    // panVerified for).
+    const hasVerifiedPan =
+      !!franchise.panNumber && franchise.verificationStatus === 'VERIFIED';
+    const breakdown = computeTds194O({
+      grossSaleInPaise: netSaleInPaise,
+      hasVerifiedPan,
+    });
+
+    if (
+      grossSaleInPaise === 0n &&
+      refundReversalInPaise === 0n &&
+      priorCarryForward === 0n
+    ) {
+      return {
+        ledger: null,
+        isNew: false,
+        skipped: true,
+        skipReason: 'NO_ACTIVITY',
+      };
+    }
+
+    const legalName =
+      franchise.businessName ?? franchise.ownerName ?? franchise.franchiseCode ?? null;
+
+    const created = await this.prisma.section194OTdsLedger.create({
+      data: {
+        partyType: 'FRANCHISE',
+        franchiseId: args.franchiseId,
+        filingPeriod: args.filingPeriod,
+        sellerPanNumber: franchise.panNumber,
+        sellerPanLast4: franchise.panLast4,
+        sellerLegalName: legalName,
+        hadVerifiedPan: hasVerifiedPan,
+        grossSaleInPaise,
+        refundReversalInPaise,
+        netSaleInPaise,
+        adjustmentCarriedForwardInPaise: carryForwardInPaise,
+        tdsRateBps: breakdown.rateBps,
+        tdsInPaise: breakdown.tdsInPaise,
+        status: 'COMPUTED',
+        computedBy: args.computedBy ?? null,
+        computedReason: args.computedReason ?? null,
+      },
+    });
+
+    this.logger.log(
+      `TDS194O computed for FRANCHISE ${args.franchiseId} period ${args.filingPeriod}: ` +
+        `gross=${grossSaleInPaise} refund=${refundReversalInPaise} net=${netSaleInPaise} ` +
+        `rate=${breakdown.rateBps}bps tds=${breakdown.tdsInPaise}` +
+        (carryForwardInPaise > 0n ? ` carry=${carryForwardInPaise}` : ''),
+    );
+
+    return { ledger: created, isNew: true, skipped: false };
+  }
+
+  /** Franchise variant of priorCarryForward (keyed by franchiseId). */
+  private async priorCarryForwardForFranchise(
+    franchiseId: string,
+    filingPeriod: string,
+  ): Promise<bigint> {
+    const prior = previousQuarter(filingPeriod);
+    if (!prior) return 0n;
+    const row = await this.prisma.section194OTdsLedger.findFirst({
+      where: {
+        franchiseId,
+        filingPeriod: prior,
+        status: { not: 'REVERSED' },
+      },
+      select: { adjustmentCarriedForwardInPaise: true },
+    });
+    return row?.adjustmentCarriedForwardInPaise ?? 0n;
   }
 
   /** Settlement-paid hook: mark TDS as withheld pending challan deposit. */

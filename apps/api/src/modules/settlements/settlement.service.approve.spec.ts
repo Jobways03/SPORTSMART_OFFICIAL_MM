@@ -293,6 +293,11 @@ describe('SettlementService.markSettlementPaid (Phase 15)', () => {
     cycleId: 'c-1',
     status: 'APPROVED',
     cycle: { id: 'c-1', status: 'APPROVED' },
+    // markSettlementPaid derives the wired net from the gross settlement
+    // (Decimal rupees + paise sibling) minus TCS/TDS/commission-GST. Provide a
+    // coherent gross so that derivation reads a real number, not NaN/undefined.
+    totalSettlementAmount: '1000.00',
+    totalSettlementAmountInPaise: 100000n,
   };
 
   it('returns success:false when the settlement does not exist', async () => {

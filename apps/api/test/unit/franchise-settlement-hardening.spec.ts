@@ -46,13 +46,31 @@ function buildCreateService(entries: any[]) {
       ),
     },
     discountLiabilityLedger: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountInPaise: null } }) },
+    // Phase 250 (Franchise tax) — commission-GST place-of-supply lookup.
+    platformGstProfile: { findFirst: jest.fn().mockResolvedValue(null) },
   };
   const prisma: any = { $transaction: (cb: any) => cb(tx) };
   const financeRepo: any = {};
   const franchiseRepo: any = { findById: jest.fn() };
   const eventBus: any = { publish: jest.fn().mockResolvedValue(undefined) };
   const logger: any = { setContext: jest.fn(), log: jest.fn(), warn: jest.fn(), error: jest.fn() };
-  const svc = new FranchiseSettlementService(financeRepo, franchiseRepo, eventBus, logger, prisma);
+  const tdsHook: any = {
+    applyToFranchiseSettlementOnApprove: jest
+      .fn()
+      .mockResolvedValue({ stamped: false, skipped: true, tdsInPaise: 0n }),
+    markWithheldOnPayFranchise: jest
+      .fn()
+      .mockResolvedValue({ ledgerId: null, flipped: false }),
+  };
+  const tcsHook: any = {
+    applyToFranchiseSettlementOnApprove: jest
+      .fn()
+      .mockResolvedValue({ stamped: false, skipped: true, tcsInPaise: 0n }),
+    markCollectedOnPayFranchise: jest
+      .fn()
+      .mockResolvedValue({ ledgerId: null, flipped: false }),
+  };
+  const svc = new FranchiseSettlementService(financeRepo, franchiseRepo, eventBus, logger, prisma, tdsHook, tcsHook);
   return { svc, get created() { return created; }, tx };
 }
 
@@ -114,8 +132,24 @@ describe('FranchiseSettlementService.markSettlementPaid — B3 / #16 (atomic CAS
       }),
     };
     const eventBus: any = { publish: jest.fn().mockResolvedValue(undefined) };
-    const logger: any = { setContext: jest.fn(), log: jest.fn() };
-    const svc = new FranchiseSettlementService(financeRepo, {} as any, eventBus, logger, prisma);
+    const logger: any = { setContext: jest.fn(), log: jest.fn(), error: jest.fn() };
+    const tdsHook: any = {
+      applyToFranchiseSettlementOnApprove: jest
+        .fn()
+        .mockResolvedValue({ stamped: false, skipped: true, tdsInPaise: 0n }),
+      markWithheldOnPayFranchise: jest
+        .fn()
+        .mockResolvedValue({ ledgerId: null, flipped: false }),
+    };
+    const tcsHook: any = {
+      applyToFranchiseSettlementOnApprove: jest
+        .fn()
+        .mockResolvedValue({ stamped: false, skipped: true, tcsInPaise: 0n }),
+      markCollectedOnPayFranchise: jest
+        .fn()
+        .mockResolvedValue({ ledgerId: null, flipped: false }),
+    };
+    const svc = new FranchiseSettlementService(financeRepo, {} as any, eventBus, logger, prisma, tdsHook, tcsHook);
     return { svc, tx, eventBus, ledgerUpdate };
   }
 
@@ -167,13 +201,23 @@ describe('FranchiseSettlementService.createSettlementCycle — #13 overlap', () 
       discountLiabilityLedger: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountInPaise: null } }) },
     };
     const prisma: any = { $transaction: (cb: any) => cb(tx) };
-    const logger: any = { setContext: jest.fn(), log: jest.fn() };
+    const logger: any = { setContext: jest.fn(), log: jest.fn(), error: jest.fn() };
+    const tdsHook: any = {
+      applyToFranchiseSettlementOnApprove: jest.fn(),
+      markWithheldOnPayFranchise: jest.fn(),
+    };
+    const tcsHook: any = {
+      applyToFranchiseSettlementOnApprove: jest.fn(),
+      markCollectedOnPayFranchise: jest.fn(),
+    };
     const svc = new FranchiseSettlementService(
       {} as any,
       {} as any,
       { publish: jest.fn() } as any,
       logger,
       prisma,
+      tdsHook,
+      tcsHook,
     );
     await expect(
       svc.createSettlementCycle(new Date('2026-01-05'), new Date('2026-01-20')),

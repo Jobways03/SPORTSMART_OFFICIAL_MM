@@ -15,6 +15,8 @@ interface MockPrisma {
     update: jest.Mock;
   };
   gstTcsSettlementLedger: { findUnique: jest.Mock };
+  commissionRecord: { findMany: jest.Mock };
+  taxDocument: { findMany: jest.Mock };
 }
 
 interface MockTcs {
@@ -35,6 +37,8 @@ function makeService(): {
       update: jest.fn(),
     },
     gstTcsSettlementLedger: { findUnique: jest.fn() },
+    commissionRecord: { findMany: jest.fn() },
+    taxDocument: { findMany: jest.fn() },
   };
   const tcs: MockTcs = {
     computeForSeller: jest.fn(),
@@ -42,6 +46,30 @@ function makeService(): {
   };
   const service = new SettlementTcsHookService(prisma as any, tcs as any);
   return { service, prisma, tcs };
+}
+
+/**
+ * Wire commissionRecord + taxDocument so computeSettlementTcs (the shipped
+ * per-settlement slice) returns a deterministic taxable base per settlement.
+ * `taxableBySettlement` maps a settlementId to its tax-invoice taxable value
+ * (ex-GST, in paise); the per-settlement TCS is then rate × that value.
+ */
+function mockPerSettlementTaxable(
+  prisma: MockPrisma,
+  taxableBySettlement: Record<string, bigint>,
+): void {
+  prisma.commissionRecord.findMany.mockImplementation(
+    async ({ where }: any) => [{ masterOrderId: `mo-${where.settlementId}` }],
+  );
+  prisma.taxDocument.findMany.mockImplementation(async ({ where }: any) => {
+    const settlementId = String(where.masterOrderId.in[0]).replace(/^mo-/, '');
+    return [
+      {
+        documentType: 'TAX_INVOICE',
+        taxableAmountInPaise: taxableBySettlement[settlementId] ?? 0n,
+      },
+    ];
+  });
 }
 
 describe('SettlementTcsHookService.applyToCycleOnApprove', () => {
@@ -95,16 +123,20 @@ describe('SettlementTcsHookService.applyToCycleOnApprove', () => {
       ...args.data,
     }));
 
+    mockPerSettlementTaxable(prisma, { 'ss-1': 800_000n, 'ss-2': 1_600_000n });
+
     const result = await service.applyToCycleOnApprove({ cycleId: 'cyc-1' });
     expect(result.settlementsProcessed).toBe(2);
     expect(result.settlementsSkipped).toBe(0);
-    expect(result.totalTcsDeductedInPaise).toBe(30_000n);
+    // Per-settlement slices: 1% of ₹8,000 = ₹80 and 1% of ₹16,000 = ₹160
+    // (NOT the monthly ledger aggregate, which is deposited once per period).
+    expect(result.totalTcsDeductedInPaise).toBe(24_000n);
     expect(result.filingPeriod).toBe('2026-04');
     expect(prisma.sellerSettlement.update).toHaveBeenCalledTimes(2);
     const first = prisma.sellerSettlement.update.mock.calls[0][0];
     expect(first.data).toMatchObject({
       tcsLedgerId: 'tcs-1',
-      tcsDeductedInPaise: 10_000n,
+      tcsDeductedInPaise: 8_000n,
       tcsRateBpsSnapshot: 100,
       tcsFilingPeriod: '2026-04',
     });
@@ -138,6 +170,8 @@ describe('SettlementTcsHookService.applyToCycleOnApprove', () => {
       id: args.where.id,
       ...args.data,
     }));
+
+    mockPerSettlementTaxable(prisma, { 'ss-b': 500_000n });
 
     const result = await service.applyToCycleOnApprove({ cycleId: 'cyc-2' });
     expect(result.settlementsProcessed).toBe(1);
@@ -177,14 +211,17 @@ describe('SettlementTcsHookService.applyToCycleOnApprove', () => {
       ...args.data,
     }));
 
+    mockPerSettlementTaxable(prisma, { 'ss-y': 700_000n });
+
     const result = await service.applyToCycleOnApprove({ cycleId: 'cyc-3' });
     expect(result.settlementsProcessed).toBe(1);
     expect(result.settlementsSkipped).toBe(0);
-    expect(result.totalTcsDeductedInPaise).toBe(5_000n);
+    // Slice for ss-y: 1% of ₹7,000 = ₹70 (failed ss-x contributes nothing).
+    expect(result.totalTcsDeductedInPaise).toBe(7_000n);
   });
 
   it('uses the cycle periodEnd to derive filing period', async () => {
-    const { service, prisma, tcs } = makeService();
+    const { service, prisma } = makeService();
     // Cycle ending 1 May IST = 30 Apr 18:30 UTC. periodEnd in UTC:
     prisma.settlementCycle.findUnique.mockResolvedValue({
       id: 'cyc-4',

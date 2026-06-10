@@ -85,6 +85,11 @@ interface SellerSettlement {
   totalPlatformAmount: number;
   totalSettlementAmount: number;
   totalPlatformMargin: number;
+  // Statutory deductions (paise, set at cycle approval) — used to show the NET
+  // amount actually wired to the seller = gross − TCS − TDS − commission GST.
+  tcsDeductedInPaise?: string;
+  tdsDeductedInPaise?: string;
+  totalCommissionGstInPaise?: string;
   status: string;
   paidAt: string | null;
   utrReference: string | null;
@@ -808,7 +813,12 @@ export default function AdminCommissionPage() {
               </div>
 
               <div style={{ display: 'flex', gap: 16, marginBottom: 16, flexWrap: 'wrap' }}>
-                <MiniCard label="Total Settlement" value={fmt(Number(cycleDetail.totalAmount))} />
+                <MiniCard
+                  label="Net Payout"
+                  value={fmt(cycleNetPayout(cycleDetail))}
+                  sub={`gross ${fmt(Number(cycleDetail.totalAmount))}`}
+                  accent
+                />
                 <MiniCard label="Total Margin" value={fmt(Number(cycleDetail.totalMargin))} />
                 <MiniCard label="Sellers" value={String(cycleDetail.sellerSettlements.length)} />
               </div>
@@ -835,7 +845,22 @@ export default function AdminCommissionPage() {
                         <td style={{ ...tdStyle, textAlign: 'center' }}>{ss.totalOrders}</td>
                         <td style={{ ...tdStyle, textAlign: 'center' }}>{ss.totalItems}</td>
                         <td style={tdNumStyle}>{fmt(Number(ss.totalPlatformAmount))}</td>
-                        <td style={{ ...tdNumStyle, fontWeight: 600 }}>{fmt(Number(ss.totalSettlementAmount))}</td>
+                        <td style={{ ...tdNumStyle, fontWeight: 600 }}>
+                          {fmt(Number(ss.totalSettlementAmount))}
+                          {(Number(ss.tcsDeductedInPaise ?? 0) + Number(ss.tdsDeductedInPaise ?? 0) + Number(ss.totalCommissionGstInPaise ?? 0)) > 0 && (
+                            <div
+                              title="Statutory deductions are remitted to the government on the seller's behalf (the seller reclaims them). The NET is what you wire to the seller's bank."
+                              style={{ fontSize: 10, fontWeight: 400, color: '#6b7280', marginTop: 3, lineHeight: 1.6 }}
+                            >
+                              {Number(ss.totalCommissionGstInPaise ?? 0) > 0 && <div>− GST (18%) {fmt(Number(ss.totalCommissionGstInPaise) / 100)}</div>}
+                              {Number(ss.tcsDeductedInPaise ?? 0) > 0 && <div>− TCS (1%) {fmt(Number(ss.tcsDeductedInPaise) / 100)}</div>}
+                              {Number(ss.tdsDeductedInPaise ?? 0) > 0 && <div>− TDS {fmt(Number(ss.tdsDeductedInPaise) / 100)}</div>}
+                              <div style={{ fontWeight: 700, color: '#15803d', marginTop: 2 }}>
+                                net pay {fmt(sellerNet(ss))}
+                              </div>
+                            </div>
+                          )}
+                        </td>
                         <td style={{ ...tdNumStyle, color: '#16a34a' }}>{fmt(Number(ss.totalPlatformMargin))}</td>
                         <td style={tdStyle}>{statusBadge(ss.status)}</td>
                         <td style={tdStyle}>
@@ -1192,11 +1217,46 @@ function SummaryCard({
   );
 }
 
-function MiniCard({ label, value }: { label: string; value: string }) {
+// Net amount actually wired to a seller = gross settlement − TCS − TDS −
+// commission GST (the deductions are remitted to the government on the
+// seller's behalf and reclaimed by them).
+function sellerNet(ss: SellerSettlement): number {
   return (
-    <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 8, padding: '10px 14px' }}>
-      <div style={{ fontSize: 10, color: '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 16, fontWeight: 700, color: '#0f172a', fontVariantNumeric: 'tabular-nums' }}>{value}</div>
+    Number(ss.totalSettlementAmount) -
+    (Number(ss.tcsDeductedInPaise ?? 0) +
+      Number(ss.tdsDeductedInPaise ?? 0) +
+      Number(ss.totalCommissionGstInPaise ?? 0)) /
+      100
+  );
+}
+function cycleNetPayout(cd: CycleDetail): number {
+  return cd.sellerSettlements.reduce((sum, ss) => sum + sellerNet(ss), 0);
+}
+
+function MiniCard({
+  label,
+  value,
+  sub,
+  accent,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  accent?: boolean;
+}) {
+  return (
+    <div
+      style={{
+        background: accent ? '#f0fdf4' : '#f8fafc',
+        border: `1px solid ${accent ? '#bbf7d0' : '#e2e8f0'}`,
+        borderRadius: 10,
+        padding: '12px 16px',
+        minWidth: 150,
+      }}
+    >
+      <div style={{ fontSize: 10, color: accent ? '#15803d' : '#64748b', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 700, color: accent ? '#15803d' : '#0f172a', fontVariantNumeric: 'tabular-nums', lineHeight: 1.1 }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: '#94a3b8', marginTop: 3, fontVariantNumeric: 'tabular-nums' }}>{sub}</div>}
     </div>
   );
 }

@@ -42,6 +42,8 @@ export class AccountsDateRangeDto {
  * here whitelists them; the handlers still parse the raw strings themselves.
  */
 export class AccountsPagedQueryDto extends AccountsDateRangeDto {
+  // page / limit are inherited from AccountsDateRangeDto (validated there as
+  // numeric strings). This subclass only adds the extra drill-down filters.
   // page/limit are inherited from AccountsDateRangeDto (validated there as
   // numeric strings + whitelisted); only the paged-drill-specific filters are
   // declared here.

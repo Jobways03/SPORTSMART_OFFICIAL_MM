@@ -93,6 +93,11 @@ function buildService(discountRows: any[]) {
     discountLiabilityLedger: {
       aggregate: discountAggregate,
     },
+    // Phase 250 (Franchise tax) — commission-GST place-of-supply lookup. A null
+    // profile → calculator falls back to inter-state IGST (fine for these tests).
+    platformGstProfile: {
+      findFirst: jest.fn().mockResolvedValue(null),
+    },
   };
 
   const prisma: any = {
@@ -103,7 +108,24 @@ function buildService(discountRows: any[]) {
   const financeRepo: any = {};
   const franchiseRepo: any = { findById: jest.fn() };
   const eventBus: any = { publish: jest.fn().mockResolvedValue(undefined) };
-  const logger: any = { setContext: jest.fn(), log: jest.fn() };
+  const logger: any = { setContext: jest.fn(), log: jest.fn(), error: jest.fn() };
+  // Phase 250 (Franchise tax) — TDS hook (only exercised by approve/pay, mocked).
+  const tdsHook: any = {
+    applyToFranchiseSettlementOnApprove: jest
+      .fn()
+      .mockResolvedValue({ stamped: false, skipped: true, tdsInPaise: 0n }),
+    markWithheldOnPayFranchise: jest
+      .fn()
+      .mockResolvedValue({ ledgerId: null, flipped: false }),
+  };
+  const tcsHook: any = {
+    applyToFranchiseSettlementOnApprove: jest
+      .fn()
+      .mockResolvedValue({ stamped: false, skipped: true, tcsInPaise: 0n }),
+    markCollectedOnPayFranchise: jest
+      .fn()
+      .mockResolvedValue({ ledgerId: null, flipped: false }),
+  };
 
   const service = new FranchiseSettlementService(
     financeRepo,
@@ -111,6 +133,8 @@ function buildService(discountRows: any[]) {
     eventBus,
     logger,
     prisma,
+    tdsHook,
+    tcsHook,
   );
   return { service, createdSettlements, discountAggregate };
 }

@@ -4708,6 +4708,66 @@ export class ReturnService {
   }
 
   /**
+   * Option A — the amount recoverable from a seller-liable return.
+   *
+   * The platform may recover only the seller's NET settlement for the returned
+   * units (the money it actually disbursed), never the gross customer refund.
+   * It is 0 when the seller was never paid (COD / unsettled orders): the
+   * platform already holds and refunds that money, so a SellerDebit would
+   * double-recover it.
+   *
+   * "Paid" is read from the settlement LINK (commissionRecord.sellerSettlement
+   * .paidAt), NOT from CommissionRecord.status — by the time this runs the QC
+   * transaction has already flipped the record to REFUNDED, but it does not
+   * clear the settlement link, so the paidAt signal survives. Per returned
+   * unit we recover settlementPriceInPaise (order-time snapshot), falling back
+   * to totalSettlementAmountInPaise / quantity if the per-unit column is unset.
+   */
+  private async computeSellerLiabilityRecoverablePaise(
+    ret: any,
+  ): Promise<bigint> {
+    const approvedByItem = new Map<string, number>();
+    for (const it of ret.items ?? []) {
+      const orderItemId = it.orderItem?.id ?? it.orderItemId;
+      const qty = it.qcQuantityApproved ?? 0;
+      if (orderItemId && qty > 0) {
+        approvedByItem.set(
+          orderItemId,
+          (approvedByItem.get(orderItemId) ?? 0) + qty,
+        );
+      }
+    }
+    if (approvedByItem.size === 0) return 0n;
+
+    const records = await this.prisma.commissionRecord.findMany({
+      where: { orderItemId: { in: Array.from(approvedByItem.keys()) } },
+      select: {
+        orderItemId: true,
+        quantity: true,
+        settlementPriceInPaise: true,
+        totalSettlementAmountInPaise: true,
+        sellerSettlement: { select: { paidAt: true } },
+      },
+    });
+
+    let recoverable = 0n;
+    for (const rec of records) {
+      // Never paid out → nothing to recover from the seller (Option A).
+      if (!rec.sellerSettlement?.paidAt) continue;
+      const approvedQty = approvedByItem.get(rec.orderItemId) ?? 0;
+      if (approvedQty <= 0) continue;
+      const perUnit =
+        rec.settlementPriceInPaise && rec.settlementPriceInPaise > 0n
+          ? rec.settlementPriceInPaise
+          : rec.quantity > 0
+            ? rec.totalSettlementAmountInPaise / BigInt(rec.quantity)
+            : 0n;
+      recoverable += perUnit * BigInt(approvedQty);
+    }
+    return recoverable;
+  }
+
+  /**
    * Phase 13 — write the liability ledger row that records who pays
    * for this return refund. Idempotent on (sourceType=RETURN, sourceId).
    * Mapping mirrors ADR-016:
@@ -4762,13 +4822,29 @@ export class ReturnService {
             'Pick liabilityParty=PLATFORM or LOGISTICS instead.',
         );
       }
+      // Option A (seller-liability recovery basis). Recover only the seller's
+      // NET settlement for the returned units — what the platform actually PAID
+      // OUT — NOT the gross customer refund (`amountInPaise`). It is ₹0 when the
+      // seller was never paid (COD / unsettled): the platform already holds and
+      // refunds that money, so a SellerDebit would double-recover it. The
+      // platform's own commission on a returned line is its loss (reversed via
+      // CommissionRecord.refundedAdminEarning), not the seller's debt.
+      const recoverablePaise =
+        await this.computeSellerLiabilityRecoverablePaise(ret);
+      if (recoverablePaise <= 0n) {
+        this.logger.log(
+          `Return ${ret.returnNumber}: seller-liable but no settled payout to ` +
+            `recover (never-settled / COD) — no SellerDebit created (Option A).`,
+        );
+        return;
+      }
       await this.liabilityLedger.recordSellerDebit({
         sellerId,
         sourceType: 'RETURN' as any,
         sourceId: returnId,
         orderId: ret.masterOrderId,
         subOrderId: ret.subOrderId,
-        amountInPaise,
+        amountInPaise: Number(recoverablePaise),
         reason: reasonText,
       });
       return;

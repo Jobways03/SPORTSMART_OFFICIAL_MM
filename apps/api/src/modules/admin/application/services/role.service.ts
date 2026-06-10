@@ -51,8 +51,36 @@ export class RoleService {
       name: r.name,
       description: r.description,
       isSystem: r.isSystem,
+      isActive: r.isActive,
       permissions: r.permissions.map((p) => p.permissionKey),
     }));
+  }
+
+  /**
+   * Enable/disable a role. A disabled role keeps its permissions + assignments
+   * but the admin permission resolver skips it, so assigned admins lose its
+   * permissions on their next request (and regain them on re-enable). The
+   * Super Admin system role can never be disabled (lockout / intent guard).
+   */
+  async setActive(id: string, active: boolean, actor?: RbacActor) {
+    const role = await this.prisma.adminCustomRole.findUnique({ where: { id } });
+    if (!role) throw new NotFoundAppException('Role not found');
+    if (!active && role.isSystem && role.name === 'Super Admin') {
+      throw new ForbiddenAppException('The Super Admin role cannot be disabled.');
+    }
+    if (role.isActive === active) return role; // idempotent no-op
+    const updated = await this.prisma.adminCustomRole.update({
+      where: { id },
+      data: { isActive: active },
+    });
+    await this.emitRbacEvent(
+      active ? 'role.enabled' : 'role.disabled',
+      'AdminCustomRole',
+      id,
+      actor,
+      { roleId: id, name: role.name, isActive: active },
+    );
+    return updated;
   }
 
   async createRole(

@@ -344,19 +344,11 @@ export class AdminProductsController {
     // alongside this change.
     const initialStatus = 'DRAFT';
 
-    // Stamp the tax-config audit fields if the admin supplied any
-    // GST-relevant data on create. Mirrors the seller path — keeps
-    // products.tax_config_updated_by/_at honest as a "who last touched
-    // the tax columns" trail. Undefined-only writes (no tax fields in
-    // the DTO) skip the stamp so it stays null until first set.
-    const taxFieldsTouched =
-      dto.hsnCode !== undefined ||
-      dto.gstRateBps !== undefined ||
-      dto.supplyTaxability !== undefined ||
-      dto.taxInclusivePricing !== undefined ||
-      dto.cessRateBps !== undefined ||
-      dto.defaultUqcCode !== undefined ||
-      dto.taxCategory !== undefined;
+    // Tax-config (HSN / GST rate / supply taxability / cess / UQC / tax
+    // category) is SUPER_ADMIN-only and set exclusively via the
+    // tax-config endpoints (POST /admin/products/bulk/tax-config) — never
+    // on product create. The product is created with the schema's tax
+    // defaults; a super-admin sets the real values afterward.
 
     const product = await this.productRepo.createInTransaction(
       {
@@ -374,19 +366,6 @@ export class AdminProductsController {
         weight: dto.weight, weightUnit: dto.weightUnit,
         length: dto.length, width: dto.width, height: dto.height, dimensionUnit: dto.dimensionUnit,
         returnPolicy: dto.returnPolicy, warrantyInfo: dto.warrantyInfo,
-        hsnCode: dto.hsnCode,
-        gstRateBps: dto.gstRateBps,
-        supplyTaxability: dto.supplyTaxability,
-        taxInclusivePricing: dto.taxInclusivePricing,
-        cessRateBps: dto.cessRateBps,
-        defaultUqcCode: dto.defaultUqcCode,
-        taxCategory: dto.taxCategory,
-        taxConfigUpdatedBy: taxFieldsTouched ? adminId : undefined,
-        taxConfigUpdatedAt: taxFieldsTouched ? new Date() : undefined,
-        // Phase 37 — tax config starts unverified. Admin attests via
-        // POST /admin/products/:productId/verify-tax-config after
-        // review. Defaulted in schema so no explicit write needed
-        // on create.
       },
       dto.tags,
       dto.seo,
@@ -531,63 +510,13 @@ export class AdminProductsController {
       updateData.allowPartialReturn = dto.allowPartialReturn;
     }
 
-    // Tax columns — forward each that was supplied, then stamp the
-    // audit fields once if any of them was touched. Undefined-only
-    // updates leave taxConfigUpdatedBy/_At untouched so the trail
-    // reflects "who last actually changed tax data".
-    if (dto.hsnCode !== undefined) updateData.hsnCode = dto.hsnCode;
-    if (dto.gstRateBps !== undefined) updateData.gstRateBps = dto.gstRateBps;
-    if (dto.supplyTaxability !== undefined) updateData.supplyTaxability = dto.supplyTaxability;
-    if (dto.taxInclusivePricing !== undefined) updateData.taxInclusivePricing = dto.taxInclusivePricing;
-    if (dto.cessRateBps !== undefined) updateData.cessRateBps = dto.cessRateBps;
-    if (dto.defaultUqcCode !== undefined) updateData.defaultUqcCode = dto.defaultUqcCode;
-    if (dto.taxCategory !== undefined) updateData.taxCategory = dto.taxCategory;
-    const adminTaxFieldsTouched = (
-      dto.hsnCode !== undefined ||
-      dto.gstRateBps !== undefined ||
-      dto.supplyTaxability !== undefined ||
-      dto.taxInclusivePricing !== undefined ||
-      dto.cessRateBps !== undefined ||
-      dto.defaultUqcCode !== undefined ||
-      dto.taxCategory !== undefined
-    );
-    if (adminTaxFieldsTouched) {
-      updateData.taxConfigUpdatedBy = adminId;
-      updateData.taxConfigUpdatedAt = new Date();
-      // Phase 37 — touching the tax fields resets the attestation.
-      // An admin editing tax config doesn't auto-attest — they
-      // must follow up with POST /admin/products/:productId/
-      // verify-tax-config to flip verified back to true. This
-      // keeps "admin made the edit" and "admin attested the
-      // config" as separate signals in the audit trail.
-      updateData.taxConfigVerified = false;
-      updateData.taxConfigVerifiedAt = null;
-      updateData.taxConfigVerifiedBy = null;
-      // Phase 45 (2026-05-21) — bump the monotonic version so any
-      // open admin attest screen sees the drift.
-      updateData.taxConfigVersion = { increment: 1 };
-    }
+    // Tax-config columns are SUPER_ADMIN-only and are NOT accepted on
+    // product update (removed from UpdateProductDto). They are set
+    // exclusively via POST /admin/products/bulk/tax-config, so there is no
+    // tax write / attestation-reset handling here.
 
     const product = await this.productRepo.updateInTransaction(productId, updateData, dto.tags, dto.seo);
     this.logger.log(`Product ${productId} updated by admin ${adminId}`);
-
-    // Phase 45 (2026-05-21) — append-only audit row. Fire-and-forget
-    // so an audit-log failure doesn't roll back the primary update;
-    // the source of truth is the Product row, the log is the mirror.
-    if (adminTaxFieldsTouched) {
-      this.taxAttestation
-        .recordEdited({
-          productId,
-          actorId: adminId,
-          actorRole: 'ADMIN',
-          action: 'EDITED',
-        })
-        .catch((err) =>
-          this.logger.warn(
-            `Failed to write tax-attestation audit row for ${productId}: ${err}`,
-          ),
-        );
-    }
 
     const fullProduct = await this.productRepo.findFullProduct(product.id);
     return { success: true, message: 'Product updated successfully', data: fullProduct };
@@ -943,6 +872,9 @@ export class AdminProductsController {
 
   @Patch(':productId/verify-tax-config')
   @HttpCode(HttpStatus.OK)
+  // Tax attestation is SUPER_ADMIN-only — same gate as the bulk tax-config
+  // endpoints. Regular admins (catalog.approve) can no longer attest tax.
+  @Roles('SUPER_ADMIN')
   @Permissions('catalog.approve')
   async verifyTaxConfig(
     @CurrentAdmin() adminId: string,

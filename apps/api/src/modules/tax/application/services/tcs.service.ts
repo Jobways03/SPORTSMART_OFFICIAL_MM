@@ -449,6 +449,244 @@ export class TcsService {
     return { ledger: created, isNew: true };
   }
 
+  /**
+   * Phase 250 (Franchise tax) — §52 TCS for a franchise, mirroring
+   * computeForSeller on the franchise's ONLINE-facilitated taxable supply.
+   * Parallel (not a refactor of computeForSeller) so the live seller TCS engine
+   * is untouched; reuses every pure helper (computeTcs / clamp / split / PoS).
+   * Base = tax_documents keyed by franchise_id with posSaleId NULL (POS counter
+   * sales are the franchise's own direct supply, not operator-facilitated, so
+   * §52 does not apply). Same document set + intra/inter split as the seller.
+   */
+  async computeForFranchise(args: {
+    franchiseId: string;
+    filingPeriod: string;
+    computedBy?: string;
+    computedReason?: string;
+  }): Promise<ComputeResult> {
+    const existing = await this.prisma.gstTcsSettlementLedger.findFirst({
+      where: {
+        franchiseId: args.franchiseId,
+        filingPeriod: args.filingPeriod,
+        status: { not: 'REVERSED' },
+      },
+    });
+    if (existing) {
+      return { ledger: existing, isNew: false };
+    }
+
+    const rateBps = await this.taxConfig.getNumber('tcs_rate_bps', 100);
+    const { startUtc, endUtc } = monthRangeUtc(args.filingPeriod);
+
+    const docs = await this.prisma.taxDocument.findMany({
+      where: {
+        franchiseId: args.franchiseId,
+        // ONLINE-facilitated supply only — exclude POS counter sales.
+        posSaleId: null,
+        generatedAt: { gte: startUtc, lt: endUtc },
+        documentType: {
+          in: [
+            'TAX_INVOICE',
+            'INVOICE_CUM_BILL_OF_SUPPLY',
+            'DEBIT_NOTE',
+            'CREDIT_NOTE',
+          ],
+        },
+        status: { notIn: ['VOIDED_DRAFT', 'SUPERSEDED'] },
+      },
+      select: {
+        documentType: true,
+        taxableAmountInPaise: true,
+        sellerStateCode: true,
+        placeOfSupplyStateCode: true,
+        supplierGstin: true,
+      },
+    });
+
+    let grossTaxable = 0n;
+    let creditNoteReversal = 0n;
+    let intraTaxable = 0n;
+    let interTaxable = 0n;
+    let supplierGstin: string | null = null;
+    let supplierStateCode: string | null = null;
+    const distinctGstins = new Set<string>();
+    let unknownPosSeen = false;
+    const posAccumulator = new Map<
+      string,
+      { gross: bigint; cnReversal: bigint; intra: bigint; inter: bigint }
+    >();
+    for (const d of docs) {
+      if (!supplierGstin) supplierGstin = d.supplierGstin;
+      if (!supplierStateCode) supplierStateCode = d.sellerStateCode;
+      if (d.supplierGstin) distinctGstins.add(d.supplierGstin);
+      const intraState = isIntraState(d);
+      if (d.documentType === 'CREDIT_NOTE') {
+        creditNoteReversal += d.taxableAmountInPaise;
+        if (intraState) intraTaxable -= d.taxableAmountInPaise;
+        else interTaxable -= d.taxableAmountInPaise;
+      } else {
+        grossTaxable += d.taxableAmountInPaise;
+        if (intraState) intraTaxable += d.taxableAmountInPaise;
+        else interTaxable += d.taxableAmountInPaise;
+      }
+      const posKey =
+        d.placeOfSupplyStateCode && /^\d{2}$/.test(d.placeOfSupplyStateCode)
+          ? d.placeOfSupplyStateCode
+          : 'UNK';
+      if (posKey === 'UNK') unknownPosSeen = true;
+      const bucket = posAccumulator.get(posKey) ?? {
+        gross: 0n,
+        cnReversal: 0n,
+        intra: 0n,
+        inter: 0n,
+      };
+      if (d.documentType === 'CREDIT_NOTE') {
+        bucket.cnReversal += d.taxableAmountInPaise;
+        if (intraState) bucket.intra -= d.taxableAmountInPaise;
+        else bucket.inter -= d.taxableAmountInPaise;
+      } else {
+        bucket.gross += d.taxableAmountInPaise;
+        if (intraState) bucket.intra += d.taxableAmountInPaise;
+        else bucket.inter += d.taxableAmountInPaise;
+      }
+      posAccumulator.set(posKey, bucket);
+    }
+
+    const priorCarry = await this.priorCarryForwardForFranchise(
+      args.franchiseId,
+      args.filingPeriod,
+    );
+
+    const { netTaxableInPaise, carryForwardInPaise } =
+      clampNetSupplyWithCarryForward({
+        grossTaxableInPaise: grossTaxable,
+        creditNoteReversalInPaise: creditNoteReversal,
+        priorCarryForwardInPaise: priorCarry,
+      });
+
+    const { intra: postClampIntra, inter: postClampInter } =
+      distributeClampedSplit({
+        rawIntra: intraTaxable,
+        rawInter: interTaxable,
+        netTaxable: netTaxableInPaise,
+      });
+
+    const tcs = computeTcs({
+      intraStateTaxableInPaise: postClampIntra,
+      interStateTaxableInPaise: postClampInter,
+      rateBps,
+    });
+
+    const codeToName = await this.placeOfSupply.getStateCodeToNameMap();
+    const breakdown: PlaceOfSupplyBreakdownEntry[] = [];
+    for (const [pos, b] of posAccumulator) {
+      const netForPos = b.gross - b.cnReversal;
+      if (netForPos <= 0n) continue;
+      const split = computeTcs({
+        intraStateTaxableInPaise: b.intra > 0n ? b.intra : 0n,
+        interStateTaxableInPaise: b.inter > 0n ? b.inter : 0n,
+        rateBps,
+      });
+      breakdown.push({
+        pos,
+        posName: codeToName.get(pos) ?? (pos === 'UNK' ? 'Unknown' : pos),
+        grossInPaise: b.gross.toString(),
+        creditNoteReversalInPaise: b.cnReversal.toString(),
+        netTaxableInPaise: netForPos.toString(),
+        cgstTcsInPaise: split.cgstTcsInPaise.toString(),
+        sgstTcsInPaise: split.sgstTcsInPaise.toString(),
+        igstTcsInPaise: split.igstTcsInPaise.toString(),
+        totalTcsInPaise: split.totalTcsInPaise.toString(),
+      });
+    }
+    breakdown.sort((a, b) => a.pos.localeCompare(b.pos));
+
+    const warnings: TcsComputeWarning[] = [];
+    if (distinctGstins.size > 1) {
+      warnings.push({
+        code: 'MULTI_GSTIN',
+        message:
+          `Franchise's invoices this period span ${distinctGstins.size} distinct ` +
+          `supplier GSTINs; the row snapshots "${supplierGstin}". Review before GSTR-8.`,
+        detail: { gstins: [...distinctGstins].sort() },
+      });
+    }
+    if (unknownPosSeen) {
+      warnings.push({
+        code: 'UNKNOWN_PLACE_OF_SUPPLY',
+        message:
+          'One or more documents had no valid place-of-supply state code; ' +
+          'those amounts were treated as inter-state (IGST). Reconcile before filing.',
+      });
+    }
+
+    const created = await this.prisma.gstTcsSettlementLedger.create({
+      data: {
+        // Phase 250 — party-generic: franchise party, no sellerId.
+        partyType: 'FRANCHISE',
+        franchiseId: args.franchiseId,
+        filingPeriod: args.filingPeriod,
+        supplierGstin,
+        supplierStateCode,
+        grossTaxableSupplyInPaise: grossTaxable,
+        creditNoteReversalInPaise: creditNoteReversal,
+        netTaxableSupplyInPaise: netTaxableInPaise,
+        intraStateTaxableInPaise: postClampIntra,
+        interStateTaxableInPaise: postClampInter,
+        placeOfSupplyBreakdownJson:
+          breakdown as unknown as Prisma.InputJsonValue,
+        computeWarningsJson: warnings as unknown as Prisma.InputJsonValue,
+        tcsRateBps: tcs.rateBps,
+        cgstTcsInPaise: tcs.cgstTcsInPaise,
+        sgstTcsInPaise: tcs.sgstTcsInPaise,
+        igstTcsInPaise: tcs.igstTcsInPaise,
+        totalTcsInPaise: tcs.totalTcsInPaise,
+        adjustmentCarriedForwardInPaise: carryForwardInPaise,
+        status: 'COMPUTED',
+        computedBy: args.computedBy,
+        computedReason:
+          args.computedReason ??
+          `Auto-compute (franchise) for filing period ${args.filingPeriod}`,
+      },
+    });
+    await this.recordEvent({
+      ledgerId: created.id,
+      eventType: 'COMPUTED',
+      fromStatus: null,
+      toStatus: 'COMPUTED',
+      actorId: args.computedBy ?? 'system',
+      metadata: {
+        netTaxableInPaise: netTaxableInPaise.toString(),
+        totalTcsInPaise: tcs.totalTcsInPaise.toString(),
+        warnings: warnings.map((w) => w.code),
+      },
+    });
+    this.logger.log(
+      `TCS computed: franchise=${args.franchiseId} period=${args.filingPeriod} ` +
+        `net=${netTaxableInPaise} total=${tcs.totalTcsInPaise} cf=${carryForwardInPaise}` +
+        (warnings.length ? ` warnings=${warnings.map((w) => w.code).join(',')}` : ''),
+    );
+    return { ledger: created, isNew: true };
+  }
+
+  /** Franchise variant of priorCarryForward (keyed by franchiseId). */
+  private async priorCarryForwardForFranchise(
+    franchiseId: string,
+    filingPeriod: string,
+  ): Promise<bigint> {
+    const prior = previousFilingPeriod(filingPeriod);
+    if (!prior) return 0n;
+    const row = await this.prisma.gstTcsSettlementLedger.findFirst({
+      where: {
+        franchiseId,
+        filingPeriod: prior,
+        status: { not: 'REVERSED' },
+      },
+      select: { adjustmentCarriedForwardInPaise: true },
+    });
+    return row?.adjustmentCarriedForwardInPaise ?? 0n;
+  }
+
   /** Settlement-run hook: mark TCS as collected from seller's payout. */
   async markCollected(args: {
     ledgerId: string;

@@ -106,16 +106,30 @@ export class SettlementTds194OHookService {
         }
 
         const ledger = result.ledger!;
+
+        // Per-settlement TDS = rate × THIS settlement's OWN net gross sale
+        // (its totalPlatformAmount incl GST, less its own negative refund/
+        // clawback adjustments). Pre-fix this stamped the whole quarter's TDS
+        // (ledger.tdsInPaise) on every settlement, so a seller settled multiple
+        // times in a quarter was withheld the full quarterly TDS on each
+        // payout. Each settlement now bears only its own slice; summed across
+        // the quarter's settlements it reconciles to the quarterly ledger (the
+        // Form 26Q deposit figure). Mirrors SettlementTcsHookService.
+        const perSettlementTdsInPaise = await this.computeSettlementTds(
+          s.id,
+          ledger.tdsRateBps,
+        );
+
         await this.prisma.sellerSettlement.update({
           where: { id: s.id },
           data: {
             tdsLedgerId: ledger.id,
-            tdsDeductedInPaise: ledger.tdsInPaise,
+            tdsDeductedInPaise: perSettlementTdsInPaise,
             tdsRateBpsSnapshot: ledger.tdsRateBps,
             tdsFilingPeriod: filingPeriod,
           },
         });
-        total += ledger.tdsInPaise;
+        total += perSettlementTdsInPaise;
         processed++;
       } catch (err) {
         failedSettlementIds.push(s.id);
@@ -152,6 +166,194 @@ export class SettlementTds194OHookService {
   }
 
   /**
+   * TDS attributable to a SINGLE settlement = rate × this settlement's own
+   * net gross sale (totalPlatformAmountInPaise incl GST, less its own
+   * negative refund/clawback adjustments, clamped at zero). This is the
+   * amount deducted from THIS payout — distinct from the quarterly
+   * Section194OTdsLedger.tdsInPaise (deposited once for the whole quarter
+   * via Form 26Q). Uses the same gross + refund basis as the quarterly
+   * ledger (tds-194o.service.ts computeForSeller) so per-settlement amounts
+   * reconcile to it. Parallels SettlementTcsHookService.computeSettlementTcs.
+   */
+  private async computeSettlementTds(
+    settlementId: string,
+    rateBps: number,
+  ): Promise<bigint> {
+    const settlement = await this.prisma.sellerSettlement.findUnique({
+      where: { id: settlementId },
+      select: {
+        totalPlatformAmountInPaise: true,
+        adjustments: { select: { amountInPaise: true } },
+      },
+    });
+    if (!settlement) return 0n;
+
+    // Negative adjustments = refunds / clawbacks; sum their magnitudes as
+    // the refund reversal, matching the quarterly aggregation. Positive
+    // adjustments are already inside totalPlatformAmountInPaise.
+    let refundReversalInPaise = 0n;
+    for (const adj of settlement.adjustments) {
+      if (adj.amountInPaise < 0n) refundReversalInPaise += -adj.amountInPaise;
+    }
+    const netSaleInPaise =
+      settlement.totalPlatformAmountInPaise - refundReversalInPaise;
+    if (netSaleInPaise <= 0n) return 0n;
+    // rate in basis points (100 = 1%); round half-up — same as the
+    // tds-194o-calculator's mulBpsRoundHalfAway for positive values and the
+    // TCS slice.
+    return (netSaleInPaise * BigInt(rateBps) + 5000n) / 10000n;
+  }
+
+  /**
+   * Phase 250 (Franchise tax) — apply §194-O TDS to ONE FranchiseSettlement at
+   * approval time. The franchise flow approves one settlement at a time (unlike
+   * the seller's whole-cycle approve), so this is the per-settlement entry
+   * point. Idempotent: a settlement already carrying a tdsLedgerId is skipped.
+   * Computes the franchise's quarterly ledger (idempotent) and stamps THIS
+   * settlement's own per-settlement slice. Base = online gross only.
+   */
+  async applyToFranchiseSettlementOnApprove(args: {
+    settlementId: string;
+    actorId?: string;
+  }): Promise<{ stamped: boolean; skipped: boolean; tdsInPaise: bigint }> {
+    const s = await this.prisma.franchiseSettlement.findUnique({
+      where: { id: args.settlementId },
+      select: {
+        id: true,
+        franchiseId: true,
+        tdsLedgerId: true,
+        cycle: { select: { periodEnd: true } },
+      },
+    });
+    if (!s) {
+      throw new Error(`FranchiseSettlement ${args.settlementId} not found`);
+    }
+    if (s.tdsLedgerId) {
+      // Idempotent — already stamped on a prior approval pass.
+      return { stamped: false, skipped: true, tdsInPaise: 0n };
+    }
+
+    const filingPeriod = Tds194OService.filingPeriodOf(s.cycle.periodEnd);
+    const result = await this.tds.computeForFranchise({
+      franchiseId: s.franchiseId,
+      filingPeriod,
+      computedBy: args.actorId,
+      computedReason:
+        `Franchise settlement ${s.id} approved → 194-O filing period ${filingPeriod}`,
+    });
+
+    if (result.skipped) {
+      await this.prisma.franchiseSettlement.update({
+        where: { id: s.id },
+        data: { tdsSkipReason: result.skipReason ?? 'NO_ACTIVITY' },
+      });
+      return { stamped: false, skipped: true, tdsInPaise: 0n };
+    }
+
+    const ledger = result.ledger!;
+    const perSettlementTdsInPaise = await this.computeFranchiseSettlementTds(
+      s.id,
+      ledger.tdsRateBps,
+    );
+    await this.prisma.franchiseSettlement.update({
+      where: { id: s.id },
+      data: {
+        tdsLedgerId: ledger.id,
+        tdsDeductedInPaise: perSettlementTdsInPaise,
+        tdsRateBpsSnapshot: ledger.tdsRateBps,
+        tdsFilingPeriod: filingPeriod,
+      },
+    });
+    return { stamped: true, skipped: false, tdsInPaise: perSettlementTdsInPaise };
+  }
+
+  /**
+   * Batch variant — apply §194-O TDS to every FranchiseSettlement in a cycle by
+   * delegating to the per-settlement entry point. Available for a future
+   * cycle-level franchise approve; today the live path is per-settlement.
+   */
+  async applyToFranchiseCycleOnApprove(args: {
+    cycleId: string;
+    actorId?: string;
+  }): Promise<ApplyToCycleResult> {
+    const cycle = await this.prisma.settlementCycle.findUnique({
+      where: { id: args.cycleId },
+      select: { id: true, periodEnd: true },
+    });
+    if (!cycle) {
+      throw new Error(`SettlementCycle ${args.cycleId} not found`);
+    }
+    const filingPeriod = Tds194OService.filingPeriodOf(cycle.periodEnd);
+    const settlements = await this.prisma.franchiseSettlement.findMany({
+      where: { cycleId: args.cycleId },
+      select: { id: true },
+    });
+
+    let processed = 0;
+    let skipped = 0;
+    let total = 0n;
+    const failedSettlementIds: string[] = [];
+    for (const s of settlements) {
+      try {
+        const r = await this.applyToFranchiseSettlementOnApprove({
+          settlementId: s.id,
+          actorId: args.actorId,
+        });
+        if (r.stamped) {
+          processed++;
+          total += r.tdsInPaise;
+        } else {
+          skipped++;
+        }
+      } catch (err) {
+        failedSettlementIds.push(s.id);
+        this.logger.error(
+          `Section 194-O TDS compute failed for franchise settlement ${s.id}: ` +
+            `${(err as Error).message} — left WITHOUT tdsLedgerId; finance must re-run.`,
+        );
+      }
+    }
+
+    this.logger.log(
+      `194-O TDS applied to FRANCHISE cycle ${args.cycleId}: processed=${processed} ` +
+        `skipped=${skipped} failed=${failedSettlementIds.length} ` +
+        `total=${total.toString()} period=${filingPeriod}`,
+    );
+    return {
+      cycleId: args.cycleId,
+      settlementsProcessed: processed,
+      settlementsSkipped: skipped,
+      settlementsExempt: 0,
+      settlementsFailed: failedSettlementIds.length,
+      failedSettlementIds,
+      totalTdsDeductedInPaise: total,
+      filingPeriod,
+    };
+  }
+
+  /**
+   * Franchise per-settlement TDS slice = rate × this settlement's OWN online
+   * gross (totalOnlineAmount less reversalAmount, clamped at 0). Mirrors the
+   * seller computeSettlementTds; summed across the quarter's franchise
+   * settlements it reconciles to the quarterly franchise ledger.
+   */
+  private async computeFranchiseSettlementTds(
+    settlementId: string,
+    rateBps: number,
+  ): Promise<bigint> {
+    const s = await this.prisma.franchiseSettlement.findUnique({
+      where: { id: settlementId },
+      select: { totalOnlineAmount: true, reversalAmount: true },
+    });
+    if (!s) return 0n;
+    const netSaleInPaise =
+      BigInt(s.totalOnlineAmount.mul(100).toFixed(0)) -
+      BigInt(s.reversalAmount.mul(100).toFixed(0));
+    if (netSaleInPaise <= 0n) return 0n;
+    return (netSaleInPaise * BigInt(rateBps) + 5000n) / 10000n;
+  }
+
+  /**
    * Mark the TDS ledger row COMPUTED → WITHHELD when its linked
    * SellerSettlement is paid. Idempotent.
    */
@@ -180,6 +382,41 @@ export class SettlementTds194OHookService {
     }
     if (before.status !== 'COMPUTED') {
       // Already withheld / deposited / certificate-issued — no-op.
+      return { ledgerId: settlement.tdsLedgerId, flipped: false };
+    }
+    await this.tds.markWithheld({
+      ledgerId: settlement.tdsLedgerId,
+      settlementId: args.settlementId,
+    });
+    return { ledgerId: settlement.tdsLedgerId, flipped: true };
+  }
+
+  /**
+   * Phase 250 (Franchise tax) — flip the linked TDS ledger COMPUTED → WITHHELD
+   * when a FranchiseSettlement is paid. Mirrors markWithheldOnPay (seller).
+   */
+  async markWithheldOnPayFranchise(args: {
+    settlementId: string;
+  }): Promise<{ ledgerId: string | null; flipped: boolean }> {
+    const settlement = await this.prisma.franchiseSettlement.findUnique({
+      where: { id: args.settlementId },
+      select: { tdsLedgerId: true },
+    });
+    if (!settlement?.tdsLedgerId) {
+      return { ledgerId: null, flipped: false };
+    }
+    const before = await this.prisma.section194OTdsLedger.findUnique({
+      where: { id: settlement.tdsLedgerId },
+      select: { status: true },
+    });
+    if (!before) {
+      this.logger.warn(
+        `Franchise settlement ${args.settlementId} references missing 194-O TDS ` +
+          `ledger ${settlement.tdsLedgerId} — orphan link, skipping mark-withheld.`,
+      );
+      return { ledgerId: settlement.tdsLedgerId, flipped: false };
+    }
+    if (before.status !== 'COMPUTED') {
       return { ledgerId: settlement.tdsLedgerId, flipped: false };
     }
     await this.tds.markWithheld({

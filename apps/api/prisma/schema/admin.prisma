@@ -326,12 +326,18 @@ model AdminCustomRole {
   // System roles (mapped 1:1 from AdminRole enum) carry isSystem=true
   // and cannot be deleted or have permissions edited.
   isSystem    Boolean  @default(false) @map("is_system")
+  // Enable/disable a role without deleting it. A disabled role keeps its
+  // permissions + assignments but grants NOTHING at resolve time (the admin
+  // permission resolver skips inactive roles). Defaults to true so existing
+  // rows stay active. The Super Admin system role can never be disabled.
+  isActive    Boolean  @default(true) @map("is_active")
   createdAt   DateTime @default(now()) @map("created_at")
   updatedAt   DateTime @updatedAt @map("updated_at")
 
   permissions AdminCustomRolePermission[]
   assignments AdminRoleAssignment[]
 
+  @@index([isActive])
   @@map("admin_custom_roles")
 }
 
