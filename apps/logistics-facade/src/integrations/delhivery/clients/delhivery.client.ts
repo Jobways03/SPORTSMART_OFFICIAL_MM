@@ -71,6 +71,17 @@ export class DelhiveryClient {
     private readonly logger: AppLoggerService,
   ) {}
 
+  /**
+   * True when no real Delhivery credentials are configured — the API token is
+   * still the `.env.example` `replace-me-` placeholder. In dev/test this lets
+   * callers short-circuit to a mock success instead of hitting the real API and
+   * getting a 401. Never true in production: the strict config rejects
+   * placeholder tokens at boot.
+   */
+  get isMock(): boolean {
+    return this.config.apiToken.startsWith('replace-me-');
+  }
+
   /** GET helper. Use for serviceability, tracking, waybill-fetch. */
   async get<TRes>(
     path: string,

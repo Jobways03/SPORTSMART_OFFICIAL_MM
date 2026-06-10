@@ -35,6 +35,10 @@ export interface AllocatedSeller {
   // priority-100 franchise outranks a priority-50 one for the same pincode.
   pincodeMappingId?: string;
   mappingPriority?: number;
+  // The node's registered pickup PIN — seller mapping `pickupPincode` or
+  // franchise `warehousePincode` — used to ask Delhivery for the real transit
+  // TAT (pickup PIN → customer PIN) on the storefront serviceability check.
+  pickupPincode?: string | null;
   // Phase 231/232 (Eligible-node + Allocation-preview audit) — human-readable
   // explainability for WHY this candidate is eligible + how it scored. The
   // routing-preview + eligible-node frontends already declare a `reasons:
@@ -470,6 +474,7 @@ export class SellerAllocationService {
         estimatedDeliveryDays: this.estimateDeliveryDays(s.distance ?? 0, s.mapping.dispatchSla),
         score: 0, // will be scored below
         mappingPriority: priority,
+        pickupPincode: s.mapping.pickupPincode ?? null,
         // Phase 231/232 — explainability (rendered by routing-preview UI).
         reasons: [
           optedInSellers.has(s.mapping.seller.id)
@@ -1464,6 +1469,7 @@ export class SellerAllocationService {
         // pincode had an active mapping for this franchise).
         pincodeMappingId: territory?.id,
         mappingPriority: territory?.priority,
+        pickupPincode: franchise.warehousePincode ?? null,
         // Phase 231/232 — explainability for the routing-preview UI.
         reasons: [
           territory

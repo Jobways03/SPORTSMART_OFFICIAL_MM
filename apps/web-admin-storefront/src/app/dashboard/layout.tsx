@@ -66,6 +66,10 @@ const navItems: (NavItem & { section?: NavSection })[] = [
   { label: 'Orders', href: '/dashboard/orders', icon: 'orders', hasPendingBadge: true, anyOf: ['orders.read'], section: 'operations' },
   { label: 'Products', href: '/dashboard/products', icon: 'package', anyOf: ['products.read', 'catalog.read'], section: 'operations' },
   { label: 'Seller Mappings', href: '/dashboard/products/seller-mappings', icon: 'users', anyOf: ['products.read', 'catalog.read'], section: 'operations' },
+  // Phase (franchise-admin) — franchise management section: list + detail with
+  // KYC/status/hold actions and Inventory/Pincodes/Catalog/POS tabs. Gated on
+  // franchise.read so FRANCHISE_ADMIN (and SUPER_ADMIN) see it.
+  { label: 'Franchises', href: '/dashboard/franchises', icon: 'inventory', anyOf: ['franchise.read'], section: 'operations' },
   // Inventory has no dedicated permission key today — falls under products.
   { label: 'Inventory', href: '/dashboard/inventory', icon: 'inventory', anyOf: ['products.read'], section: 'operations' },
   { label: 'Low-stock alerts', href: '/dashboard/inventory/alerts', icon: 'alert-triangle', anyOf: ['products.read'], section: 'operations' },

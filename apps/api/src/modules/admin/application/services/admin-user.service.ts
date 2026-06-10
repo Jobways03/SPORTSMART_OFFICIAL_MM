@@ -15,6 +15,8 @@ const ADMIN_ROLES = [
   'SELLER_SUPPORT',
   'SELLER_OPERATIONS',
   'AFFILIATE_ADMIN',
+  'RETAILER_ADMIN',
+  'FRANCHISE_ADMIN',
 ] as const;
 
 type AdminRoleName = (typeof ADMIN_ROLES)[number];
