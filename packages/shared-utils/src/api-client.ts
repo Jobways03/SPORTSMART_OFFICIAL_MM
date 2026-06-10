@@ -383,13 +383,30 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     let attempt = await makeRequest<T>(url, options);
 
     if (attempt.status === 401) {
-      const refreshed = await tryRefreshToken();
-      if (refreshed) {
-        attempt = await makeRequest<T>(url, options);
+      // Session-recovery (refresh → on failure clear tokens + redirect to the
+      // login page) only makes sense when we actually HAVE a session to
+      // recover. A 401 on an UNAUTHENTICATED request — a wrong registration
+      // OTP, a failed login, an expired password-reset code — is a normal API
+      // error the caller renders inline. Running recovery there yanks the user
+      // off the page: the seller verify-email screen was bouncing to /login on
+      // a wrong code, hiding the "invalid code" message and leaving the account
+      // unverified. Gate on "has a refresh token" as the session signal; with
+      // none we fall through and throw the 401 as a plain error below.
+      let hasSession = false;
+      try {
+        hasSession = !!(await storage.getItem(config.refreshTokenKey));
+      } catch {
+        hasSession = false;
       }
-      if (attempt.status === 401) {
-        await clearTokensAndNotify();
-        throw new ApiError(attempt.status, attempt.body);
+      if (hasSession) {
+        const refreshed = await tryRefreshToken();
+        if (refreshed) {
+          attempt = await makeRequest<T>(url, options);
+        }
+        if (attempt.status === 401) {
+          await clearTokensAndNotify();
+          throw new ApiError(attempt.status, attempt.body);
+        }
       }
     }
 

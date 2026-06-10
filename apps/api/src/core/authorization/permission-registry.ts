@@ -997,4 +997,34 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
     'affiliates.payouts.approve', 'affiliates.payouts.reject',
     'affiliates.payouts.mark_paid', 'affiliates.payouts.mark_failed',
   ],
+  // Retailer-portal admin — the SELLER_ADMIN seller-management surface scoped
+  // to RETAIL sellers via the sellers.scope.retail key (AdminSellerScopeGuard
+  // confines list/detail/actions to retail; holding ONLY retail = retail-only).
+  RETAILER_ADMIN: [
+    'sellers.read', 'sellers.approve', 'sellers.suspend', 'sellers.penalize',
+    'sellers.logistics.register',
+    'sellers.scope.retail',
+    'products.read', 'products.approve',
+    'orders.read', 'returns.read',
+    'catalog.read', 'catalog.write', 'catalog.approve',
+    'analytics.read',
+    'accounts.read', 'settlements.read', 'settlements.history.read',
+    'nova.read',
+  ],
+  // Franchise-portal admin — owns the franchise lifecycle (approve/suspend),
+  // franchise finance/settlement, inventory, procurement (pricing + request
+  // flow), pincode territory mapping, catalog-mapping approval, and POS
+  // reporting. Marketplace-wide mutations stay SUPER_ADMIN.
+  FRANCHISE_ADMIN: [
+    'sellers.read', 'orders.read', 'returns.read',
+    'analytics.read', 'audit.read', 'accounts.read',
+    'franchise.read', 'franchise.approve', 'franchise.suspend',
+    'franchise.finance', 'franchise.finance.read', 'franchise.penalty.approve',
+    'franchise.inventory', 'franchise.orders', 'franchise.procurement_pricing',
+    'franchise.pincodes.read', 'franchise.pincodes.write',
+    'franchise.catalog.approve',
+    'franchise.procurement.approve', 'franchise.procurement.dispatch',
+    'franchise.procurement.settle',
+    'franchise.pos.report.read',
+  ],
 };

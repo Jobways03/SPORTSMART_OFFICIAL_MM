@@ -16,13 +16,6 @@ import {
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
 
-// Magic bytes for image validation
-const MAGIC_BYTES: Record<string, number[][]> = {
-  'image/jpeg': [[0xff, 0xd8, 0xff]],
-  'image/png': [[0x89, 0x50, 0x4e, 0x47]],
-  'image/webp': [[0x52, 0x49, 0x46, 0x46]], // RIFF header
-};
-
 export type FranchiseMediaType = 'profile-image' | 'logo';
 
 @Injectable()
@@ -64,8 +57,14 @@ export class UploadFranchiseMediaUseCase {
       throw new AppException('Image must not exceed 5MB', 'BAD_REQUEST');
     }
 
-    // Validate magic bytes
-    if (!this.validateMagicBytes(file.buffer, file.mimetype)) {
+    // The browser's declared mimetype follows the file *extension*, which is
+    // frequently wrong — a JPEG saved as .png, a WEBP saved as .jpg, a
+    // screenshot re-encoded but never renamed. Detect the REAL type from the
+    // magic bytes and accept it as long as it's one of our allowed formats.
+    // This lets correctly-encoded-but-mislabelled images through while still
+    // rejecting genuine non-images; the detected type is the source of truth.
+    const detectedMimeType = this.detectImageType(file.buffer);
+    if (!detectedMimeType) {
       throw new AppException('Invalid or corrupted image file', 'BAD_REQUEST');
     }
 
@@ -123,7 +122,7 @@ export class UploadFranchiseMediaUseCase {
       .registerExternalAsset({
         publicId: uploadResult.publicId,
         url: uploadResult.secureUrl,
-        mimeType: file.mimetype,
+        mimeType: detectedMimeType,
         sizeBytes: file.size,
         purpose: 'AVATAR',
         uploadedBy: franchiseId,
@@ -179,13 +178,45 @@ export class UploadFranchiseMediaUseCase {
     };
   }
 
-  private validateMagicBytes(buffer: Buffer, mimeType: string): boolean {
-    const patterns = MAGIC_BYTES[mimeType];
-    if (!patterns) return false;
-
-    return patterns.some((pattern) => {
-      if (buffer.length < pattern.length) return false;
-      return pattern.every((byte, i) => buffer[i] === byte);
-    });
+  /**
+   * Detect the actual image type from the buffer's magic bytes, independent of
+   * the (extension-derived, often-wrong) declared mimetype. Returns the matching
+   * allowed mime type, or null if the bytes aren't a recognised allowed image.
+   */
+  private detectImageType(buffer: Buffer): string | null {
+    // JPEG — FF D8 FF
+    if (
+      buffer.length >= 3 &&
+      buffer[0] === 0xff &&
+      buffer[1] === 0xd8 &&
+      buffer[2] === 0xff
+    ) {
+      return 'image/jpeg';
+    }
+    // PNG — 89 50 4E 47
+    if (
+      buffer.length >= 4 &&
+      buffer[0] === 0x89 &&
+      buffer[1] === 0x50 &&
+      buffer[2] === 0x4e &&
+      buffer[3] === 0x47
+    ) {
+      return 'image/png';
+    }
+    // WEBP — "RIFF" .... "WEBP" (RIFF at 0-3, WEBP at 8-11)
+    if (
+      buffer.length >= 12 &&
+      buffer[0] === 0x52 &&
+      buffer[1] === 0x49 &&
+      buffer[2] === 0x46 &&
+      buffer[3] === 0x46 &&
+      buffer[8] === 0x57 &&
+      buffer[9] === 0x45 &&
+      buffer[10] === 0x42 &&
+      buffer[11] === 0x50
+    ) {
+      return 'image/webp';
+    }
+    return null;
   }
 }

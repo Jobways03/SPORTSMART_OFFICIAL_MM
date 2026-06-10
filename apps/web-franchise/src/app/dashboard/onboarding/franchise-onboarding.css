@@ -1,0 +1,84 @@
+/* Franchise KYC onboarding — input/form polish (added 2026-06-09).
+   The page uses inline styles + a <Field> wrapper but left the inputs bare;
+   this gives them the same clean look as the seller onboarding + the shared
+   PincodeFields block. The .pin* auto-fill block is styled by @sportsmart/ui. */
+
+.fr-kyc h1 {
+  font-size: 24px;
+  font-weight: 700;
+  color: #111827;
+}
+.fr-kyc h2 {
+  color: #111827;
+  font-weight: 700;
+}
+
+.fr-kyc form {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  padding: 24px;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.06);
+}
+
+.fr-kyc label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.fr-kyc input,
+.fr-kyc select,
+.fr-kyc textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 11px 13px;
+  font-size: 14px;
+  color: #111827;
+  background: #fff;
+  border: 1px solid #d1d5db;
+  border-radius: 9px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.fr-kyc input::placeholder {
+  color: #9ca3af;
+}
+.fr-kyc input:focus,
+.fr-kyc select:focus,
+.fr-kyc textarea:focus {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+/* checkboxes must not stretch to 100% */
+.fr-kyc input[type='checkbox'] {
+  width: auto;
+}
+
+.fr-kyc .field-error {
+  color: #dc2626;
+  font-size: 12px;
+  margin-top: 4px;
+  display: block;
+}
+
+.fr-kyc .btn-submit {
+  appearance: none;
+  border: none;
+  background: #2563eb;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 600;
+  padding: 12px 22px;
+  border-radius: 10px;
+  cursor: pointer;
+  margin-top: 20px;
+  transition: background 0.15s, opacity 0.15s;
+}
+.fr-kyc .btn-submit:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+.fr-kyc .btn-submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

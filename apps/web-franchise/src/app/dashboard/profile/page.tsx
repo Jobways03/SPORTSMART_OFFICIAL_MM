@@ -7,43 +7,13 @@ import {
   FranchiseProfile,
   UpdateFranchiseProfilePayload,
 } from '@/services/profile.service';
-import { useModal } from '@sportsmart/ui';
+import { useModal, PincodeFields } from '@sportsmart/ui';
 import { apiClient, ApiError } from '@/lib/api-client';
 
 type PincodeData = {
   district: string;
   state: string;
   places: { name: string; type: string; delivery: string }[];
-};
-
-const AUTO_FILLED_STYLE: React.CSSProperties = {
-  background: '#f0fdf4',
-  borderColor: '#86efac',
-};
-
-const LOCALITY_SELECT_STYLE: React.CSSProperties = {
-  width: '100%',
-  padding: '10px 40px 10px 14px',
-  fontSize: 14,
-  lineHeight: '20px',
-  borderRadius: 8,
-  border: '1px solid #d1d5db',
-  background:
-    '#ffffff url("data:image/svg+xml;utf8,<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'12\' height=\'8\' viewBox=\'0 0 12 8\' fill=\'none\'><path d=\'M1 1L6 6L11 1\' stroke=\'%236b7280\' stroke-width=\'1.8\' stroke-linecap=\'round\' stroke-linejoin=\'round\'/></svg>") no-repeat right 14px center',
-  appearance: 'none',
-  WebkitAppearance: 'none',
-  MozAppearance: 'none',
-  color: '#111827',
-  cursor: 'pointer',
-  outline: 'none',
-  transition: 'border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease',
-};
-
-const LOCALITY_SELECT_STYLE_SELECTED: React.CSSProperties = {
-  ...LOCALITY_SELECT_STYLE,
-  background: LOCALITY_SELECT_STYLE.background?.toString().replace('#ffffff', '#f0fdf4'),
-  borderColor: '#86efac',
-  boxShadow: '0 0 0 1px #86efac',
 };
 
 type FormState = {
@@ -124,11 +94,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
-  // Pincode lookup state — store pincode drives city/state
-  const [pincodeData, setPincodeData] = useState<PincodeData | null>(null);
-  const [pincodeLoading, setPincodeLoading] = useState(false);
-  const [pincodeError, setPincodeError] = useState('');
-  const [pincodeAutoFilled, setPincodeAutoFilled] = useState(false);
+  // Store-address pincode auto-fill is handled by the shared <PincodeFields>.
 
   // Warehouse pincode lookup — shows confirmation hint only (no separate city/state field)
   const [warehousePincodeData, setWarehousePincodeData] = useState<PincodeData | null>(null);
@@ -264,40 +230,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     }
   };
 
-  async function lookupPincode(pincode: string) {
-    if (pincode.length !== 6 || !/^\d{6}$/.test(pincode)) {
-      setPincodeData(null);
-      setPincodeError('');
-      setPincodeAutoFilled(false);
-      return;
-    }
-
-    setPincodeLoading(true);
-    setPincodeError('');
-    try {
-      const data = await apiClient<any>(`/pincodes/${pincode}`);
-
-      if (data.success && data.data) {
-        setPincodeData(data.data);
-        setPincodeAutoFilled(true);
-        setForm((prev) => ({
-          ...prev,
-          city: data.data.district,
-          state: data.data.state,
-        }));
-      } else {
-        setPincodeError('Invalid pincode');
-        setPincodeData(null);
-        setPincodeAutoFilled(false);
-      }
-    } catch {
-      setPincodeError('Failed to lookup pincode');
-      setPincodeData(null);
-      setPincodeAutoFilled(false);
-    } finally {
-      setPincodeLoading(false);
-    }
-  }
+  // lookupPincode removed — the store address now uses the shared <PincodeFields>.
 
   async function lookupWarehousePincode(pincode: string) {
     if (pincode.length !== 6 || !/^\d{6}$/.test(pincode)) {
@@ -429,7 +362,6 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     setSuccessMessage('');
     setIsEditing(true);
     // Re-run lookup for existing pincodes so user sees the auto-fill hint
-    if (form.pincode) lookupPincode(form.pincode);
     if (form.warehousePincode) lookupWarehousePincode(form.warehousePincode);
   };
 
@@ -437,9 +369,6 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     if (profile) setForm(profileToForm(profile));
     setError('');
     setIsEditing(false);
-    setPincodeData(null);
-    setPincodeError('');
-    setPincodeAutoFilled(false);
     setWarehousePincodeData(null);
     setWarehousePincodeError('');
   };
@@ -724,147 +653,67 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
             )}
           </div>
 
-          <div className="grid-2">
-            <div className="field">
-              <label htmlFor="pincode">ZIP / PIN Code</label>
-              {isEditing ? (
-                <>
-                  <input
-                    id="pincode"
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={6}
-                    value={form.pincode}
-                    onChange={(e) => {
-                      handleChange('pincode', e.target.value);
-                      const sanitized = e.target.value.replace(/\D/g, '').slice(0, 6);
-                      lookupPincode(sanitized);
-                    }}
-                    disabled={isSaving || profile?.logisticsLocked}
-                    placeholder="ZIP / PIN code"
-                    style={fieldErrors.pincode ? { borderColor: '#dc2626' } : undefined}
-                  />
-                  {fieldErrors.pincode && (
-                    <small style={{ color: '#dc2626', display: 'block', marginTop: 4 }}>
-                      {fieldErrors.pincode}
-                    </small>
-                  )}
-                  {pincodeLoading && (
-                    <small style={{ color: '#6b7280', display: 'block', marginTop: 4 }}>
-                      Looking up pincode…
-                    </small>
-                  )}
-                  {pincodeError && (
-                    <small style={{ color: '#dc2626', display: 'block', marginTop: 4 }}>
-                      {pincodeError}
-                    </small>
-                  )}
-                  {pincodeData && !pincodeError && !pincodeLoading && (
-                    <small style={{ color: '#16a34a', display: 'block', marginTop: 4, fontWeight: 500 }}>
-                      {pincodeData.district}, {pincodeData.state}
-                    </small>
-                  )}
-                </>
-              ) : (
-                <div className={`value${profile.pincode ? '' : ' muted'}`}>
-                  {profile.pincode || 'Not set'}
+          {isEditing ? (
+            <PincodeFields
+              idPrefix="store"
+              showCountry
+              disabled={isSaving || profile?.logisticsLocked}
+              value={{
+                pincode: form.pincode,
+                city: form.city,
+                state: form.state,
+                country: form.country,
+                locality: form.locality,
+              }}
+              errors={{
+                pincode: fieldErrors.pincode,
+                city: fieldErrors.city,
+                state: fieldErrors.state,
+                country: fieldErrors.country,
+              }}
+              onChange={(patch) => {
+                if (patch.pincode !== undefined) handleChange('pincode', patch.pincode);
+                if (patch.city !== undefined) handleChange('city', patch.city);
+                if (patch.state !== undefined) handleChange('state', patch.state);
+                if (patch.country !== undefined) handleChange('country', patch.country);
+                if (patch.locality !== undefined) handleChange('locality', patch.locality);
+              }}
+            />
+          ) : (
+            <>
+              <div className="grid-2">
+                <div className="field">
+                  <label>ZIP / PIN Code</label>
+                  <div className={`value${profile.pincode ? '' : ' muted'}`}>
+                    {profile.pincode || 'Not set'}
+                  </div>
+                </div>
+                <div className="field">
+                  <label>Country</label>
+                  <div className={`value${profile.country ? '' : ' muted'}`}>
+                    {profile.country || 'Not set'}
+                  </div>
+                </div>
+                <div className="field">
+                  <label>City / District</label>
+                  <div className={`value${profile.city ? '' : ' muted'}`}>
+                    {profile.city || 'Not set'}
+                  </div>
+                </div>
+                <div className="field">
+                  <label>State</label>
+                  <div className={`value${profile.state ? '' : ' muted'}`}>
+                    {profile.state || 'Not set'}
+                  </div>
+                </div>
+              </div>
+              {profile.locality && (
+                <div className="field" style={{ marginTop: 16 }}>
+                  <label>Locality</label>
+                  <div className="value">{profile.locality}</div>
                 </div>
               )}
-            </div>
-
-            <div className="field">
-              <label htmlFor="country">Country</label>
-              {isEditing ? (
-                <input
-                  id="country"
-                  type="text"
-                  value={form.country}
-                  onChange={(e) => handleChange('country', e.target.value)}
-                  disabled={isSaving || profile?.logisticsLocked}
-                  placeholder="Country"
-                />
-              ) : (
-                <div className={`value${profile.country ? '' : ' muted'}`}>
-                  {profile.country || 'Not set'}
-                </div>
-              )}
-            </div>
-
-            <div className="field">
-              <label htmlFor="city">City / District</label>
-              {isEditing ? (
-                <input
-                  id="city"
-                  type="text"
-                  value={form.city}
-                  onChange={(e) => {
-                    handleChange('city', e.target.value);
-                    if (pincodeAutoFilled) setPincodeAutoFilled(false);
-                  }}
-                  readOnly={pincodeAutoFilled}
-                  style={pincodeAutoFilled ? AUTO_FILLED_STYLE : undefined}
-                  disabled={isSaving || profile?.logisticsLocked}
-                  placeholder="City"
-                />
-              ) : (
-                <div className={`value${profile.city ? '' : ' muted'}`}>
-                  {profile.city || 'Not set'}
-                </div>
-              )}
-            </div>
-
-            <div className="field">
-              <label htmlFor="state">State</label>
-              {isEditing ? (
-                <input
-                  id="state"
-                  type="text"
-                  value={form.state}
-                  onChange={(e) => {
-                    handleChange('state', e.target.value);
-                    if (pincodeAutoFilled) setPincodeAutoFilled(false);
-                  }}
-                  readOnly={pincodeAutoFilled}
-                  style={pincodeAutoFilled ? AUTO_FILLED_STYLE : undefined}
-                  disabled={isSaving || profile?.logisticsLocked}
-                  placeholder="State"
-                />
-              ) : (
-                <div className={`value${profile.state ? '' : ' muted'}`}>
-                  {profile.state || 'Not set'}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {isEditing && pincodeData && pincodeData.places && pincodeData.places.length > 0 && (
-            <div className="field" style={{ marginTop: 16 }}>
-              <label htmlFor="locality">Locality</label>
-              <select
-                id="locality"
-                value={form.locality}
-                onChange={(e) => handleChange('locality', e.target.value)}
-                disabled={isSaving || profile?.logisticsLocked}
-                style={form.locality ? LOCALITY_SELECT_STYLE_SELECTED : LOCALITY_SELECT_STYLE}
-              >
-                <option value="">Select your locality</option>
-                {pincodeData.places.map((place, idx) => (
-                  <option key={idx} value={place.name}>
-                    {place.name}
-                  </option>
-                ))}
-              </select>
-              <small style={{ color: '#6b7280', display: 'block', marginTop: 6, fontSize: 12 }}>
-                {pincodeData.places.length} localit{pincodeData.places.length === 1 ? 'y' : 'ies'} found for this pincode
-              </small>
-            </div>
-          )}
-
-          {!isEditing && profile.locality && (
-            <div className="field" style={{ marginTop: 16 }}>
-              <label>Locality</label>
-              <div className="value">{profile.locality}</div>
-            </div>
+            </>
           )}
         </div>
 

@@ -2,7 +2,10 @@ import { Injectable, Inject } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
-import { BadRequestAppException } from '../../../../core/exceptions';
+import {
+  BadRequestAppException,
+  ConflictAppException,
+} from '../../../../core/exceptions';
 import { FranchiseRegisterResponseData } from '../../presentation/dtos/franchise-auth-response.dto';
 import {
   FranchisePartnerRepository,
@@ -26,8 +29,8 @@ interface RegisterFranchiseInput {
  * Phase 20 (2026-05-20) — Franchise registration use case.
  *
  *   • confirmPassword + acceptTerms + acceptPrivacy validation.
- *   • Duplicate email/phone → uniform `requiresVerification: true`
- *     payload (no enumeration leak) with timing-soak delay.
+ *   • Duplicate email/phone → explicit 409 ALREADY_REGISTERED so the
+ *     form can tell the user to sign in (matches the seller portal).
  *   • OTP email sent synchronously; surfaced as
  *     `verificationEmailSent` so the verify page can warn the user
  *     if SMTP failed.
@@ -36,9 +39,6 @@ interface RegisterFranchiseInput {
  */
 @Injectable()
 export class RegisterFranchiseUseCase {
-  private static readonly DUPLICATE_TIMING_DELAY_MIN_MS = 200;
-  private static readonly DUPLICATE_TIMING_DELAY_MAX_MS = 450;
-
   constructor(
     @Inject(FRANCHISE_PARTNER_REPOSITORY)
     private readonly franchiseRepo: FranchisePartnerRepository,
@@ -82,25 +82,20 @@ export class RegisterFranchiseUseCase {
       );
     }
 
-    const uniformDuplicateResponse: FranchiseRegisterResponseData = {
-      email,
-      requiresVerification: true,
-      verificationEmailSent: true,
-      message:
-        'If this email or phone is not already registered, a 6-digit verification code has been sent to your email. Check your inbox.',
-    };
-
+    // Explicit duplicate signal (product decision 2026-06-09) — matches the
+    // seller portal: tell the user outright that an account exists and send
+    // them to sign-in, instead of the old uniform "check your inbox" 202.
+    // Trade-off (a probe can confirm a registered email/phone) is accepted for
+    // the partner portal + bounded by the endpoint's throttle + CAPTCHA gate.
     const existingByEmail = await this.franchiseRepo.findByEmail(email);
     const existingByPhone = await this.franchiseRepo.findByPhone(phoneNumber);
     if (existingByEmail || existingByPhone) {
-      // Burn bcrypt-equivalent time + soak so duplicate-path latency
-      // matches create-path latency.
-      await bcrypt.hash(password, 12);
-      await this.timingSoakDelay();
       this.logger.log(
-        `Franchise register: duplicate email/phone absorbed (uniform 202 returned)`,
+        'Franchise register: duplicate email/phone rejected (409 ALREADY_REGISTERED)',
       );
-      return uniformDuplicateResponse;
+      throw new ConflictAppException(
+        'An account with this email or phone number already exists. Please sign in instead.',
+      );
     }
 
     const passwordHash = await bcrypt.hash(password, 12);
@@ -134,10 +129,11 @@ export class RegisterFranchiseUseCase {
             }
             continue;
           }
-          // P2002 on email/phone → race with another concurrent register.
-          // Return uniform response (enumeration safety).
-          await this.timingSoakDelay();
-          return uniformDuplicateResponse;
+          // P2002 on email/phone → a concurrent register won the unique race.
+          // Same explicit 409 as the pre-check.
+          throw new ConflictAppException(
+            'An account with this email or phone number already exists. Please sign in instead.',
+          );
         }
         throw error;
       }
@@ -190,10 +186,4 @@ export class RegisterFranchiseUseCase {
     };
   }
 
-  private timingSoakDelay(): Promise<void> {
-    const min = RegisterFranchiseUseCase.DUPLICATE_TIMING_DELAY_MIN_MS;
-    const max = RegisterFranchiseUseCase.DUPLICATE_TIMING_DELAY_MAX_MS;
-    const delay = min + Math.random() * (max - min);
-    return new Promise((resolve) => setTimeout(resolve, delay));
-  }
 }

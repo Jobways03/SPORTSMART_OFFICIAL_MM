@@ -22,6 +22,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
+import { PincodeFields } from '@sportsmart/ui';
+import './onboarding.css';
 
 // Phase 26 GST — policy change (2026-05-18): UNREGISTERED is no longer
 // a valid GST registration type for new sellers. The type union still
@@ -108,12 +110,14 @@ export default function SellerOnboardingPage() {
       state: '',
       pincode: '',
       country: 'India',
+      locality: '',
     },
     storeAddress: '',
     city: '',
     state: '',
     country: 'India',
     sellerZipCode: '',
+    storeLocality: '',
     shortStoreDescription: '',
     confirmedAccurate: false,
   });
@@ -272,8 +276,24 @@ export default function SellerOnboardingPage() {
           gstin: form.gstin.toUpperCase(),
           gstStateCode: form.gstStateCode,
           panNumber: form.panNumber.toUpperCase(),
-          registeredBusinessAddress: form.registeredAddress,
-          storeAddress: form.storeAddress.trim(),
+          // Fold the picked locality into the existing address fields so it's
+          // captured without adding new (whitelist-rejected) payload keys.
+          registeredBusinessAddress: {
+            line1: form.registeredAddress.line1,
+            line2:
+              form.registeredAddress.line2 ||
+              form.registeredAddress.locality ||
+              '',
+            city: form.registeredAddress.city,
+            state: form.registeredAddress.state,
+            pincode: form.registeredAddress.pincode,
+            country: form.registeredAddress.country,
+          },
+          storeAddress:
+            form.storeLocality &&
+            !form.storeAddress.includes(form.storeLocality)
+              ? `${form.storeAddress.trim()}, ${form.storeLocality}`
+              : form.storeAddress.trim(),
           city: form.city,
           state: form.state,
           country: form.country,
@@ -528,57 +548,21 @@ export default function SellerOnboardingPage() {
                   })
                 }
               />
-              <div className="onboarding__row">
-                <div style={{ flex: 1 }}>
-                  <label>City</label>
-                  <input
-                    value={form.registeredAddress.city}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        registeredAddress: {
-                          ...form.registeredAddress,
-                          city: e.target.value,
-                        },
-                      })
-                    }
-                    required
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label>State</label>
-                  <input
-                    value={form.registeredAddress.state}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        registeredAddress: {
-                          ...form.registeredAddress,
-                          state: e.target.value,
-                        },
-                      })
-                    }
-                    required
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label>Pincode</label>
-                  <input
-                    value={form.registeredAddress.pincode}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        registeredAddress: {
-                          ...form.registeredAddress,
-                          pincode: e.target.value.replace(/\D/g, ''),
-                        },
-                      })
-                    }
-                    maxLength={6}
-                    required
-                  />
-                </div>
-              </div>
+              <PincodeFields
+                idPrefix="reg"
+                value={{
+                  pincode: form.registeredAddress.pincode,
+                  city: form.registeredAddress.city,
+                  state: form.registeredAddress.state,
+                  locality: form.registeredAddress.locality,
+                }}
+                onChange={(patch) =>
+                  setForm((f) => ({
+                    ...f,
+                    registeredAddress: { ...f.registeredAddress, ...patch },
+                  }))
+                }
+              />
             </fieldset>
 
             <fieldset className="onboarding__group">
@@ -589,46 +573,27 @@ export default function SellerOnboardingPage() {
                 onChange={(e) => setForm({ ...form, storeAddress: e.target.value })}
                 required
               />
-              <div className="onboarding__row">
-                <div style={{ flex: 1 }}>
-                  <label>City</label>
-                  <input
-                    value={form.city}
-                    onChange={(e) => setForm({ ...form, city: e.target.value })}
-                    required
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label>State</label>
-                  <input
-                    value={form.state}
-                    onChange={(e) => setForm({ ...form, state: e.target.value })}
-                    required
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label>Country</label>
-                  <input
-                    value={form.country}
-                    onChange={(e) => setForm({ ...form, country: e.target.value })}
-                    required
-                  />
-                </div>
-                <div style={{ flex: 1 }}>
-                  <label>Pincode</label>
-                  <input
-                    value={form.sellerZipCode}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        sellerZipCode: e.target.value.replace(/\D/g, ''),
-                      })
-                    }
-                    maxLength={6}
-                    required
-                  />
-                </div>
-              </div>
+              <PincodeFields
+                idPrefix="store"
+                showCountry
+                value={{
+                  pincode: form.sellerZipCode,
+                  city: form.city,
+                  state: form.state,
+                  country: form.country,
+                  locality: form.storeLocality,
+                }}
+                onChange={(patch) =>
+                  setForm((f) => ({
+                    ...f,
+                    sellerZipCode: patch.pincode ?? f.sellerZipCode,
+                    city: patch.city ?? f.city,
+                    state: patch.state ?? f.state,
+                    country: patch.country ?? f.country,
+                    storeLocality: patch.locality ?? f.storeLocality,
+                  }))
+                }
+              />
             </fieldset>
 
             <label htmlFor="shortStoreDescription">Store description (optional)</label>
