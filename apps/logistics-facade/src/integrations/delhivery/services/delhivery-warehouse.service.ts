@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { DelhiveryClient } from '../clients/delhivery.client';
 import { DELHIVERY_PATHS } from '../delhivery.constants';
 import type {
@@ -46,6 +46,8 @@ export interface WarehouseUpdateInput {
  */
 @Injectable()
 export class DelhiveryWarehouseService {
+  private readonly logger = new Logger(DelhiveryWarehouseService.name);
+
   constructor(private readonly client: DelhiveryClient) {}
 
   async createWarehouse(input: WarehouseCreateInput): Promise<{
@@ -63,6 +65,24 @@ export class DelhiveryWarehouseService {
         retryable: false,
       });
     }
+
+    // Dev mock — when no real Delhivery account is configured (the API token is
+    // still the `replace-me-` placeholder), simulate a successful registration
+    // so the pickup-location flow works end-to-end locally instead of 401-ing
+    // against the real staging API. Production always has real creds.
+    if (this.client.isMock) {
+      this.logger.warn(
+        `[dev-mock] Delhivery warehouse "${input.name}" registered without real ` +
+          `credentials (DELHIVERY_API_TOKEN is a placeholder).`,
+      );
+      return {
+        name: input.name,
+        id: `dev-mock-${input.name}`,
+        success: true,
+        raw: { name: input.name } as DelhiveryWarehouseResponse,
+      };
+    }
+
     const body: DelhiveryWarehouseCreateRequest = {
       name: input.name,
       registered_name: input.registeredName,
@@ -125,6 +145,19 @@ export class DelhiveryWarehouseService {
         retryable: false,
       });
     }
+
+    // Dev mock — see createWarehouse. No real creds → simulate success.
+    if (this.client.isMock) {
+      this.logger.warn(
+        `[dev-mock] Delhivery warehouse "${input.name}" updated without real credentials.`,
+      );
+      return {
+        name: input.name,
+        success: true,
+        raw: { name: input.name } as DelhiveryWarehouseResponse,
+      };
+    }
+
     const body: DelhiveryWarehouseUpdateRequest = {
       name: input.name,
       phone: input.phone,

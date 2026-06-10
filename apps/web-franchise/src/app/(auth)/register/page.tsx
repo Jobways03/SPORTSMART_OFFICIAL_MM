@@ -137,7 +137,6 @@ export default function FranchiseRegisterPage() {
           }
           setErrors(fieldErrors);
         } else if (err.status === 409) {
-          // Explicit "already registered" — the footer's Sign in link is the CTA.
           setServerError(
             err.message ||
               'An account with this email or phone number already exists. Please sign in instead.',
@@ -160,260 +159,283 @@ export default function FranchiseRegisterPage() {
 
   return (
     <div className="auth-page">
-      <div className="auth-card auth-card-wide">
-        <div className="auth-header">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/SportsMart_Web_Banner.avif"
-            alt="SportsMart"
-            className="auth-logo"
-            style={{ height: 56, width: 'auto', display: 'block' }}
-          />
-          <p className="auth-badge">Franchise Portal</p>
-          <h2 className="auth-title">Create your franchise account</h2>
-          <p className="auth-subtitle">
-            We&apos;ll email you a 6-digit code to verify your address.
-          </p>
-        </div>
-
-        {serverError && (
-          <div className="alert alert-error" role="alert">
-            {serverError}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} noValidate>
-          <fieldset disabled={isSubmitting} style={{ border: 0, padding: 0 }}>
-          <div className="form-group">
-            <label htmlFor="ownerName">Owner Name *</label>
-            <input
-              id="ownerName"
-              type="text"
-              placeholder="Enter the owner's full name"
-              value={ownerName}
-              maxLength={100}
-              onChange={(e) => setOwnerName(e.target.value)}
-              onBlur={() => handleBlur('ownerName', ownerName)}
-              aria-invalid={!!errors.ownerName}
-              autoComplete="name"
-              autoFocus
-            />
-            {errors.ownerName && (
-              <span className="field-error" role="alert">{errors.ownerName}</span>
-            )}
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="businessName">Business Name *</label>
-            <input
-              id="businessName"
-              type="text"
-              placeholder="Enter your business or franchise name"
-              value={businessName}
-              maxLength={150}
-              onChange={(e) => setBusinessName(e.target.value)}
-              onBlur={() => handleBlur('businessName', businessName)}
-              aria-invalid={!!errors.businessName}
-              autoComplete="organization"
-            />
-            {errors.businessName && (
-              <span className="field-error" role="alert">{errors.businessName}</span>
-            )}
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="email">Email Address *</label>
-            <input
-              id="email"
-              type="email"
-              placeholder="you@example.com"
-              value={email}
-              maxLength={255}
-              onChange={(e) => setEmail(e.target.value)}
-              onBlur={() => handleBlur('email', email)}
-              aria-invalid={!!errors.email}
-              autoComplete="email"
-            />
-            {errors.email && (
-              <span className="field-error" role="alert">{errors.email}</span>
-            )}
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="phoneNumber">Phone Number *</label>
-            <input
-              id="phoneNumber"
-              type="tel"
-              placeholder="10-digit mobile starting with 6, 7, 8, or 9"
-              value={phoneNumber}
-              onChange={(e) => {
-                let next = e.target.value.replace(/\D/g, '');
-                next = next.replace(/^[0-5]+/, '');
-                next = next.slice(0, 10);
-                setPhoneNumber(next);
-              }}
-              onKeyDown={(e) => {
-                if (['e', 'E', '+', '-', '.', ' '].includes(e.key)) {
-                  e.preventDefault();
-                }
-              }}
-              onBlur={() => handleBlur('phoneNumber', phoneNumber)}
-              inputMode="numeric"
-              pattern="[6-9][0-9]{9}"
-              maxLength={10}
-              aria-invalid={!!errors.phoneNumber}
-              autoComplete="tel"
-            />
-            {errors.phoneNumber && (
-              <span className="field-error" role="alert">{errors.phoneNumber}</span>
-            )}
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="password">Password *</label>
-            <div className="password-wrapper">
-              <input
-                id="password"
-                type={showPassword ? 'text' : 'password'}
-                placeholder="Create a strong password"
-                value={password}
-                maxLength={128}
-                onChange={(e) => setPassword(e.target.value)}
-                onBlur={() => handleBlur('password', password)}
-                aria-invalid={!!errors.password}
-                autoComplete="new-password"
-              />
-              <button
-                type="button"
-                className="password-toggle"
-                onClick={() => setShowPassword(!showPassword)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-                tabIndex={-1}
-              >
-                {showPassword ? 'Hide' : 'Show'}
-              </button>
+      <div className="auth-split">
+        {/* Left — branded panel */}
+        <aside className="auth-brand">
+          <div className="auth-brand-content">
+            <div className="auth-brand-logo">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/SportsMart_Web_Banner.avif" alt="Sportsmart" />
             </div>
-            {errors.password && (
-              <span className="field-error" role="alert">{errors.password}</span>
-            )}
-            <div className="password-strength" aria-live="polite">
-              <div className={`rule ${strength.hasMinLength ? 'met' : ''}`}>
-                {strength.hasMinLength ? '✓' : '✗'} At least 8 characters
-              </div>
-              <div className={`rule ${strength.hasUppercase ? 'met' : ''}`}>
-                {strength.hasUppercase ? '✓' : '✗'} One uppercase letter
-              </div>
-              <div className={`rule ${strength.hasLowercase ? 'met' : ''}`}>
-                {strength.hasLowercase ? '✓' : '✗'} One lowercase letter
-              </div>
-              <div className={`rule ${strength.hasDigit ? 'met' : ''}`}>
-                {strength.hasDigit ? '✓' : '✗'} One number
-              </div>
-              <div className={`rule ${strength.hasSpecial ? 'met' : ''}`}>
-                {strength.hasSpecial ? '✓' : '✗'} One special character
-              </div>
-            </div>
+            <h1 className="auth-brand-headline">
+              Run a sports retail franchise, backed by Sportsmart.
+            </h1>
+            <p className="auth-brand-text">
+              Partner with us and operate under a trusted brand with ready supply,
+              tooling, and logistics behind you.
+            </p>
+            <ul className="auth-brand-points">
+              <li><span className="tick">✓</span> Trusted brand &amp; ready supply chain</li>
+              <li><span className="tick">✓</span> Procurement, inventory &amp; POS tools</li>
+              <li><span className="tick">✓</span> Protected local territory</li>
+            </ul>
+          </div>
+        </aside>
+
+        {/* Right — form panel */}
+        <div className="auth-form-panel">
+          <div className="auth-header">
+            <p className="auth-badge">Franchise Portal</p>
+            <h2 className="auth-title">Create your franchise account</h2>
+            <p className="auth-subtitle">
+              We&apos;ll email you a 6-digit code to verify your address.
+            </p>
           </div>
 
-          <div className="form-group">
-            <label htmlFor="confirmPassword">Confirm Password *</label>
-            <div className="password-wrapper">
-              <input
-                id="confirmPassword"
-                type={showConfirmPassword ? 'text' : 'password'}
-                placeholder="Re-enter your password"
-                value={confirmPassword}
-                maxLength={128}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                onBlur={() => handleBlur('confirmPassword', confirmPassword)}
-                aria-invalid={!!errors.confirmPassword}
-                autoComplete="new-password"
-              />
-              <button
-                type="button"
-                className="password-toggle"
-                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
-                tabIndex={-1}
-              >
-                {showConfirmPassword ? 'Hide' : 'Show'}
-              </button>
-            </div>
-            {errors.confirmPassword && (
-              <span className="field-error" role="alert">{errors.confirmPassword}</span>
-            )}
-          </div>
-
-          <div className="form-group" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 14, fontWeight: 400 }}>
-              <input
-                type="checkbox"
-                checked={acceptTerms}
-                onChange={(e) => setAcceptTerms(e.target.checked)}
-                aria-invalid={!!errors.acceptTerms && submitAttempted}
-                style={{ marginTop: 3 }}
-              />
-              <span>
-                I agree to the{' '}
-                <Link href="/legal/terms" target="_blank">Terms of Service</Link> *
-              </span>
-            </label>
-            {errors.acceptTerms && submitAttempted && (
-              <span className="field-error" role="alert">{errors.acceptTerms}</span>
-            )}
-
-            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 14, fontWeight: 400 }}>
-              <input
-                type="checkbox"
-                checked={acceptPrivacy}
-                onChange={(e) => setAcceptPrivacy(e.target.checked)}
-                aria-invalid={!!errors.acceptPrivacy && submitAttempted}
-                style={{ marginTop: 3 }}
-              />
-              <span>
-                I agree to the{' '}
-                <Link href="/legal/privacy" target="_blank">Privacy Policy</Link> *
-              </span>
-            </label>
-            {errors.acceptPrivacy && submitAttempted && (
-              <span className="field-error" role="alert">{errors.acceptPrivacy}</span>
-            )}
-
-            <label style={{ display: 'flex', gap: 8, alignItems: 'flex-start', fontSize: 14, fontWeight: 400 }}>
-              <input
-                type="checkbox"
-                checked={acceptMarketing}
-                onChange={(e) => setAcceptMarketing(e.target.checked)}
-                style={{ marginTop: 3 }}
-              />
-              <span style={{ color: '#64748b' }}>
-                Send me product updates (optional).
-              </span>
-            </label>
-          </div>
-
-          {CAPTCHA_REQUIRED && (
-            <div className="form-group">
-              <CaptchaWidget onToken={onCaptchaToken} resetKey={captchaResetKey} />
-              {errors.captchaToken && submitAttempted && (
-                <span className="field-error" role="alert">{errors.captchaToken}</span>
-              )}
+          {serverError && (
+            <div className="alert alert-error" role="alert">
+              {serverError}
             </div>
           )}
 
-          <button
-            type="submit"
-            className="btn-submit"
-            aria-busy={isSubmitting}
-          >
-            {isSubmitting ? 'Creating Account…' : 'Create Account'}
-          </button>
-          </fieldset>
-        </form>
+          <form onSubmit={handleSubmit} noValidate>
+            <fieldset disabled={isSubmitting} style={{ border: 0, padding: 0 }}>
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="ownerName">Owner Name *</label>
+                  <input
+                    id="ownerName"
+                    type="text"
+                    placeholder="Owner's full name"
+                    value={ownerName}
+                    maxLength={100}
+                    onChange={(e) => setOwnerName(e.target.value)}
+                    onBlur={() => handleBlur('ownerName', ownerName)}
+                    aria-invalid={!!errors.ownerName}
+                    autoComplete="name"
+                    autoFocus
+                  />
+                  {errors.ownerName && (
+                    <span className="field-error" role="alert">{errors.ownerName}</span>
+                  )}
+                </div>
 
-        <p className="auth-footer">
-          Already have an account? <Link href="/login">Sign in</Link>
-        </p>
+                <div className="form-group">
+                  <label htmlFor="businessName">Business Name *</label>
+                  <input
+                    id="businessName"
+                    type="text"
+                    placeholder="Business or franchise name"
+                    value={businessName}
+                    maxLength={150}
+                    onChange={(e) => setBusinessName(e.target.value)}
+                    onBlur={() => handleBlur('businessName', businessName)}
+                    aria-invalid={!!errors.businessName}
+                    autoComplete="organization"
+                  />
+                  {errors.businessName && (
+                    <span className="field-error" role="alert">{errors.businessName}</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="email">Email Address *</label>
+                  <input
+                    id="email"
+                    type="email"
+                    placeholder="you@example.com"
+                    value={email}
+                    maxLength={255}
+                    onChange={(e) => setEmail(e.target.value)}
+                    onBlur={() => handleBlur('email', email)}
+                    aria-invalid={!!errors.email}
+                    autoComplete="email"
+                  />
+                  {errors.email && (
+                    <span className="field-error" role="alert">{errors.email}</span>
+                  )}
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="phoneNumber">Phone Number *</label>
+                  <input
+                    id="phoneNumber"
+                    type="tel"
+                    placeholder="10-digit mobile"
+                    value={phoneNumber}
+                    onChange={(e) => {
+                      let next = e.target.value.replace(/\D/g, '');
+                      next = next.replace(/^[0-5]+/, '');
+                      next = next.slice(0, 10);
+                      setPhoneNumber(next);
+                    }}
+                    onKeyDown={(e) => {
+                      if (['e', 'E', '+', '-', '.', ' '].includes(e.key)) {
+                        e.preventDefault();
+                      }
+                    }}
+                    onBlur={() => handleBlur('phoneNumber', phoneNumber)}
+                    inputMode="numeric"
+                    pattern="[6-9][0-9]{9}"
+                    maxLength={10}
+                    aria-invalid={!!errors.phoneNumber}
+                    autoComplete="tel"
+                  />
+                  {errors.phoneNumber && (
+                    <span className="field-error" role="alert">{errors.phoneNumber}</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="password">Password *</label>
+                  <div className="password-wrapper">
+                    <input
+                      id="password"
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="Create a strong password"
+                      value={password}
+                      maxLength={128}
+                      onChange={(e) => setPassword(e.target.value)}
+                      onBlur={() => handleBlur('password', password)}
+                      aria-invalid={!!errors.password}
+                      aria-describedby="password-strength"
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      className="password-toggle"
+                      onClick={() => setShowPassword(!showPassword)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      tabIndex={-1}
+                    >
+                      {showPassword ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  {errors.password && (
+                    <span className="field-error" role="alert">{errors.password}</span>
+                  )}
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="confirmPassword">Confirm Password *</label>
+                  <div className="password-wrapper">
+                    <input
+                      id="confirmPassword"
+                      type={showConfirmPassword ? 'text' : 'password'}
+                      placeholder="Re-enter your password"
+                      value={confirmPassword}
+                      maxLength={128}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      onBlur={() => handleBlur('confirmPassword', confirmPassword)}
+                      aria-invalid={!!errors.confirmPassword}
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      className="password-toggle"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
+                      tabIndex={-1}
+                    >
+                      {showConfirmPassword ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  {errors.confirmPassword && (
+                    <span className="field-error" role="alert">{errors.confirmPassword}</span>
+                  )}
+                </div>
+              </div>
+
+              <div id="password-strength" className="password-strength" aria-live="polite">
+                <div className={`rule ${strength.hasMinLength ? 'met' : ''}`}>
+                  {strength.hasMinLength ? '✓' : '✗'} At least 8 characters
+                </div>
+                <div className={`rule ${strength.hasUppercase ? 'met' : ''}`}>
+                  {strength.hasUppercase ? '✓' : '✗'} One uppercase letter
+                </div>
+                <div className={`rule ${strength.hasLowercase ? 'met' : ''}`}>
+                  {strength.hasLowercase ? '✓' : '✗'} One lowercase letter
+                </div>
+                <div className={`rule ${strength.hasDigit ? 'met' : ''}`}>
+                  {strength.hasDigit ? '✓' : '✗'} One number
+                </div>
+                <div className={`rule ${strength.hasSpecial ? 'met' : ''}`}>
+                  {strength.hasSpecial ? '✓' : '✗'} One special character
+                </div>
+              </div>
+
+              <div className="form-group consent-group">
+                <label className="consent-row">
+                  <input
+                    type="checkbox"
+                    checked={acceptTerms}
+                    onChange={(e) => setAcceptTerms(e.target.checked)}
+                    aria-invalid={!!errors.acceptTerms && submitAttempted}
+                  />
+                  <span>
+                    I agree to the{' '}
+                    <Link href="/legal/terms" target="_blank" rel="noopener noreferrer">
+                      Terms of Service
+                    </Link>
+                    {' '}*
+                  </span>
+                </label>
+                {errors.acceptTerms && submitAttempted && (
+                  <span className="field-error" role="alert">{errors.acceptTerms}</span>
+                )}
+
+                <label className="consent-row">
+                  <input
+                    type="checkbox"
+                    checked={acceptPrivacy}
+                    onChange={(e) => setAcceptPrivacy(e.target.checked)}
+                    aria-invalid={!!errors.acceptPrivacy && submitAttempted}
+                  />
+                  <span>
+                    I agree to the{' '}
+                    <Link href="/legal/privacy" target="_blank" rel="noopener noreferrer">
+                      Privacy Policy
+                    </Link>
+                    {' '}*
+                  </span>
+                </label>
+                {errors.acceptPrivacy && submitAttempted && (
+                  <span className="field-error" role="alert">{errors.acceptPrivacy}</span>
+                )}
+
+                <label className="consent-row">
+                  <input
+                    type="checkbox"
+                    checked={acceptMarketing}
+                    onChange={(e) => setAcceptMarketing(e.target.checked)}
+                  />
+                  <span>Send me product updates (optional).</span>
+                </label>
+              </div>
+
+              {CAPTCHA_REQUIRED && (
+                <div className="form-group">
+                  <CaptchaWidget onToken={onCaptchaToken} resetKey={captchaResetKey} />
+                  {errors.captchaToken && submitAttempted && (
+                    <span className="field-error" role="alert">{errors.captchaToken}</span>
+                  )}
+                </div>
+              )}
+
+              <button type="submit" className="btn-submit" aria-busy={isSubmitting}>
+                {isSubmitting ? 'Creating Account…' : 'Create Account'}
+              </button>
+            </fieldset>
+          </form>
+
+          <p className="auth-footer">
+            Already have an account? <Link href="/login">Sign in</Link>
+          </p>
+        </div>
       </div>
     </div>
   );

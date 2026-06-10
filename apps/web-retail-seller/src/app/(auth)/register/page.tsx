@@ -129,14 +129,10 @@ export default function SellerRegisterPage() {
         acceptMarketing,
         captchaToken: captchaToken || undefined,
       });
-      // Redirect immediately to the verify page — the API has either
-      // sent the OTP or returned `verificationEmailSent: false`, in
-      // which case the verify page surfaces a resend prompt.
       router.replace(
         `/register/verify?email=${encodeURIComponent(normalizedEmail)}`,
       );
     } catch (err) {
-      // Token is single-use — issue a fresh challenge.
       setCaptchaResetKey((k) => k + 1);
       setCaptchaToken('');
       if (err instanceof ApiError) {
@@ -147,7 +143,6 @@ export default function SellerRegisterPage() {
           }
           setErrors(fieldErrors);
         } else if (err.status === 409) {
-          // Explicit "already registered" — the footer's Sign in link is the CTA.
           setServerError(
             err.message ||
               'An account with this email or phone number already exists. Please sign in instead.',
@@ -170,277 +165,293 @@ export default function SellerRegisterPage() {
 
   return (
     <div className="auth-page">
-      <div className="auth-card">
-        <div className="auth-header">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/SportsMart_Web_Banner.avif"
-            alt="SportsMart"
-            className="auth-logo"
-            style={{ height: 56, width: 'auto', display: 'block' }}
-          />
-          <p className="auth-badge">Seller Portal</p>
-          <h2 className="auth-title">Create your seller account</h2>
-          <p className="auth-subtitle">
-            We&apos;ll email you a 6-digit code to verify your address.
-          </p>
-        </div>
-
-        {serverError && (
-          <div className="alert alert-error" role="alert">
-            {serverError}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} noValidate>
-          <fieldset disabled={isSubmitting} style={{ border: 0, padding: 0 }}>
-          <div className="form-group">
-            <label htmlFor="sellerName">Seller Name *</label>
-            <input
-              id="sellerName"
-              type="text"
-              placeholder="Enter your full name"
-              value={sellerName}
-              maxLength={100}
-              onChange={(e) => setSellerName(e.target.value)}
-              onBlur={() => handleBlur('sellerName', sellerName)}
-              aria-invalid={!!errors.sellerName}
-              aria-describedby={errors.sellerName ? 'sellerName-error' : undefined}
-              autoComplete="name"
-              autoFocus
-            />
-            {errors.sellerName && (
-              <span id="sellerName-error" className="field-error" role="alert">
-                {errors.sellerName}
-              </span>
-            )}
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="sellerShopName">Shop Name *</label>
-            <input
-              id="sellerShopName"
-              type="text"
-              placeholder="Enter your shop or business name"
-              value={sellerShopName}
-              maxLength={150}
-              onChange={(e) => setSellerShopName(e.target.value)}
-              onBlur={() => handleBlur('sellerShopName', sellerShopName)}
-              aria-invalid={!!errors.sellerShopName}
-              aria-describedby={errors.sellerShopName ? 'sellerShopName-error' : undefined}
-              autoComplete="organization"
-            />
-            {errors.sellerShopName && (
-              <span id="sellerShopName-error" className="field-error" role="alert">
-                {errors.sellerShopName}
-              </span>
-            )}
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="email">Email Address *</label>
-            <input
-              id="email"
-              type="email"
-              placeholder="you@example.com"
-              value={email}
-              maxLength={255}
-              onChange={(e) => setEmail(e.target.value)}
-              onBlur={() => handleBlur('email', email)}
-              aria-invalid={!!errors.email}
-              aria-describedby={errors.email ? 'email-error' : undefined}
-              autoComplete="email"
-            />
-            {errors.email && (
-              <span id="email-error" className="field-error" role="alert">
-                {errors.email}
-              </span>
-            )}
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="phoneNumber">Phone Number *</label>
-            <input
-              id="phoneNumber"
-              type="tel"
-              placeholder="10-digit Indian mobile (6/7/8/9…)"
-              value={phoneNumber}
-              maxLength={15}
-              onChange={(e) => setPhoneNumber(e.target.value)}
-              onBlur={() => handleBlur('phoneNumber', phoneNumber)}
-              aria-invalid={!!errors.phoneNumber}
-              aria-describedby={errors.phoneNumber ? 'phoneNumber-error' : undefined}
-              autoComplete="tel"
-            />
-            {errors.phoneNumber && (
-              <span id="phoneNumber-error" className="field-error" role="alert">
-                {errors.phoneNumber}
-              </span>
-            )}
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="password">Password *</label>
-            <div className="password-wrapper">
-              <input
-                id="password"
-                type={showPassword ? 'text' : 'password'}
-                placeholder="Create a strong password"
-                value={password}
-                maxLength={128}
-                onChange={(e) => setPassword(e.target.value)}
-                onBlur={() => handleBlur('password', password)}
-                aria-invalid={!!errors.password}
-                aria-describedby="password-strength"
-                autoComplete="new-password"
-              />
-              <button
-                type="button"
-                className="password-toggle"
-                onClick={() => setShowPassword(!showPassword)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-                tabIndex={-1}
-              >
-                {showPassword ? 'Hide' : 'Show'}
-              </button>
+      <div className="auth-split">
+        {/* Left — branded panel */}
+        <aside className="auth-brand">
+          <div className="auth-brand-content">
+            <div className="auth-brand-logo">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/SportsMart_Web_Banner.avif" alt="Sportsmart" />
             </div>
-            {errors.password && (
-              <span className="field-error" role="alert">
-                {errors.password}
-              </span>
-            )}
-            <div id="password-strength" className="password-strength" aria-live="polite">
-              <div className={`rule ${strength.hasMinLength ? 'met' : ''}`}>
-                {strength.hasMinLength ? '✓' : '✗'} At least 8 characters
-              </div>
-              <div className={`rule ${strength.hasUppercase ? 'met' : ''}`}>
-                {strength.hasUppercase ? '✓' : '✗'} One uppercase letter
-              </div>
-              <div className={`rule ${strength.hasLowercase ? 'met' : ''}`}>
-                {strength.hasLowercase ? '✓' : '✗'} One lowercase letter
-              </div>
-              <div className={`rule ${strength.hasDigit ? 'met' : ''}`}>
-                {strength.hasDigit ? '✓' : '✗'} One number
-              </div>
-              <div className={`rule ${strength.hasSpecial ? 'met' : ''}`}>
-                {strength.hasSpecial ? '✓' : '✗'} One special character
-              </div>
-            </div>
+            <h1 className="auth-brand-headline">
+              Sell to millions of sports fans across India.
+            </h1>
+            <p className="auth-brand-text">
+              Join the Sportsmart marketplace and turn your sports business into a
+              nationwide brand.
+            </p>
+            <ul className="auth-brand-points">
+              <li><span className="tick">✓</span> Fast, transparent payouts</li>
+              <li><span className="tick">✓</span> Powerful catalog &amp; inventory tools</li>
+              <li><span className="tick">✓</span> Pan-India fulfilment reach</li>
+            </ul>
+          </div>
+        </aside>
+
+        {/* Right — form panel */}
+        <div className="auth-form-panel">
+          <div className="auth-header">
+            <p className="auth-badge">Seller Portal</p>
+            <h2 className="auth-title">Create your seller account</h2>
+            <p className="auth-subtitle">
+              We&apos;ll email you a 6-digit code to verify your address.
+            </p>
           </div>
 
-          <div className="form-group">
-            <label htmlFor="confirmPassword">Confirm Password *</label>
-            <div className="password-wrapper">
-              <input
-                id="confirmPassword"
-                type={showConfirmPassword ? 'text' : 'password'}
-                placeholder="Re-enter your password"
-                value={confirmPassword}
-                maxLength={128}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                onBlur={() => handleBlur('confirmPassword', confirmPassword)}
-                aria-invalid={!!errors.confirmPassword}
-                autoComplete="new-password"
-              />
-              <button
-                type="button"
-                className="password-toggle"
-                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
-                tabIndex={-1}
-              >
-                {showConfirmPassword ? 'Hide' : 'Show'}
-              </button>
-            </div>
-            {errors.confirmPassword && (
-              <span className="field-error" role="alert">
-                {errors.confirmPassword}
-              </span>
-            )}
-          </div>
-
-          <div className="form-group consent-group">
-            <label className="consent-row">
-              <input
-                type="checkbox"
-                checked={acceptTerms}
-                onChange={(e) => setAcceptTerms(e.target.checked)}
-                aria-invalid={!!errors.acceptTerms && submitAttempted}
-              />
-              <span>
-                I agree to the{' '}
-                <Link href="/legal/terms" target="_blank" rel="noopener noreferrer">
-                  Terms of Service
-                </Link>
-                {' '}*
-              </span>
-            </label>
-            {errors.acceptTerms && submitAttempted && (
-              <span className="field-error" role="alert">
-                {errors.acceptTerms}
-              </span>
-            )}
-
-            <label className="consent-row">
-              <input
-                type="checkbox"
-                checked={acceptPrivacy}
-                onChange={(e) => setAcceptPrivacy(e.target.checked)}
-                aria-invalid={!!errors.acceptPrivacy && submitAttempted}
-              />
-              <span>
-                I agree to the{' '}
-                <Link href="/legal/privacy" target="_blank" rel="noopener noreferrer">
-                  Privacy Policy
-                </Link>
-                {' '}*
-              </span>
-            </label>
-            {errors.acceptPrivacy && submitAttempted && (
-              <span className="field-error" role="alert">
-                {errors.acceptPrivacy}
-              </span>
-            )}
-
-            <label className="consent-row">
-              <input
-                type="checkbox"
-                checked={acceptMarketing}
-                onChange={(e) => setAcceptMarketing(e.target.checked)}
-              />
-              <span>
-                Send me product updates and newsletters (optional).
-              </span>
-            </label>
-          </div>
-
-          {CAPTCHA_REQUIRED && (
-            <div className="form-group">
-              <CaptchaWidget
-                onToken={onCaptchaToken}
-                resetKey={captchaResetKey}
-              />
-              {errors.captchaToken && submitAttempted && (
-                <span className="field-error" role="alert">
-                  {errors.captchaToken}
-                </span>
-              )}
+          {serverError && (
+            <div className="alert alert-error" role="alert">
+              {serverError}
             </div>
           )}
 
-          <button
-            type="submit"
-            className="btn-submit"
-            aria-busy={isSubmitting}
-          >
-            {isSubmitting ? 'Creating Account…' : 'Create Account'}
-          </button>
-          </fieldset>
-        </form>
+          <form onSubmit={handleSubmit} noValidate>
+            <fieldset disabled={isSubmitting} style={{ border: 0, padding: 0 }}>
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="sellerName">Seller Name *</label>
+                  <input
+                    id="sellerName"
+                    type="text"
+                    placeholder="Enter your full name"
+                    value={sellerName}
+                    maxLength={100}
+                    onChange={(e) => setSellerName(e.target.value)}
+                    onBlur={() => handleBlur('sellerName', sellerName)}
+                    aria-invalid={!!errors.sellerName}
+                    aria-describedby={errors.sellerName ? 'sellerName-error' : undefined}
+                    autoComplete="name"
+                    autoFocus
+                  />
+                  {errors.sellerName && (
+                    <span id="sellerName-error" className="field-error" role="alert">
+                      {errors.sellerName}
+                    </span>
+                  )}
+                </div>
 
-        <p className="auth-footer">
-          Already have an account? <Link href="/login">Sign in</Link>
-        </p>
+                <div className="form-group">
+                  <label htmlFor="sellerShopName">Shop Name *</label>
+                  <input
+                    id="sellerShopName"
+                    type="text"
+                    placeholder="Your shop or business name"
+                    value={sellerShopName}
+                    maxLength={150}
+                    onChange={(e) => setSellerShopName(e.target.value)}
+                    onBlur={() => handleBlur('sellerShopName', sellerShopName)}
+                    aria-invalid={!!errors.sellerShopName}
+                    aria-describedby={errors.sellerShopName ? 'sellerShopName-error' : undefined}
+                    autoComplete="organization"
+                  />
+                  {errors.sellerShopName && (
+                    <span id="sellerShopName-error" className="field-error" role="alert">
+                      {errors.sellerShopName}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="email">Email Address *</label>
+                  <input
+                    id="email"
+                    type="email"
+                    placeholder="you@example.com"
+                    value={email}
+                    maxLength={255}
+                    onChange={(e) => setEmail(e.target.value)}
+                    onBlur={() => handleBlur('email', email)}
+                    aria-invalid={!!errors.email}
+                    aria-describedby={errors.email ? 'email-error' : undefined}
+                    autoComplete="email"
+                  />
+                  {errors.email && (
+                    <span id="email-error" className="field-error" role="alert">
+                      {errors.email}
+                    </span>
+                  )}
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="phoneNumber">Phone Number *</label>
+                  <input
+                    id="phoneNumber"
+                    type="tel"
+                    placeholder="10-digit mobile"
+                    value={phoneNumber}
+                    maxLength={15}
+                    onChange={(e) => setPhoneNumber(e.target.value)}
+                    onBlur={() => handleBlur('phoneNumber', phoneNumber)}
+                    aria-invalid={!!errors.phoneNumber}
+                    aria-describedby={errors.phoneNumber ? 'phoneNumber-error' : undefined}
+                    autoComplete="tel"
+                  />
+                  {errors.phoneNumber && (
+                    <span id="phoneNumber-error" className="field-error" role="alert">
+                      {errors.phoneNumber}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="password">Password *</label>
+                  <div className="password-wrapper">
+                    <input
+                      id="password"
+                      type={showPassword ? 'text' : 'password'}
+                      placeholder="Create a strong password"
+                      value={password}
+                      maxLength={128}
+                      onChange={(e) => setPassword(e.target.value)}
+                      onBlur={() => handleBlur('password', password)}
+                      aria-invalid={!!errors.password}
+                      aria-describedby="password-strength"
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      className="password-toggle"
+                      onClick={() => setShowPassword(!showPassword)}
+                      aria-label={showPassword ? 'Hide password' : 'Show password'}
+                      tabIndex={-1}
+                    >
+                      {showPassword ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  {errors.password && (
+                    <span className="field-error" role="alert">
+                      {errors.password}
+                    </span>
+                  )}
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="confirmPassword">Confirm Password *</label>
+                  <div className="password-wrapper">
+                    <input
+                      id="confirmPassword"
+                      type={showConfirmPassword ? 'text' : 'password'}
+                      placeholder="Re-enter your password"
+                      value={confirmPassword}
+                      maxLength={128}
+                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      onBlur={() => handleBlur('confirmPassword', confirmPassword)}
+                      aria-invalid={!!errors.confirmPassword}
+                      autoComplete="new-password"
+                    />
+                    <button
+                      type="button"
+                      className="password-toggle"
+                      onClick={() => setShowConfirmPassword(!showConfirmPassword)}
+                      aria-label={showConfirmPassword ? 'Hide password' : 'Show password'}
+                      tabIndex={-1}
+                    >
+                      {showConfirmPassword ? 'Hide' : 'Show'}
+                    </button>
+                  </div>
+                  {errors.confirmPassword && (
+                    <span className="field-error" role="alert">
+                      {errors.confirmPassword}
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div id="password-strength" className="password-strength" aria-live="polite">
+                <div className={`rule ${strength.hasMinLength ? 'met' : ''}`}>
+                  {strength.hasMinLength ? '✓' : '✗'} At least 8 characters
+                </div>
+                <div className={`rule ${strength.hasUppercase ? 'met' : ''}`}>
+                  {strength.hasUppercase ? '✓' : '✗'} One uppercase letter
+                </div>
+                <div className={`rule ${strength.hasLowercase ? 'met' : ''}`}>
+                  {strength.hasLowercase ? '✓' : '✗'} One lowercase letter
+                </div>
+                <div className={`rule ${strength.hasDigit ? 'met' : ''}`}>
+                  {strength.hasDigit ? '✓' : '✗'} One number
+                </div>
+                <div className={`rule ${strength.hasSpecial ? 'met' : ''}`}>
+                  {strength.hasSpecial ? '✓' : '✗'} One special character
+                </div>
+              </div>
+
+              <div className="form-group consent-group">
+                <label className="consent-row">
+                  <input
+                    type="checkbox"
+                    checked={acceptTerms}
+                    onChange={(e) => setAcceptTerms(e.target.checked)}
+                    aria-invalid={!!errors.acceptTerms && submitAttempted}
+                  />
+                  <span>
+                    I agree to the{' '}
+                    <Link href="/legal/terms" target="_blank" rel="noopener noreferrer">
+                      Terms of Service
+                    </Link>
+                    {' '}*
+                  </span>
+                </label>
+                {errors.acceptTerms && submitAttempted && (
+                  <span className="field-error" role="alert">
+                    {errors.acceptTerms}
+                  </span>
+                )}
+
+                <label className="consent-row">
+                  <input
+                    type="checkbox"
+                    checked={acceptPrivacy}
+                    onChange={(e) => setAcceptPrivacy(e.target.checked)}
+                    aria-invalid={!!errors.acceptPrivacy && submitAttempted}
+                  />
+                  <span>
+                    I agree to the{' '}
+                    <Link href="/legal/privacy" target="_blank" rel="noopener noreferrer">
+                      Privacy Policy
+                    </Link>
+                    {' '}*
+                  </span>
+                </label>
+                {errors.acceptPrivacy && submitAttempted && (
+                  <span className="field-error" role="alert">
+                    {errors.acceptPrivacy}
+                  </span>
+                )}
+
+                <label className="consent-row">
+                  <input
+                    type="checkbox"
+                    checked={acceptMarketing}
+                    onChange={(e) => setAcceptMarketing(e.target.checked)}
+                  />
+                  <span>Send me product updates and newsletters (optional).</span>
+                </label>
+              </div>
+
+              {CAPTCHA_REQUIRED && (
+                <div className="form-group">
+                  <CaptchaWidget onToken={onCaptchaToken} resetKey={captchaResetKey} />
+                  {errors.captchaToken && submitAttempted && (
+                    <span className="field-error" role="alert">
+                      {errors.captchaToken}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              <button type="submit" className="btn-submit" aria-busy={isSubmitting}>
+                {isSubmitting ? 'Creating Account…' : 'Create Account'}
+              </button>
+            </fieldset>
+          </form>
+
+          <p className="auth-footer">
+            Already have an account? <Link href="/login">Sign in</Link>
+          </p>
+        </div>
       </div>
     </div>
   );

@@ -1,6 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import sharp from 'sharp';
+// sharp ships as a CommonJS `export =`; under the webpack bundle the ESM
+// default-import binding comes through undefined ("sharp is not a function"),
+// so import via require to get the callable directly.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import sharp = require('sharp');
 import { EnvService } from '../../bootstrap/env/env.service';
 import { AppLoggerService } from '../../bootstrap/logging/app-logger.service';
 import { R2Client } from '../r2/clients/r2.client';
@@ -75,21 +79,45 @@ export class MediaStorageAdapter {
     if (allowStub) {
       const id = randomUUID();
       const publicId = `dev-stub/${options.folder.replace(/\//g, '_')}/${id}`;
-      const secureUrl =
-        `https://placehold.co/600x400/eef2ff/4338ca` +
-        `?text=DEV+STUB+${encodeURIComponent(options.folder)}`;
+      // Dev has no object storage. Inline the actual image as a data URL so it
+      // RENDERS in the UI (URL columns are TEXT). Try sharp first (normalise +
+      // shrink); if sharp can't decode it, fall back to the RAW bytes with the
+      // real type sniffed from the magic bytes — either way the image displays.
+      const sniffed = this.sniffImageFormat(fileBuffer);
+      let body = fileBuffer;
+      let format = sniffed ?? 'png';
+      let width = 0;
+      let height = 0;
+      try {
+        const { data, info } = await sharp(fileBuffer)
+          .rotate()
+          .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+          .toBuffer({ resolveWithObject: true });
+        body = data;
+        format = info.format ?? format;
+        width = info.width ?? 0;
+        height = info.height ?? 0;
+      } catch (e) {
+        this.logger.warn(
+          `dev-stub: sharp could not process the image ` +
+          `(${(e as Error)?.message}) — inlining raw bytes as image/${format}`,
+        );
+      }
+      // If it isn't a recognised image at all (PDF/video), keep the placeholder.
+      let secureUrl: string;
+      if (sniffed || width > 0) {
+        const contentType = format === 'jpg' ? 'image/jpeg' : `image/${format}`;
+        secureUrl = `data:${contentType};base64,${body.toString('base64')}`;
+      } else {
+        secureUrl =
+          `https://placehold.co/600x400/eef2ff/4338ca` +
+          `?text=DEV+STUB+${encodeURIComponent(options.folder)}`;
+      }
       this.logger.warn(
-        `Media storage (R2) not configured — returning dev-stub URL ` +
-        `(publicId=${publicId}, bytes=${fileBuffer.length})`,
+        `Media storage (R2) not configured — dev inline ` +
+        `(publicId=${publicId}, bytes=${body.length}, format=${format})`,
       );
-      return {
-        secureUrl,
-        publicId,
-        format: 'png',
-        width: 600,
-        height: 400,
-        bytes: fileBuffer.length,
-      };
+      return { secureUrl, publicId, format, width, height, bytes: body.length };
     }
     throw new Error(
       'Media storage (Cloudflare R2) is not configured. Set R2_ACCOUNT_ID, ' +
@@ -194,6 +222,36 @@ export class MediaStorageAdapter {
       height,
       bytes: body.length,
     };
+  }
+
+  /** Sniff image format from magic bytes — for the dev data-URL content type. */
+  private sniffImageFormat(buf: Buffer): string | null {
+    if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+      return 'jpeg';
+    }
+    if (
+      buf.length >= 4 &&
+      buf[0] === 0x89 &&
+      buf[1] === 0x50 &&
+      buf[2] === 0x4e &&
+      buf[3] === 0x47
+    ) {
+      return 'png';
+    }
+    if (
+      buf.length >= 12 &&
+      buf[0] === 0x52 &&
+      buf[1] === 0x49 &&
+      buf[2] === 0x46 &&
+      buf[3] === 0x46 &&
+      buf[8] === 0x57 &&
+      buf[9] === 0x45 &&
+      buf[10] === 0x42 &&
+      buf[11] === 0x50
+    ) {
+      return 'webp';
+    }
+    return null;
   }
 
   /** Minimal content-type/extension sniff for non-image uploads (PDF/video). */

@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { sellerAuthService } from '@/services/auth.service';
 import { ApiError } from '@/lib/api-client';
 import { validateIdentifier, validateLoginPassword } from '@/lib/validators';
-import './login.css';
+import '../register/register.css';
 
 interface FormErrors {
   identifier?: string;
@@ -66,12 +66,6 @@ export default function SellerLoginPage() {
       });
 
       if (result.data) {
-        // Phase 21 (2026-05-20) — Tokens are NOT written to
-        // sessionStorage anymore. The login response also sets
-        // httpOnly cookies (sm_access_seller / sm_refresh_seller) and
-        // the dashboard fetches the seller profile via
-        // GET /seller/auth/me on mount. Avoiding sessionStorage closes
-        // the XSS exfiltration path for the access token.
         router.push('/dashboard');
       }
     } catch (err) {
@@ -122,118 +116,133 @@ export default function SellerLoginPage() {
         ? 'alert alert-info'
         : 'alert alert-error';
 
-  // Pre-fill the verify page with the email when the identifier is one; a phone
-  // login falls back to the bare verify page (which prompts for the email).
   const verifyHref = identifier.includes('@')
     ? `/register/verify?email=${encodeURIComponent(identifier.trim().toLowerCase())}`
     : '/register/verify';
 
   return (
     <div className="auth-page">
-      <div className="auth-card">
-        <div className="auth-header">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src="/SportsMart_Web_Banner.avif"
-            alt="SportsMart"
-            className="auth-logo"
-            style={{ height: 56, width: 'auto', display: 'block' }}
-          />
-          <p className="auth-badge">Seller Portal</p>
-          <h2 className="auth-title">Sign in to your account</h2>
-        </div>
-
-        {serverError && (
-          <div className={alertClass} role="alert">
-            {serverError}
-            {needsVerification && (
-              <>
-                {' '}
-                <Link
-                  href={verifyHref}
-                  style={{ fontWeight: 600, textDecoration: 'underline' }}
-                >
-                  Verify your email →
-                </Link>
-              </>
-            )}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} noValidate>
-          <div className="form-group">
-            <label htmlFor="identifier">Email or Phone Number *</label>
-            <input
-              id="identifier"
-              type="text"
-              placeholder="Enter your email or phone number"
-              value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
-              onBlur={() => handleBlur('identifier', identifier)}
-              aria-invalid={!!errors.identifier}
-              aria-describedby={errors.identifier ? 'identifier-error' : undefined}
-              disabled={isSubmitting}
-              autoComplete="username"
-              autoFocus
-            />
-            {errors.identifier && (
-              <span id="identifier-error" className="field-error" role="alert">
-                {errors.identifier}
-              </span>
-            )}
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="password">Password *</label>
-            <div className="password-wrapper">
-              <input
-                id="password"
-                type={showPassword ? 'text' : 'password'}
-                placeholder="Enter your password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                onBlur={() => handleBlur('password', password)}
-                aria-invalid={!!errors.password}
-                aria-describedby={errors.password ? 'password-error' : undefined}
-                disabled={isSubmitting}
-                autoComplete="current-password"
-              />
-              <button
-                type="button"
-                className="password-toggle"
-                onClick={() => setShowPassword(!showPassword)}
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-                tabIndex={-1}
-              >
-                {showPassword ? 'Hide' : 'Show'}
-              </button>
+      <div className="auth-split">
+        {/* Left — branded panel */}
+        <aside className="auth-brand">
+          <div className="auth-brand-content">
+            <div className="auth-brand-logo">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/SportsMart_Web_Banner.avif" alt="Sportsmart" />
             </div>
-            {errors.password && (
-              <span id="password-error" className="field-error" role="alert">
-                {errors.password}
-              </span>
-            )}
+            <h1 className="auth-brand-headline">Welcome back.</h1>
+            <p className="auth-brand-text">
+              Sign in to manage your store, orders, catalog, and payouts on the
+              Sportsmart marketplace.
+            </p>
+            <ul className="auth-brand-points">
+              <li><span className="tick">✓</span> Fast, transparent payouts</li>
+              <li><span className="tick">✓</span> Powerful catalog &amp; inventory tools</li>
+              <li><span className="tick">✓</span> Pan-India fulfilment reach</li>
+            </ul>
+          </div>
+        </aside>
+
+        {/* Right — form panel */}
+        <div className="auth-form-panel is-center">
+          <div className="auth-header">
+            <p className="auth-badge">Seller Portal</p>
+            <h2 className="auth-title">Sign in to your account</h2>
+            <p className="auth-subtitle">Welcome back — let&apos;s get you to your dashboard.</p>
           </div>
 
-          <div style={{ textAlign: 'right', marginTop: 4, marginBottom: 8 }}>
-            <Link href="/forgot-password" style={{ fontSize: 13, color: 'var(--color-primary)' }}>
-              Forgot password?
-            </Link>
-          </div>
+          {serverError && (
+            <div className={alertClass} role="alert">
+              {serverError}
+              {needsVerification && (
+                <>
+                  {' '}
+                  <Link
+                    href={verifyHref}
+                    style={{ fontWeight: 600, textDecoration: 'underline' }}
+                  >
+                    Verify your email →
+                  </Link>
+                </>
+              )}
+            </div>
+          )}
 
-          <button
-            type="submit"
-            className="btn-submit"
-            disabled={isSubmitting}
-            aria-busy={isSubmitting}
-          >
-            {isSubmitting ? 'Signing in...' : 'Sign In'}
-          </button>
-        </form>
+          <form onSubmit={handleSubmit} noValidate>
+            <div className="form-group">
+              <label htmlFor="identifier">Email or Phone Number *</label>
+              <input
+                id="identifier"
+                type="text"
+                placeholder="Enter your email or phone number"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
+                onBlur={() => handleBlur('identifier', identifier)}
+                aria-invalid={!!errors.identifier}
+                aria-describedby={errors.identifier ? 'identifier-error' : undefined}
+                disabled={isSubmitting}
+                autoComplete="username"
+                autoFocus
+              />
+              {errors.identifier && (
+                <span id="identifier-error" className="field-error" role="alert">
+                  {errors.identifier}
+                </span>
+              )}
+            </div>
 
-        <p className="auth-footer">
-          Don&apos;t have an account? <Link href="/register">Register</Link>
-        </p>
+            <div className="form-group">
+              <label htmlFor="password">Password *</label>
+              <div className="password-wrapper">
+                <input
+                  id="password"
+                  type={showPassword ? 'text' : 'password'}
+                  placeholder="Enter your password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  onBlur={() => handleBlur('password', password)}
+                  aria-invalid={!!errors.password}
+                  aria-describedby={errors.password ? 'password-error' : undefined}
+                  disabled={isSubmitting}
+                  autoComplete="current-password"
+                />
+                <button
+                  type="button"
+                  className="password-toggle"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  tabIndex={-1}
+                >
+                  {showPassword ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              {errors.password && (
+                <span id="password-error" className="field-error" role="alert">
+                  {errors.password}
+                </span>
+              )}
+            </div>
+
+            <div style={{ textAlign: 'right', marginTop: 4, marginBottom: 10 }}>
+              <Link href="/forgot-password" style={{ fontSize: 13, color: '#2563eb', fontWeight: 600 }}>
+                Forgot password?
+              </Link>
+            </div>
+
+            <button
+              type="submit"
+              className="btn-submit"
+              disabled={isSubmitting}
+              aria-busy={isSubmitting}
+            >
+              {isSubmitting ? 'Signing in…' : 'Sign In'}
+            </button>
+          </form>
+
+          <p className="auth-footer">
+            Don&apos;t have an account? <Link href="/register">Register</Link>
+          </p>
+        </div>
       </div>
     </div>
   );

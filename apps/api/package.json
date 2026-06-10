@@ -20,6 +20,9 @@
     "seed:metafields": "npx ts-node prisma/seed/seed-metafields.ts",
     "seed:admin": "npx ts-node prisma/seed/seed-admin.ts",
     "seed:catalog": "npx ts-node prisma/seed/seed-catalog.ts",
+    "seed:tax": "npx ts-node prisma/seed/seed-tax-master.ts",
+    "seed:menu": "npx ts-node prisma/seed/seed-menu.ts",
+    "seed:fresh": "npx ts-node prisma/seed/seed.ts --push",
     "seed:smoke": "npx ts-node prisma/seed/seed-smoke-actors.ts",
     "db:reset": "npx ts-node prisma/scripts/guard-not-prod.ts && prisma migrate reset --force && npm run seed",
     "db:fresh": "npx ts-node prisma/scripts/guard-not-prod.ts && prisma migrate reset --force --skip-seed"

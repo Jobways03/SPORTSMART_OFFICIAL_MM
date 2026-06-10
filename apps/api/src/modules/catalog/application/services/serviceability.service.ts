@@ -9,6 +9,7 @@ interface ServiceableSeller {
   dispatchSla: number;
   stockQty: number;
   estimatedDeliveryDays: number;
+  pickupPincode: string | null;
 }
 
 interface ServiceableFranchise {
@@ -18,6 +19,7 @@ interface ServiceableFranchise {
   dispatchSla: number;
   stockQty: number;
   estimatedDeliveryDays: number;
+  pickupPincode: string | null;
 }
 
 interface ServiceabilityResult {
@@ -83,6 +85,49 @@ export class ServiceabilityService {
     }
   }
 
+  // Cache Delhivery TAT per origin→destination — transit times are stable, so a
+  // 12h TTL avoids hitting the carrier on every PDP view / being rate-limited.
+  private readonly tatCache = new Map<
+    string,
+    { days: number | null; expiresAt: number }
+  >();
+  private readonly TAT_CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+
+  /**
+   * Delhivery transit TAT (days) from a pickup PIN to a drop PIN, via the
+   * facade's `/internal/delhivery/tat`. Returns null when unavailable (facade
+   * unwired / error / non-serviceable origin / non-numeric) so the caller falls
+   * back to the distance heuristic — a carrier hiccup never breaks the estimate.
+   */
+  private async delhiveryTat(
+    origin: string,
+    destination: string,
+  ): Promise<number | null> {
+    if (!this.facade || !origin || !destination) return null;
+    const key = `${origin}->${destination}`;
+    const cached = this.tatCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) return cached.days;
+
+    let days: number | null = null;
+    try {
+      const res = await this.facade.get<any>(
+        `/api/v1/internal/delhivery/tat?origin=${encodeURIComponent(origin)}&destination=${encodeURIComponent(destination)}&mot=S`,
+      );
+      const d = res?.body && (res.body.data ?? res.body);
+      const t = d?.tatDays;
+      if (res.status >= 200 && res.status < 300 && typeof t === 'number' && t > 0) {
+        days = Math.ceil(t);
+      }
+    } catch {
+      days = null;
+    }
+    this.tatCache.set(key, {
+      days,
+      expiresAt: Date.now() + this.TAT_CACHE_TTL_MS,
+    });
+    return days;
+  }
+
   /**
    * Check if a product/variant can be delivered to a pincode.
    * Returns the legacy ServiceabilityResult shape projected from
@@ -130,6 +175,7 @@ export class ServiceabilityService {
           // stockQty pre-Phase-64 over-reported availability.
           stockQty: cand.availableStock,
           estimatedDeliveryDays: cand.estimatedDeliveryDays,
+          pickupPincode: cand.pickupPincode ?? null,
         });
       } else {
         franchises.push({
@@ -139,6 +185,7 @@ export class ServiceabilityService {
           dispatchSla: cand.dispatchSla,
           stockQty: cand.availableStock,
           estimatedDeliveryDays: cand.estimatedDeliveryDays,
+          pickupPincode: cand.pickupPincode ?? null,
         });
       }
     }
@@ -159,7 +206,18 @@ export class ServiceabilityService {
     let deliveryEstimate: string | null = null;
     let estimatedDays: number | null = null;
     if (best) {
-      estimatedDays = best.estimatedDeliveryDays;
+      // Show Delhivery's real transit TAT ONLY (nearest node's pickup PIN →
+      // customer PIN) — excludes the seller's dispatch SLA, per product
+      // decision. Fall back to the distance heuristic's transit component (its
+      // total minus the dispatch SLA) so the unit stays consistent (transit
+      // days, never total) when the carrier can't answer.
+      const tatDays = best.pickupPincode
+        ? await this.delhiveryTat(best.pickupPincode, customerPincode)
+        : null;
+      estimatedDays =
+        tatDays !== null
+          ? tatDays
+          : Math.max(1, best.estimatedDeliveryDays - best.dispatchSla);
       if (estimatedDays <= 1) {
         deliveryEstimate = 'Delivery by tomorrow';
       } else if (estimatedDays <= 3) {

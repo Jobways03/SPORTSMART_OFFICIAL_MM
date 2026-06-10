@@ -1,74 +1,139 @@
 /**
- * Master Seed Script
+ * Master Seed Runner — provisions a database completely + idempotently.
  *
- * Runs all seed scripts in the correct order.
- * Safe to run multiple times — all scripts use upsert/skip logic.
+ * It reads ALL config (DATABASE_URL, DIRECT_URL, ADMIN_SEED_*, PINCODE_CSV_PATH)
+ * from apps/api/.env. So to set up a NEW database you only change DATABASE_URL
+ * (and DIRECT_URL) in .env, then run ONE command:
  *
- * Usage:
- *   npx ts-node prisma/seed/seed.ts           # Run all seeds
- *   npx ts-node prisma/seed/seed.ts --skip-pincodes  # Skip heavy pincode import
+ *   pnpm --filter @sportsmart/api seed:fresh   # db push (schema) + ALL seeds
+ *   pnpm --filter @sportsmart/api seed         # ALL seeds (schema must exist)
+ *   pnpm --filter @sportsmart/api seed:quick   # seeds EXCEPT the 165K pincodes
  *
- * Or via package.json:
- *   pnpm run seed              # All seeds
- *   pnpm run seed:quick        # Skip pincodes (fast)
- *   pnpm run seed:pincodes     # Only pincodes
- *   pnpm run seed:metafields   # Only metafield definitions
+ * Flags:  --push  (run `prisma db push` first)   --skip-pincodes
+ *
+ * Order matters: catalog runs before metafields + menu (which reference
+ * categories). Every sub-seed is upsert/skip-safe, so re-running is harmless.
+ *
+ * Connections: `prisma db push` uses DIRECT_URL (the 5432 session connection —
+ * the 6543 transaction pooler can't run migrations); the data seeds use
+ * DATABASE_URL (the pooler works fine for them).
+ *
+ * Pincodes need the India-Post directory CSV. The committed prisma/seed/
+ * pincodes.csv is a broken symlink in a clean checkout, so this runner
+ * auto-detects a real file (PINCODE_CSV_PATH → ~/Desktop/pincodes.csv →
+ * prisma/seed/pincodes.csv) and SKIPS the step with a warning if none is found
+ * — it never fails the whole run on a missing CSV.
  */
 
 import { execSync } from 'child_process';
 import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
+import { config as loadEnv } from 'dotenv';
+
+const seedDir = __dirname;
+const rootDir = path.join(__dirname, '..', '..'); // apps/api
+
+// Load apps/api/.env so DATABASE_URL etc. are available here AND inherited by
+// every child seed process (dotenv does not override vars already in the shell).
+loadEnv({ path: path.join(rootDir, '.env') });
 
 const args = process.argv.slice(2);
 const skipPincodes = args.includes('--skip-pincodes');
+const doPush = args.includes('--push');
 
-const seedDir = path.join(__dirname);
-const rootDir = path.join(__dirname, '..', '..');
+const mask = (url?: string) => (url || '').replace(/:\/\/[^@]*@/, '://***@');
 
-function run(label: string, scriptPath: string) {
-  console.log(`\n${'═'.repeat(60)}`);
-  console.log(`  ${label}`);
-  console.log(`${'═'.repeat(60)}\n`);
+function run(label: string, scriptPath: string, extraEnv: NodeJS.ProcessEnv = {}) {
+  console.log(`\n${'═'.repeat(64)}\n  ${label}\n${'═'.repeat(64)}\n`);
   try {
     execSync(`npx ts-node "${scriptPath}"`, {
       cwd: rootDir,
       stdio: 'inherit',
-      env: { ...process.env },
+      env: { ...process.env, ...extraEnv },
     });
-  } catch (err) {
+  } catch {
     console.error(`\n❌ ${label} failed!\n`);
     process.exit(1);
   }
 }
 
-async function main() {
+/** First readable CSV: env override → home Desktop → committed file. */
+function resolvePincodeCsv(): string | null {
+  const candidates = [
+    process.env.PINCODE_CSV_PATH,
+    path.join(os.homedir(), 'Desktop', 'pincodes.csv'),
+    path.join(seedDir, 'pincodes.csv'),
+    path.join(seedDir, 'pincodes 2.csv'),
+  ].filter(Boolean) as string[];
+  for (const p of candidates) {
+    try {
+      if (fs.existsSync(p) && fs.statSync(p).isFile()) return p;
+    } catch {
+      /* broken symlink / unreadable — try next */
+    }
+  }
+  return null;
+}
+
+function main() {
   console.log('🌱 SPORTSMART — Master Seed Runner');
-  console.log(`   Skip pincodes: ${skipPincodes ? 'YES' : 'NO'}`);
+  console.log(`   DATABASE_URL : ${mask(process.env.DATABASE_URL) || '(NOT SET!)'}`);
+  console.log(`   db push first: ${doPush ? 'YES (--push)' : 'no'}`);
+  console.log(`   skip pincodes: ${skipPincodes ? 'YES' : 'no'}`);
 
-  // 1. Admin user (must exist for admin operations)
-  run('1/5  Admin User', path.join(seedDir, 'seed-admin.ts'));
-
-  // 2. Resource policies (Phase 4 ABAC defaults — Tier-1 caps)
-  run('2/6  Resource Policies', path.join(seedDir, 'seed-resource-policies.ts'));
-
-  // 3. SLA policies (Phase 6 — example deadlines for disputes/returns/tickets)
-  run('3/6  SLA Policies', path.join(seedDir, 'seed-sla-policies.ts'));
-
-  // 4. Catalog (categories, brands, option definitions)
-  run('4/6  Catalog (Categories, Brands, Options)', path.join(seedDir, 'seed-catalog.ts'));
-
-  // 5. Category metafield definitions (depends on categories)
-  run('5/6  Category Metafield Definitions', path.join(seedDir, 'seed-metafields.ts'));
-
-  // 6. Pincodes (heavy — 165K+ rows, optional skip)
-  if (skipPincodes) {
-    console.log(`\n${'═'.repeat(60)}`);
-    console.log('  6/6  Pincodes — SKIPPED (--skip-pincodes)');
-    console.log(`${'═'.repeat(60)}\n`);
-  } else {
-    run('6/6  Pincodes (165K+ rows)', path.join(seedDir, 'seed-pincodes.ts'));
+  if (!process.env.DATABASE_URL) {
+    console.error('\n❌ DATABASE_URL is not set (apps/api/.env). Aborting.\n');
+    process.exit(1);
   }
 
-  console.log('\n✅ All seeds completed successfully!\n');
+  // 0 — schema (optional). Uses DIRECT_URL because migrations/db-push can't run
+  // over the transaction pooler.
+  if (doPush) {
+    const direct = process.env.DIRECT_URL || process.env.DATABASE_URL;
+    console.log(`\n${'═'.repeat(64)}\n  0/8  prisma db push (schema)  [${mask(direct)}]\n${'═'.repeat(64)}\n`);
+    try {
+      execSync('npx prisma db push --skip-generate --accept-data-loss', {
+        cwd: rootDir,
+        stdio: 'inherit',
+        env: { ...process.env, DATABASE_URL: direct },
+      });
+    } catch {
+      console.error('\n❌ prisma db push failed!\n');
+      process.exit(1);
+    }
+  }
+
+  // 1–7 — reference data (order matters: catalog before metafields + menu).
+  run('1/8  Admin user + system roles', path.join(seedDir, 'seed-admin.ts'));
+  run('2/8  Resource policies (ABAC)', path.join(seedDir, 'seed-resource-policies.ts'));
+  run('3/8  SLA policies', path.join(seedDir, 'seed-sla-policies.ts'));
+  run('4/8  Tax master (states, HSN, UQC, GST config)', path.join(seedDir, 'seed-tax-master.ts'));
+  run('5/8  Catalog (categories, brands, options)', path.join(seedDir, 'seed-catalog.ts'));
+  run('6/8  Category metafield definitions', path.join(seedDir, 'seed-metafields.ts'));
+  run('7/8  Storefront navigation menu', path.join(seedDir, 'seed-menu.ts'));
+
+  // 8 — pincodes (heavy, needs the India-Post CSV).
+  if (skipPincodes) {
+    console.log(`\n${'═'.repeat(64)}\n  8/8  Pincodes — SKIPPED (--skip-pincodes)\n${'═'.repeat(64)}\n`);
+  } else {
+    const csv = resolvePincodeCsv();
+    if (!csv) {
+      console.warn(
+        `\n${'═'.repeat(64)}\n  8/8  Pincodes — SKIPPED (no CSV found)\n${'═'.repeat(64)}\n` +
+          `  No India-Post CSV located. Set PINCODE_CSV_PATH in apps/api/.env\n` +
+          `  (or place the file at ~/Desktop/pincodes.csv), then run:\n` +
+          `      pnpm --filter @sportsmart/api seed:pincodes\n`,
+      );
+    } else {
+      console.log(`  (pincode CSV: ${csv})`);
+      run('8/8  Pincodes (165K+ rows)', path.join(seedDir, 'seed-pincodes.ts'), {
+        PINCODE_CSV_PATH: csv,
+      });
+    }
+  }
+
+  console.log('\n✅ Master seed complete.\n');
 }
 
 main();

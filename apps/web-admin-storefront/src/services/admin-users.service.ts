@@ -5,7 +5,9 @@ export type AdminPrimaryRole =
   | 'SELLER_ADMIN'
   | 'SELLER_SUPPORT'
   | 'SELLER_OPERATIONS'
-  | 'AFFILIATE_ADMIN';
+  | 'AFFILIATE_ADMIN'
+  | 'RETAILER_ADMIN'
+  | 'FRANCHISE_ADMIN';
 
 export type AdminAccountStatus = 'ACTIVE' | 'INACTIVE' | 'SUSPENDED';
 
@@ -111,4 +113,6 @@ export const ADMIN_PRIMARY_ROLES: { value: AdminPrimaryRole; label: string }[] =
   { value: 'SELLER_OPERATIONS', label: 'Seller Operations' },
   { value: 'SELLER_SUPPORT', label: 'Seller Support' },
   { value: 'AFFILIATE_ADMIN', label: 'Affiliate Admin' },
+  { value: 'RETAILER_ADMIN', label: 'Retailer Admin' },
+  { value: 'FRANCHISE_ADMIN', label: 'Franchise Admin' },
 ];
