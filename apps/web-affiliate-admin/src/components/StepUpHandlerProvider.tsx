@@ -9,7 +9,11 @@ import {
   type ReactNode,
 } from 'react';
 import { registerStepUpHandler, type StepUpHandler } from '@/lib/api';
+import { validateOtp } from '@/lib/validators';
 import { adminMfaService } from '@/services/admin-mfa.service';
+
+// Backup recovery code shape: xxxxx-xxxxx (case-insensitive alphanumerics).
+const BACKUP_CODE_REGEX = /^[A-Za-z0-9]{5}-[A-Za-z0-9]{5}$/;
 
 /**
  * Admin step-up recovery UX (mirrors web-admin-storefront's
@@ -109,6 +113,12 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
       const trimmed = code.trim();
       if (!trimmed) {
         setErrorText('Enter a 6-digit code from your authenticator app, or a backup code.');
+        return;
+      }
+      // Accept either a 6-digit OTP (authenticator/email) or a backup code.
+      // validateOtp enforces the 6-digit shape; backup codes are xxxxx-xxxxx.
+      if (validateOtp(trimmed) !== null && !BACKUP_CODE_REGEX.test(trimmed)) {
+        setErrorText('Enter the 6-digit code or a backup code (xxxxx-xxxxx).');
         return;
       }
       setSubmitting(true);

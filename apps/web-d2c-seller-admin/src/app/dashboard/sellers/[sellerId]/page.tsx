@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback, useMemo, FormEvent } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, FormEvent, CSSProperties } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import dynamic from 'next/dynamic';
 import { adminSellersService, SellerDetail, SellerListItem } from '@/services/admin-sellers.service';
@@ -77,6 +77,35 @@ interface Toast {
 
 type FormErrors = Partial<Record<keyof FormData | 'phone', string>>;
 type ModalType = 'status' | 'verification' | 'kyc' | 'message' | 'password' | 'delete' | 'impersonate' | 'editbank' | null;
+
+// Phase 254 — presentational helpers for the Tax / GST identity card.
+function TaxBadge({ state }: { state: 'verified' | 'pending' | 'missing' }) {
+  const map = {
+    verified: { bg: '#DCFCE7', fg: '#166534', text: 'Verified' },
+    pending: { bg: '#FEF3C7', fg: '#92400E', text: 'Pending' },
+    missing: { bg: '#FEE2E2', fg: '#991B1B', text: 'Missing' },
+  } as const;
+  const s = map[state];
+  return (
+    <span style={{ background: s.bg, color: s.fg, padding: '2px 10px', borderRadius: 10, fontSize: 11, fontWeight: 700, whiteSpace: 'nowrap' }}>
+      {s.text}
+    </span>
+  );
+}
+
+function taxVerifyBtnStyle(bg: string, border: string, disabled: boolean): CSSProperties {
+  return {
+    marginTop: 10,
+    padding: '8px 14px',
+    borderRadius: 6,
+    border: `1px solid ${border}`,
+    background: disabled ? '#9CA3AF' : bg,
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: 600,
+    cursor: disabled ? 'not-allowed' : 'pointer',
+  };
+}
 
 function detailToFormData(p: SellerDetail): FormData {
   return {
@@ -229,6 +258,8 @@ export default function AdminSellerDetailPage() {
 
   const [activeModal, setActiveModal] = useState<ModalType>(null);
   const [adminRole, setAdminRole] = useState('');
+  // Phase 254 — manual PAN / GSTIN verification in progress (null when idle).
+  const [verifyingTaxId, setVerifyingTaxId] = useState<null | 'pan' | 'gst'>(null);
 
   useEffect(() => {
     try {
@@ -273,6 +304,40 @@ export default function AdminSellerDetailPage() {
   useEffect(() => {
     fetchSeller();
   }, [fetchSeller]);
+
+  // Phase 254 — manually mark the seller's PAN / GSTIN verified. PAN
+  // verification is what drops §194-O TDS from the 5% no-PAN penalty to the
+  // configured rate; GSTIN verification feeds tax invoicing. Idempotent.
+  const verifyTaxId = useCallback(
+    async (which: 'pan' | 'gst') => {
+      if (verifyingTaxId) return;
+      const label = which === 'pan' ? 'PAN' : 'GSTIN';
+      const ok = window.confirm(
+        `Confirm you have verified this seller's ${label} on the official portal.\n\n` +
+          (which === 'pan'
+            ? 'This drops their Section 194-O TDS from the 5% no-PAN penalty rate to the configured rate (e.g. 1%).'
+            : 'This marks the GSTIN as verified for tax invoicing.'),
+      );
+      if (!ok) return;
+      setVerifyingTaxId(which);
+      try {
+        const res =
+          which === 'pan'
+            ? await adminSellersService.verifyPan(sellerId)
+            : await adminSellersService.verifyGstin(sellerId);
+        addToast('success', res?.message ?? `${label} verified`);
+        await fetchSeller();
+      } catch (err) {
+        addToast(
+          'error',
+          err instanceof ApiError ? err.message : `${label} verification failed`,
+        );
+      } finally {
+        setVerifyingTaxId(null);
+      }
+    },
+    [verifyingTaxId, sellerId, addToast, fetchSeller],
+  );
 
   // Field handlers
   const updateField = (field: keyof FormData, value: string) => {
@@ -402,6 +467,10 @@ export default function AdminSellerDetailPage() {
   // the real /approve + /reject endpoints (which require GSTIN+PAN), not the
   // raw verification override.
   const canReviewKyc = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole) && seller?.verificationStatus === 'UNDER_REVIEW';
+  // Phase 254 — verifying statutory IDs is a management action available at any
+  // status (the seller is usually already VERIFIED/ACTIVE by the time finance
+  // verifies the PAN for the TDS rate).
+  const canVerifyTaxIds = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole);
 
   // ---- Product Mappings State ----
   interface SellerProductMappingItem {
@@ -741,6 +810,93 @@ export default function AdminSellerDetailPage() {
               </span>
             )}
           </div>
+        </div>
+
+        {/* Tax / GST identity — Phase 254. Verify PAN/GSTIN here. PAN
+            verification drops §194-O TDS from the 5% no-PAN penalty to the
+            configured rate (e.g. 1%); GSTIN verification feeds tax invoicing. */}
+        <div className="profile-card">
+          <div className="profile-card-header">
+            <h2>Tax / GST identity</h2>
+            <p>
+              Statutory IDs and verification. Verifying the <strong>PAN</strong>{' '}
+              drops this seller&apos;s Section&nbsp;194-O TDS from the 5% no-PAN
+              penalty rate to your configured rate (e.g. 1%).
+            </p>
+          </div>
+
+          {/* Legal name + state code — full, unmasked, for admin audit. */}
+          <div className="form-grid-2">
+            <div className="profile-form-group">
+              <label>Legal business name</label>
+              <div className="readonly-field">{seller.legalBusinessName || '—'}</div>
+            </div>
+            <div className="profile-form-group">
+              <label>GST state code</label>
+              <div className="readonly-field">{seller.gstStateCode || '—'}</div>
+            </div>
+          </div>
+
+          <div className="form-grid-2">
+            {/* PAN — shown in full to admin (not masked). */}
+            <div className="profile-form-group">
+              <label>PAN</label>
+              <div
+                className="readonly-field"
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+              >
+                <span style={{ fontFamily: 'monospace', letterSpacing: '0.5px' }}>
+                  {seller.panNumber || 'Missing'}
+                </span>
+                <TaxBadge
+                  state={seller.panVerified ? 'verified' : seller.panNumber ? 'pending' : 'missing'}
+                />
+              </div>
+              {canVerifyTaxIds && seller.panNumber && !seller.panVerified && (
+                <button
+                  type="button"
+                  onClick={() => void verifyTaxId('pan')}
+                  disabled={verifyingTaxId !== null}
+                  style={taxVerifyBtnStyle('#059669', '#047857', verifyingTaxId === 'pan' || verifyingTaxId !== null)}
+                >
+                  {verifyingTaxId === 'pan' ? 'Verifying…' : 'Verify PAN'}
+                </button>
+              )}
+            </div>
+
+            {/* GSTIN */}
+            <div className="profile-form-group">
+              <label>GSTIN</label>
+              <div
+                className="readonly-field"
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}
+              >
+                <span style={{ fontFamily: 'monospace', letterSpacing: '0.5px' }}>
+                  {seller.gstin || 'Missing'}
+                </span>
+                <TaxBadge
+                  state={seller.isGstVerified ? 'verified' : seller.gstin ? 'pending' : 'missing'}
+                />
+              </div>
+              {canVerifyTaxIds && seller.gstin && !seller.isGstVerified && (
+                <button
+                  type="button"
+                  onClick={() => void verifyTaxId('gst')}
+                  disabled={verifyingTaxId !== null}
+                  style={taxVerifyBtnStyle('#2563EB', '#1D4ED8', verifyingTaxId === 'gst' || verifyingTaxId !== null)}
+                >
+                  {verifyingTaxId === 'gst' ? 'Verifying…' : 'Verify GSTIN'}
+                </button>
+              )}
+            </div>
+          </div>
+          {(!seller.gstin || !seller.panNumber) && (
+            <p style={{ marginTop: 12, padding: 10, background: '#FEF3C7', border: '1px solid #FDE68A', borderRadius: 6, fontSize: 13, color: '#92400E' }}>
+              <strong>Missing ID:</strong> GSTIN + PAN are required (PAN is mandatory
+              for §194-O TDS). Ask the seller to submit the missing field via
+              onboarding before it can be verified.
+            </p>
+          )}
         </div>
 
         {/* Store Address */}

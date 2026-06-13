@@ -112,6 +112,9 @@ export class DelhiveryCourierAdapter implements CourierGatewayPort {
       cod,
       ...(cod ? { codAmountPaise: rupeesToPaise(s.codAmount ?? s.totalAmount) } : {}),
       fragile: false,
+      // forward (normal delivery) vs reverse (customer return pickup). The
+      // facade routes 'reverse' to Delhivery's RVP create. Defaults to forward.
+      direction: req.direction ?? s.direction ?? 'forward',
     };
 
     let res: { status: number; body: any };

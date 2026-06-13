@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { FranchiseListItem, adminFranchisesService } from '@/services/admin-franchises.service';
 import { ApiError } from '@/lib/api-client';
+import { validateStrongPassword } from '@/lib/validators';
 import '../../sellers/components/modal.css';
 
 interface Props {
@@ -18,11 +19,19 @@ export default function ChangePasswordModal({ franchise, onClose, onSuccess }: P
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const passwordValid = password.length >= 8;
+  const passwordValid = validateStrongPassword(password) === null;
   const passwordsMatch = password === confirmPassword && confirmPassword.length > 0;
 
   const handleSubmit = async () => {
-    if (!passwordValid || !passwordsMatch) return;
+    const pwError = validateStrongPassword(password);
+    if (pwError) {
+      setError(pwError);
+      return;
+    }
+    if (!passwordsMatch) {
+      setError('Passwords do not match');
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {
@@ -69,7 +78,7 @@ export default function ChangePasswordModal({ franchise, onClose, onSuccess }: P
               autoComplete="new-password"
             />
             {password && !passwordValid && (
-              <span className="field-error">Password must be at least 8 characters</span>
+              <span className="field-error">{validateStrongPassword(password)}</span>
             )}
           </div>
 

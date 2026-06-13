@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { apiFetch } from '../../lib/api';
+import { validateOtp } from '../../lib/validators';
 
 /**
  * Step 2 of the affiliate password reset flow. Reads the email from
@@ -41,6 +42,11 @@ export default function VerifyOtpPage() {
     e.preventDefault();
     setError('');
     setInfo('');
+    const otpError = validateOtp(otp);
+    if (otpError) {
+      setError(otpError);
+      return;
+    }
     setLoading(true);
     try {
       const data = await apiFetch<{ resetToken: string }>(

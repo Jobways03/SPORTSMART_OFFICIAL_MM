@@ -26,6 +26,20 @@ export default function DispatchProcurementModal({ request, onClose, onSuccess }
   );
 
   const handleSubmit = async () => {
+    // Expected delivery is optional, but when set it must not be in the past.
+    if (expectedDeliveryAt) {
+      const eta = new Date(expectedDeliveryAt);
+      if (Number.isNaN(eta.getTime())) {
+        setError('Enter a valid expected delivery date');
+        return;
+      }
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      if (eta < today) {
+        setError('Expected delivery date cannot be in the past');
+        return;
+      }
+    }
     setSubmitting(true);
     setError('');
     try {

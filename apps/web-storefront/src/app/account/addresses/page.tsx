@@ -14,6 +14,11 @@ import {
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
+import {
+  validateText,
+  validateIndianMobile,
+  validatePincode,
+} from '@/lib/validators';
 
 interface FormState {
   fullName: string;
@@ -204,20 +209,38 @@ export default function AddressesPage() {
   };
 
   const validateForm = (): string | null => {
-    if (!form.fullName.trim()) return 'Full name is required.';
-    if (!form.phone.trim()) return 'Phone is required.';
+    const fullNameError = validateText(form.fullName, { label: 'Full name', max: 100 });
+    if (fullNameError) return fullNameError;
 
+    if (!form.phone.trim()) return 'Phone is required.';
     const phoneDigits = form.phone.replace(/\D/g, '');
     const localDigits = phoneDigits.startsWith('91') && phoneDigits.length === 12
       ? phoneDigits.slice(2)
       : phoneDigits;
-    if (localDigits.length !== 10) return 'Phone must be 10 digits.';
+    const phoneError = validateIndianMobile(localDigits);
+    if (phoneError) return phoneError;
 
-    if (!form.addressLine1.trim()) return 'Address line 1 is required.';
-    if (!form.city.trim()) return 'City is required.';
-    if (!form.state.trim()) return 'State is required.';
+    const line1Error = validateText(form.addressLine1, { label: 'Address line 1', max: 200 });
+    if (line1Error) return line1Error;
+    const line2Error = validateText(form.addressLine2, {
+      label: 'Address line 2',
+      max: 200,
+      required: false,
+    });
+    if (line2Error) return line2Error;
+    const localityError = validateText(form.locality, {
+      label: 'Locality',
+      max: 100,
+      required: false,
+    });
+    if (localityError) return localityError;
+    const cityError = validateText(form.city, { label: 'City', max: 100 });
+    if (cityError) return cityError;
+    const stateError = validateText(form.state, { label: 'State', max: 100 });
+    if (stateError) return stateError;
 
-    if (!/^\d{6}$/.test(form.postalCode.trim())) return 'Postal code must be 6 digits.';
+    const pincodeError = validatePincode(form.postalCode);
+    if (pincodeError) return pincodeError;
 
     return null;
   };

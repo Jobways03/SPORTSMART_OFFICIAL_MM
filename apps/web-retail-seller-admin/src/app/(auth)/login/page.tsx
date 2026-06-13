@@ -9,6 +9,7 @@ import {
   verifyMfaEmailOtp,
 } from '@/services/admin-mfa.service';
 import { ApiError } from '@/lib/api-client';
+import { validateOtp } from '@/lib/validators';
 import './login.css';
 
 interface FormErrors {
@@ -148,7 +149,7 @@ export default function AdminLoginPage() {
     if (!mfa) return;
     const code = mfaCode.replace(/\s+/g, '');
     if (emailMode) {
-      if (!/^[0-9]{6}$/.test(code)) {
+      if (validateOtp(code)) {
         setServerError('Enter the 6-digit code from your email.');
         setServerErrorType('error');
         return;

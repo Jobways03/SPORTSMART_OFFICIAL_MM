@@ -12,6 +12,7 @@ import {
   TicketPriority,
   PRIORITY_LABEL,
 } from '@/services/support.service';
+import { validateText } from '@/lib/validators';
 
 export default function NewTicketPage() {
   const router = useRouter();
@@ -56,8 +57,14 @@ export default function NewTicketPage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!subject.trim() || !body.trim()) {
-      setError('Subject and message are required.');
+    const subjectError = validateText(subject, { label: 'Subject', min: 3, max: 200 });
+    if (subjectError) {
+      setError(subjectError);
+      return;
+    }
+    const bodyError = validateText(body, { label: 'Message', min: 3, max: 5000 });
+    if (bodyError) {
+      setError(bodyError);
       return;
     }
     setSubmitting(true);

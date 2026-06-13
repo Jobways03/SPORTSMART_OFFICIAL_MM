@@ -98,16 +98,18 @@ export class SellerShipmentEvidenceController {
         'ARCHIVED_REASSIGNMENT',
       ],
     });
-    const data = rows.map((r) => ({
-      id: r.id,
-      kind: r.kind,
-      capturedAt: r.capturedAt,
-      uploadedBy: r.uploadedBy,
-      uploadedByRole: r.uploadedByRole,
-      frozenAt: r.frozenAt,
-      file: r.file,
-      viewUrl: this.fileService.viewUrlFor(r.file),
-    }));
+    const data = await Promise.all(
+      rows.map(async (r) => ({
+        id: r.id,
+        kind: r.kind,
+        capturedAt: r.capturedAt,
+        uploadedBy: r.uploadedBy,
+        uploadedByRole: r.uploadedByRole,
+        frozenAt: r.frozenAt,
+        file: r.file,
+        viewUrl: await this.fileService.viewUrlForAsync(r.file),
+      })),
+    );
     return { success: true, message: 'Shipment evidence retrieved', data };
   }
 

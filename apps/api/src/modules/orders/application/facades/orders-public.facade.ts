@@ -568,7 +568,9 @@ export class OrdersPublicFacade {
       // must never be flipped to CANCELLED by a late/duplicate failure event.
       where: {
         id: masterOrderId,
-        paymentStatus: { in: ['PENDING', 'FAILED'] as any },
+        // Phase 257 — 'FAILED' is not an OrderPaymentStatus member; use the
+        // valid pre-paid states (PENDING + CREATED) or Prisma rejects the query.
+        paymentStatus: { in: ['PENDING', 'CREATED'] as any },
       },
       data: {
         paymentStatus: 'CANCELLED' as any,

@@ -313,6 +313,21 @@ export interface FranchiseSettlementsList {
     payoutDueBy: string | null; // Phase 178 #15
     paidAt: string | null;
     createdAt: string;
+    // Phase 251 — dynamic settlement charge rules. When chargeRulesApplied, the
+    // net wired = netPayableToFranchise − dynamicChargeTotalInPaise; chargeLines
+    // is the frozen rule-wise breakup (GST / TDS / TCS …).
+    dynamicChargeTotalInPaise?: string;
+    chargeRulesApplied?: boolean;
+    // Net wired (paise), computed once by the backend (single source of truth).
+    netPayableInPaise?: string;
+    chargeLines?: Array<{
+      id: string;
+      ruleName: string;
+      baseType: string;
+      rateBps: number;
+      baseAmountInPaise: string;
+      amountInPaise: string;
+    }>;
   }>;
 }
 

@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { adminReturnsService } from '@/services/admin-returns.service';
+import { validateUploadFile } from '@/lib/validators';
 import '../../sellers/components/modal.css';
 
 interface Props {
@@ -27,8 +28,17 @@ export default function UploadEvidenceModal({
       setError('Please select an image file');
       return;
     }
-    if (file.size > 5 * 1024 * 1024) {
-      setError('File must be under 5 MB');
+    // QC evidence is a photo: restrict to images and cap at 5 MB.
+    const fileError = validateUploadFile(file, {
+      maxBytes: 5 * 1024 * 1024,
+      types: ['image/jpeg', 'image/png', 'image/webp'],
+    });
+    if (fileError) {
+      setError(
+        fileError === 'Unsupported file type'
+          ? 'Only JPG, PNG, and WEBP images are allowed'
+          : fileError,
+      );
       return;
     }
     setSubmitting(true);

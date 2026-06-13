@@ -5,7 +5,9 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import {
   franchiseReturnsService,
   FranchiseReturnDetail,
+  FranchiseShipmentEvidence,
 } from '@/services/franchise-returns.service';
+import SubmitQcModal from '../components/submit-qc-modal';
 
 const card: React.CSSProperties = {
   background: '#fff',
@@ -30,6 +32,13 @@ export default function FranchiseAdminReturnDetailPage() {
   const [ret, setRet] = useState<FranchiseReturnDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [qcOpen, setQcOpen] = useState(false);
+  // Bumped after a QC decision to re-fetch the (now-updated) return.
+  const [refreshKey, setRefreshKey] = useState(0);
+  // Franchise's pre-ship photos (proof-of-dispatch, attached to the sub-order).
+  const [shipmentEvidence, setShipmentEvidence] = useState<
+    FranchiseShipmentEvidence[]
+  >([]);
 
   useEffect(() => {
     if (!returnId || !franchiseId) {
@@ -46,7 +55,20 @@ export default function FranchiseAdminReturnDetailPage() {
       })
       .catch(() => setError('Failed to load return'))
       .finally(() => setLoading(false));
-  }, [returnId, franchiseId]);
+  }, [returnId, franchiseId, refreshKey]);
+
+  // Pull the franchise's pre-ship photos once we know the sub-order. Separate
+  // from the main fetch so a missing/empty list never breaks the page.
+  useEffect(() => {
+    const subOrderId = ret?.subOrder?.id;
+    if (!subOrderId) return;
+    franchiseReturnsService
+      .getShipmentEvidence(subOrderId)
+      .then((res) => {
+        setShipmentEvidence(Array.isArray(res.data) ? res.data : []);
+      })
+      .catch(() => setShipmentEvidence([]));
+  }, [ret?.subOrder?.id]);
 
   if (loading)
     return <p style={{ color: '#9ca3af', padding: 40 }}>Loading return...</p>;
@@ -108,18 +130,40 @@ export default function FranchiseAdminReturnDetailPage() {
             {new Date(ret.createdAt).toLocaleString()}
           </p>
         </div>
-        <span
-          style={{
-            fontSize: 12,
-            fontWeight: 600,
-            padding: '4px 12px',
-            borderRadius: 6,
-            background: '#dbeafe',
-            color: '#1d4ed8',
-          }}
-        >
-          {ret.status?.replace(/_/g, ' ')}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              padding: '4px 12px',
+              borderRadius: 6,
+              background: '#dbeafe',
+              color: '#1d4ed8',
+            }}
+          >
+            {ret.status?.replace(/_/g, ' ')}
+          </span>
+          {/* QC decision is the marketplace admin's call once the parcel is
+              received back. */}
+          {ret.status === 'RECEIVED' && (
+            <button
+              type="button"
+              onClick={() => setQcOpen(true)}
+              style={{
+                fontSize: 13,
+                fontWeight: 600,
+                padding: '8px 16px',
+                borderRadius: 8,
+                border: 'none',
+                background: '#2563eb',
+                color: '#fff',
+                cursor: 'pointer',
+              }}
+            >
+              Submit QC Decision
+            </button>
+          )}
+        </div>
       </div>
 
       <div style={card}>
@@ -255,6 +299,95 @@ export default function FranchiseAdminReturnDetailPage() {
             </div>
           )}
         </div>
+
+        {/* Franchise's pre-ship evidence — proof-of-dispatch photos uploaded at
+            packing time (attached to the sub-order). The "as shipped" baseline:
+            compare against the customer's claim photos above before approving a
+            contested return. */}
+        {shipmentEvidence.length > 0 && (
+          <div style={card}>
+            <h2 style={h2}>
+              Franchise&apos;s Pre-ship Evidence ({shipmentEvidence.length})
+            </h2>
+            <p
+              style={{
+                color: '#6b7280',
+                fontSize: 12,
+                marginTop: -4,
+                marginBottom: 12,
+                lineHeight: 1.5,
+              }}
+            >
+              Photos the franchise uploaded <strong>before shipping</strong> (the
+              &ldquo;as shipped&rdquo; baseline). Compare against the
+              customer&apos;s evidence above before deciding a contested return.
+            </p>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {shipmentEvidence.map((att, i) => {
+                // SHIPMENT_EVIDENCE is PRIVATE → providerUrl is null; the admin
+                // endpoint enriches each row with a short-lived `viewUrl`.
+                const url = att.viewUrl ?? att.file?.providerUrl ?? null;
+                return url ? (
+                  <a
+                    key={att.id}
+                    href={url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={`Pre-ship photo ${i + 1} — opens in new tab`}
+                    style={{
+                      width: 96,
+                      height: 96,
+                      borderRadius: 6,
+                      overflow: 'hidden',
+                      border: '2px solid #8b5cf6',
+                      display: 'block',
+                    }}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={url}
+                      alt={`Pre-ship evidence ${i + 1}`}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                  </a>
+                ) : (
+                  <div
+                    key={att.id}
+                    style={{
+                      width: 96,
+                      height: 96,
+                      borderRadius: 6,
+                      background: '#f3f4f6',
+                      border: '1px solid #e5e7eb',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      fontSize: 11,
+                      color: '#9ca3af',
+                      padding: 8,
+                      textAlign: 'center',
+                    }}
+                  >
+                    {att.file?.fileName ?? 'Photo'}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {qcOpen && (
+          <SubmitQcModal
+            returnId={ret.id}
+            returnNumber={ret.returnNumber || ret.id.slice(0, 8)}
+            items={ret.items ?? []}
+            onClose={() => setQcOpen(false)}
+            onSuccess={() => {
+              setQcOpen(false);
+              setRefreshKey((k) => k + 1);
+            }}
+          />
+        )}
       </div>
     </div>
   );

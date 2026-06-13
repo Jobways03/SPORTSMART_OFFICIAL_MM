@@ -56,6 +56,14 @@ export interface IProductRepository {
     historyEntries: any[],
     moderator?: { moderatorId: string; reviewedAt?: Date },
   ): Promise<void>;
+  /**
+   * Clear moderation to APPROVED for a product that is ALREADY live by
+   * lifecycle (status ACTIVE/APPROVED) but whose moderationStatus lags behind
+   * (e.g. a row seeded straight to ACTIVE). The lifecycle transition machinery
+   * in approveInTransaction only accepts review-state rows, so this is the
+   * narrow path for the already-active case. Idempotent.
+   */
+  approveModerationOnly(productId: string, moderatorId: string): Promise<void>;
   // Catalog-only approval (review states → APPROVED, NOT live). Does NOT run the
   // publish-readiness/tax gate and does NOT activate variants — those happen at
   // make-live (reactivateInTransaction), which is a separate SUPER_ADMIN step

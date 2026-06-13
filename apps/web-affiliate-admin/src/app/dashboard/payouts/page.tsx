@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { apiFetch, formatDateTime, formatINR } from '../../../lib/api';
+import { validateText } from '../../../lib/validators';
 
 interface PayoutRequest {
   id: string;
@@ -110,6 +111,11 @@ export default function PayoutsQueuePage() {
 
   const runReject = async (id: string, reason: string) => {
     setActionError('');
+    const reasonErr = validateText(reason, { min: 1, max: 500, label: 'Reason' });
+    if (reasonErr) {
+      setActionError(reasonErr);
+      return;
+    }
     setActionLoading(true);
     try {
       await apiFetch(`/admin/affiliates/payouts/${id}/reject`, {
@@ -128,6 +134,16 @@ export default function PayoutsQueuePage() {
 
   const runMarkPaid = async (id: string, ref: string) => {
     setActionError('');
+    // Transaction reference is optional, but if present it must fit the bound.
+    const refErr = validateText(ref, {
+      max: 140,
+      required: false,
+      label: 'Transaction reference',
+    });
+    if (refErr) {
+      setActionError(refErr);
+      return;
+    }
     setActionLoading(true);
     try {
       await apiFetch(`/admin/affiliates/payouts/${id}/mark-paid`, {
@@ -146,6 +162,11 @@ export default function PayoutsQueuePage() {
 
   const runMarkFailed = async (id: string, reason: string) => {
     setActionError('');
+    const reasonErr = validateText(reason, { min: 1, max: 500, label: 'Reason' });
+    if (reasonErr) {
+      setActionError(reasonErr);
+      return;
+    }
     setActionLoading(true);
     try {
       await apiFetch(`/admin/affiliates/payouts/${id}/mark-failed`, {

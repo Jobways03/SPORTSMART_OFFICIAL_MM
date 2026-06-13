@@ -9,6 +9,7 @@ import {
 } from '@/services/inventory.service';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
+import { validateDateRange } from '@/lib/validators';
 
 type TabKey = 'stock' | 'low-stock' | 'ledger';
 
@@ -659,6 +660,7 @@ function LedgerTab({
   toDate: string;
   setToDate: (v: string) => void;
 }) {
+  const { notify } = useModal();
   const [productIdInput, setProductIdInput] = useState(productId);
 
   useEffect(() => {
@@ -667,6 +669,15 @@ function LedgerTab({
 
   const handleProductSearch = (e: FormEvent) => {
     e.preventDefault();
+    // Block applying an inverted date range (To before From). Both dates are
+    // optional filters, so only validate when both are present.
+    if (fromDate && toDate) {
+      const rangeError = validateDateRange(fromDate, toDate);
+      if (rangeError) {
+        void notify(rangeError);
+        return;
+      }
+    }
     setProductId(productIdInput.trim());
   };
 

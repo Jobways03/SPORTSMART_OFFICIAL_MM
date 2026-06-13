@@ -14,7 +14,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { franchiseAuthService } from '@/services/auth.service';
 import { ApiError } from '@/lib/api-client';
-import { validateOtp } from '@/lib/validators';
+import { validateOtp, validateEmail } from '@/lib/validators';
 import { CaptchaWidget } from '@/components/CaptchaWidget';
 import '../../auth.css';
 
@@ -116,6 +116,14 @@ function VerifyFranchiseRegistrationOtpForm() {
       setServerError('Please enter the email you registered with.');
       return;
     }
+    // The email is editable here ("Use a different email") — validate its
+    // format before we send the verify request, mirroring the registration
+    // form, so a typo'd address fails fast with a clear message.
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setServerError(emailError);
+      return;
+    }
     if (CAPTCHA_REQUIRED && !captchaToken) {
       setServerError('Please complete the captcha.');
       return;
@@ -157,6 +165,11 @@ function VerifyFranchiseRegistrationOtpForm() {
     setStatusMessage('');
     if (!email) {
       setServerError('Please enter the email you registered with.');
+      return;
+    }
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setServerError(emailError);
       return;
     }
     if (CAPTCHA_REQUIRED && !captchaToken) {

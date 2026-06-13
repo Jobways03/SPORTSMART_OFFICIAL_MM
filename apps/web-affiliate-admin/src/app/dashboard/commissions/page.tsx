@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { apiFetch, formatDate, formatINR } from '../../../lib/api';
+import { validateText } from '../../../lib/validators';
 
 interface Commission {
   id: string;
@@ -292,6 +293,16 @@ function CommissionActions({
 
   const submitHold = async () => {
     setErr('');
+    // Reason is optional, but if provided it must fit the 500-char bound.
+    const reasonErr = validateText(reason, {
+      max: 500,
+      required: false,
+      label: 'Hold reason',
+    });
+    if (reasonErr) {
+      setErr(reasonErr);
+      return;
+    }
     setBusy(true);
     try {
       await apiFetch(`/admin/affiliates/commissions/${c.id}/hold`, {

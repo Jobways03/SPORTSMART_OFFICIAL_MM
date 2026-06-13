@@ -651,14 +651,23 @@ export class AdminProductsController {
   async approveProduct(@CurrentAdmin() adminId: string, @Param('productId') productId: string) {
     const product = await this.productRepo.findByIdBasic(productId);
     if (!product) throw new NotFoundAppException('Product not found');
-    // Already live — idempotent success.
-    if (product.status === 'ACTIVE') {
-      return { success: true, message: 'Product is already live', data: null };
-    }
-    // Already catalog-approved — idempotent. Making it live is a separate
-    // SUPER_ADMIN step (PATCH :id/publish) performed after the HSN/tax config
-    // is set + verified, not a re-run of approve.
-    if (product.status === 'APPROVED') {
+    // Already live/approved by lifecycle. If moderation lags (e.g. a row seeded
+    // straight to ACTIVE with moderationStatus=PENDING — which left it stuck in
+    // "Pending Review" with no UI path to approve), clear it so the Enable button
+    // resolves it. Otherwise this is an idempotent no-op: ACTIVE = already live;
+    // APPROVED = catalog-approved, awaiting the SUPER_ADMIN make-live
+    // (PATCH :id/publish) after the HSN/tax config is set + verified.
+    if (product.status === 'ACTIVE' || product.status === 'APPROVED') {
+      if (product.moderationStatus !== 'APPROVED') {
+        await this.productRepo.approveModerationOnly(productId, adminId);
+        this.logger.log(
+          `Product ${productId} moderation cleared PENDING→APPROVED by admin ${adminId} (lifecycle already ${product.status})`,
+        );
+        return { success: true, message: 'Product approved', data: null };
+      }
+      if (product.status === 'ACTIVE') {
+        return { success: true, message: 'Product is already live', data: null };
+      }
       return {
         success: true,
         message:

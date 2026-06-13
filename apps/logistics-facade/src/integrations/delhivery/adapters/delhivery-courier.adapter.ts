@@ -131,6 +131,13 @@ export class DelhiveryCourierAdapter implements CourierGatewayPort {
         retryable: false,
       });
     }
+    // Reverse pickup (customer return) → Delhivery RVP create. Same wire
+    // endpoint, distinguished by payment_mode "Pickup" (see createReverseShipment).
+    if (payload.direction === 'reverse') {
+      return this.orderService.createReverseShipment(payload, {
+        pickupWarehouseName,
+      });
+    }
     return this.orderService.createShipment(payload, {
       pickupWarehouseName,
     });

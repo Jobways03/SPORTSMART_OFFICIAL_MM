@@ -11,6 +11,7 @@ import {
 } from '@/services/product.service';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
+import { validateAmount, validateUploadFile } from '@/lib/validators';
 import '../../../product-form.css';
 
 export default function VariantDetailPage() {
@@ -123,6 +124,13 @@ const router = useRouter();
   }
 
   async function handleSave() {
+    // Variant price is mandatory money — validate before the API call so a
+    // blank / malformed / over-precise value never reaches the backend.
+    const priceErr = validateAmount(form.price, { min: 0.01, label: 'Price' });
+    if (priceErr) {
+      showToast('error', priceErr);
+      return;
+    }
     setSaving(true);
     try {
       const token = sessionStorage.getItem('accessToken') || '';
@@ -167,8 +175,13 @@ const router = useRouter();
 
     const validFiles: File[] = [];
     for (let i = 0; i < files.length; i++) {
-      if (files[i].size > 5 * 1024 * 1024) {
-        showToast('error', `"${files[i].name}" exceeds 5MB and was skipped.`);
+      // Type + size guard (image-only, 5MB) mirroring the backend upload
+      // rules; invalid files are skipped with a per-file message.
+      const fileErr = validateUploadFile(files[i], {
+        types: ['image/jpeg', 'image/png', 'image/webp'],
+      });
+      if (fileErr) {
+        showToast('error', `"${files[i].name}" ${fileErr.toLowerCase()} — skipped.`);
       } else {
         validFiles.push(files[i]);
       }

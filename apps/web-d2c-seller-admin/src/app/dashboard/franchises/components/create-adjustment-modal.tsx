@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { adminFranchisesService } from '@/services/admin-franchises.service';
 import { ApiError } from '@/lib/api-client';
+import { validateAmount, validateText } from '@/lib/validators';
 import '../../sellers/components/modal.css';
 
 interface Props {
@@ -23,6 +24,26 @@ export default function CreateAdjustmentModal({ franchiseId, businessName, onClo
 
   const handleSubmit = async () => {
     if (!amountValid || !reason.trim()) return;
+    // Signed adjustment: positive or negative, both into a ledger.
+    const amountError = validateAmount(amount, {
+      min: -10_000_000,
+      max: 10_000_000,
+      decimals: 2,
+      label: 'Adjustment amount',
+    });
+    if (amountError) {
+      setError(amountError);
+      return;
+    }
+    const reasonError = validateText(reason, {
+      min: 5,
+      max: 500,
+      label: 'Reason',
+    });
+    if (reasonError) {
+      setError(reasonError);
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {

@@ -62,6 +62,17 @@ export interface ReturnEvidence {
   createdAt: string;
 }
 
+// Seller's pre-ship "proof of dispatch" photos, attached to the SUB-ORDER (not
+// the return). SHIPMENT_EVIDENCE files are PRIVATE, so the admin endpoint
+// enriches each row with a short-lived `viewUrl` (providerUrl is null in the DB).
+export interface ReturnShipmentEvidence {
+  id: string;
+  kind?: string;
+  capturedAt?: string;
+  viewUrl?: string;
+  file: { id: string; fileName: string; providerUrl?: string | null };
+}
+
 export interface ReturnStatusHistoryEntry {
   id: string;
   returnId: string;
@@ -152,7 +163,40 @@ export interface ReturnDetail extends ReturnListItem {
     [key: string]: unknown;
   };
   pickupAddress?: Record<string, unknown> | null;
+  // Per-item tax snapshot for the QC refund preview. Returned by the backend
+  // for orders with snapshots; absent for legacy orders (UI falls back to a
+  // gross-price estimate). Mirrors the super-admin return detail.
+  refundPreview?: {
+    taxSnapshots: Array<{
+      orderItemId: string;
+      grossLineAmountInPaise: string;
+      discountAmountInPaise: string;
+      taxableAmountInPaise: string;
+      gstRateBps: number;
+      cgstAmountInPaise: string;
+      sgstAmountInPaise: string;
+      igstAmountInPaise: string;
+      totalTaxAmountInPaise: string;
+    }>;
+  } | null;
 }
+
+// QC liability / remedy — mirrors the backend ADR-016 decision matrix
+// (return-decision-matrix.ts). Required when any item is approved/partial.
+export type LiabilityParty =
+  | 'SELLER'
+  | 'LOGISTICS'
+  | 'PLATFORM'
+  | 'CUSTOMER'
+  | 'FRANCHISE'
+  | 'BRAND'
+  | 'INCONCLUSIVE'
+  | 'NONE';
+export type CustomerRemedy =
+  | 'FULL_REFUND'
+  | 'PARTIAL_REFUND'
+  | 'NO_REFUND'
+  | 'GOODWILL_CREDIT';
 
 export interface ReturnListResponse {
   returns: ReturnListItem[];
@@ -214,6 +258,9 @@ export interface SubmitQcDecisionPayload {
     qcNotes?: string;
   }>;
   overallNotes?: string;
+  // Required by the backend decision matrix when any item is approved/partial.
+  liabilityParty?: LiabilityParty;
+  customerRemedy?: CustomerRemedy;
 }
 
 export interface ConfirmRefundPayload {
@@ -253,6 +300,20 @@ export const adminReturnsService = {
 
   getReturn(returnId: string): Promise<ApiResponse<ReturnDetail>> {
     return apiClient<ReturnDetail>(`/admin/returns/${returnId}`);
+  },
+
+  /**
+   * Seller's pre-ship evidence for a sub-order (proof-of-dispatch photos
+   * uploaded at packing time). Surfaced on the return-review screen so the
+   * admin can compare the as-shipped baseline against the customer's claim
+   * photos before approving a contested return.
+   */
+  getShipmentEvidence(
+    subOrderId: string,
+  ): Promise<ApiResponse<ReturnShipmentEvidence[]>> {
+    return apiClient<ReturnShipmentEvidence[]>(
+      `/admin/sub-orders/${subOrderId}/shipment-evidence`,
+    );
   },
 
   approveReturn(returnId: string, notes?: string): Promise<ApiResponse> {

@@ -29,6 +29,7 @@ import { AdminUpdateSellerBankUseCase } from './application/use-cases/admin-upda
 import { AdminEditSellerUseCase } from './application/use-cases/admin-edit-seller.use-case';
 import { AdminUpdateSellerStatusUseCase } from './application/use-cases/admin-update-seller-status.use-case';
 import { AdminUpdateSellerVerificationUseCase } from './application/use-cases/admin-update-seller-verification.use-case';
+import { AdminVerifySellerTaxIdsUseCase } from './application/use-cases/admin-verify-seller-tax-ids.use-case';
 import { AdminImpersonateSellerUseCase } from './application/use-cases/admin-impersonate-seller.use-case';
 import { AdminEndImpersonationUseCase } from './application/use-cases/admin-end-impersonation.use-case';
 import { AdminSendSellerMessageUseCase } from './application/use-cases/admin-send-seller-message.use-case';
@@ -104,6 +105,7 @@ import { SellerModule } from '../seller/module';
     AdminEditSellerUseCase,
     AdminUpdateSellerStatusUseCase,
     AdminUpdateSellerVerificationUseCase,
+    AdminVerifySellerTaxIdsUseCase,
     SellerStatusTransitionPolicy,
     AdminImpersonateSellerUseCase,
     AdminEndImpersonationUseCase,

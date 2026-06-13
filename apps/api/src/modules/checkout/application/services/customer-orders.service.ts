@@ -136,14 +136,33 @@ export class CustomerOrdersService {
     // transient failure would silently lose. The PAID/ONLINE split-refund saga
     // does not run for these (PENDING) wallet orders, so there is no double
     // refund; and the saga's tuple can't collide with a place-order-crash comp.
-    const walletPaise = Number(order.walletAmountUsedInPaise ?? 0);
+    // Phase 258 — refund destination by stage:
+    //   • PAID + cancelled BEFORE seller acceptance → return the FULL paid
+    //     amount (gateway + wallet) to the wallet as instant store credit.
+    //     Pre-fix this only refunded the wallet PORTION, so an online-paid
+    //     order's gateway money was stranded on a cancel-before-delivery.
+    //   • Otherwise (COD/wallet-PENDING orders, or a PAID order already past
+    //     seller acceptance) → keep the wallet-portion-only behaviour; the
+    //     gateway portion, if any, goes through the normal refund flow.
+    const isPaid = order.paymentStatus === 'PAID';
+    // Phase 258 — the cancel-to-wallet window is BEFORE SHIPMENT (the
+    // blocking-status check above already rejects SHIPPED/DELIVERED/FULFILLED,
+    // so any order that reaches here is pre-shipment). A PAID order cancelled
+    // before shipment returns the FULL amount to the wallet as store credit.
+    const isPreShipment = !order.subOrders.some((so) =>
+      ['SHIPPED', 'DELIVERED', 'FULFILLED'].includes(so.fulfillmentStatus as string),
+    );
+    const walletPortionPaise = Number(order.walletAmountUsedInPaise ?? 0);
+    const fullPaidPaise = Number((order as any).totalAmountInPaise ?? 0);
+    const walletPaise =
+      isPaid && isPreShipment ? fullPaidPaise : walletPortionPaise;
     if (walletPaise > 0 && this.walletFacade) {
       try {
         await this.walletFacade.enqueueCheckoutCancellationRefund({
           customerId: userId,
           orderId: order.id,
           amountInPaise: walletPaise,
-          reason: `Order ${orderNumber} cancelled before delivery — wallet refund`,
+          reason: `Order ${orderNumber} cancelled before shipment — wallet refund`,
         });
       } catch (err) {
         // The saga row + retry cron own recovery; a synchronous enqueue hiccup

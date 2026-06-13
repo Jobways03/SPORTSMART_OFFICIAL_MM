@@ -40,8 +40,25 @@ export type AuthCookiePersona =
 const ACCESS_COOKIE_PREFIX = 'sm_access_';
 const REFRESH_COOKIE_PREFIX = 'sm_refresh_';
 
-const ACCESS_TTL_SECONDS_DEFAULT = 60 * 60; // 1h
-const REFRESH_TTL_SECONDS_DEFAULT = 30 * 24 * 60 * 60; // 30d
+const ACCESS_TTL_SECONDS_DEFAULT = 60 * 60; // 1h fallback
+const REFRESH_TTL_SECONDS_DEFAULT = 30 * 24 * 60 * 60; // 30d fallback
+
+// Phase 259 — parse a JWT-style duration ("1d" / "30d" / "15m" / "1h" / "90s")
+// to seconds. Used to derive the cookie max-age from JWT_ACCESS_TTL /
+// JWT_REFRESH_TTL so the cookie lives exactly as long as the token it carries.
+// Bug it fixes: call sites that didn't pass accessTtlSeconds got a 1h access
+// cookie even when JWT_ACCESS_TTL was 1d, so the browser dropped the access
+// cookie after 1h and a page refresh logged the user out — across ALL personas.
+function parseDurationToSeconds(
+  value: string | undefined,
+  fallback: number,
+): number {
+  if (!value) return fallback;
+  const m = /^(\d+)(s|m|h|d)$/.exec(value.trim());
+  if (!m) return fallback;
+  const mult: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400 };
+  return parseInt(m[1]!, 10) * (mult[m[2]!] ?? 1);
+}
 
 // Refresh-cookie path per persona — narrows the cookie to the route
 // that actually consumes it. Customers historically mount at
@@ -97,9 +114,17 @@ export function refreshCookieName(persona: AuthCookiePersona): string {
  */
 export function setAuthCookies(res: Response, input: SetAuthCookiesInput): void {
   const accessTtlMs =
-    (input.accessTtlSeconds ?? ACCESS_TTL_SECONDS_DEFAULT) * 1000;
+    (input.accessTtlSeconds ??
+      parseDurationToSeconds(
+        process.env.JWT_ACCESS_TTL,
+        ACCESS_TTL_SECONDS_DEFAULT,
+      )) * 1000;
   const refreshTtlMs =
-    (input.refreshTtlSeconds ?? REFRESH_TTL_SECONDS_DEFAULT) * 1000;
+    (input.refreshTtlSeconds ??
+      parseDurationToSeconds(
+        process.env.JWT_REFRESH_TTL,
+        REFRESH_TTL_SECONDS_DEFAULT,
+      )) * 1000;
 
   const baseOptions = {
     httpOnly: true,

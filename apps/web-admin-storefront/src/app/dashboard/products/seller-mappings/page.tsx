@@ -9,6 +9,7 @@ import {
   MappingDisplayStatus,
 } from '@/services/admin-seller-mappings.service';
 import { ApiError } from '@/lib/api-client';
+import { validateAmount, validatePincode } from '@/lib/validators';
 
 const DISPLAY_COLOR: Record<MappingDisplayStatus, { bg: string; fg: string }> = {
   ACTIVE: { bg: '#dcfce7', fg: '#166534' },
@@ -411,8 +412,25 @@ function EditMappingModal({
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setBusy(true);
     setError(null);
+
+    // Field-level validation BEFORE the API call — money is capped at
+    // ₹10,000,000 with 2dp, optional money fields skip validation when blank,
+    // and the pickup pincode (when set) must be a real 6-digit pincode.
+    if (settlementPrice !== '') {
+      const err = validateAmount(settlementPrice, { label: 'Settlement price' });
+      if (err) return setError(err);
+    }
+    if (procurementCost !== '') {
+      const err = validateAmount(procurementCost, { label: 'Procurement cost' });
+      if (err) return setError(err);
+    }
+    if (pickupPincode.trim() !== '') {
+      const err = validatePincode(pickupPincode);
+      if (err) return setError(err);
+    }
+
+    setBusy(true);
     try {
       await adminSellerMappingsService.update(mapping.id, {
         stockQty: Number(stockQty),

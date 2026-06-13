@@ -68,6 +68,11 @@ export default function SettlementCyclesPage() {
 
   const { hasPermission } = usePermissions();
   const canCreate = hasPermission('settlements.createCycle');
+  // Cycle creation has moved to the seller-admin portals (D2C / Retail). The
+  // super-admin storefront can still view, drill into, and cancel cycles, but
+  // no longer creates them — so the "+ New cycle" action is hidden here.
+  // (Cancel stays available via `canCancel` below.)
+  const SHOW_CREATE_CYCLE = false;
 
   // Create-cycle modal (preview → confirm)
   const [showCreate, setShowCreate] = useState(false);
@@ -194,7 +199,7 @@ export default function SettlementCyclesPage() {
             per-seller margin breakdown, opening / closing balance, and Tally CSV export.
           </p>
         </div>
-        {canCreate && (
+        {canCreate && SHOW_CREATE_CYCLE && (
           <button onClick={openCreate} style={btnPrimary}>+ New cycle</button>
         )}
       </div>
@@ -249,7 +254,7 @@ export default function SettlementCyclesPage() {
         )}
       </div>
 
-      {showCreate && (
+      {showCreate && SHOW_CREATE_CYCLE && (
         <div
           onClick={() => !busy && setShowCreate(false)}
           style={{

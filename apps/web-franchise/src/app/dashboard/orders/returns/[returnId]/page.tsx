@@ -9,6 +9,7 @@ import {
 } from '@/services/returns.service';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
+import { validateUploadFile } from '@/lib/validators';
 
 /* -- helpers -- */
 const fmt = (n: number) =>
@@ -172,6 +173,17 @@ const { returnId } = useParams<{ returnId: string }>();
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {if (!returnId || !e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
+    // The picker accepts image/* — enforce a concrete allow-list + 5MB cap
+    // before uploading so an oversized or non-image file fails fast with a
+    // clear message instead of a server rejection.
+    const fileError = validateUploadFile(file, {
+      types: ['image/jpeg', 'image/png', 'image/webp'],
+    });
+    if (fileError) {
+      void notify(fileError);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+      return;
+    }
     setUploadingEvidence(true);
     try {
       await franchiseReturnsService.uploadEvidence(returnId, file);

@@ -1,6 +1,6 @@
 // Phase 25 — Customer-side tax document API wrapper.
 
-import { apiClient, ApiResponse } from '@/lib/api-client';
+import { apiClient, API_BASE, ApiResponse } from '@/lib/api-client';
 
 export interface CustomerTaxDocument {
   id: string;
@@ -43,6 +43,50 @@ class CustomerTaxService {
     return apiClient<{ url: string; documentNumber: string; expiresInSeconds: number }>(
       `/customer/tax-documents/${documentId}/download`,
     );
+  }
+
+  /**
+   * Download ALL of an order's tax invoices as ONE PDF file. Hits the binary
+   * `/customer/tax-documents/combined` endpoint (auth via httpOnly cookie +
+   * Bearer fallback, same as apiClient), then triggers a browser download from
+   * the returned blob. Resolves once the download has been kicked off.
+   */
+  async downloadCombined(orderId: string): Promise<void> {
+    const token =
+      typeof window !== 'undefined'
+        ? window.sessionStorage.getItem('accessToken')
+        : null;
+    const res = await fetch(
+      `${API_BASE}/api/v1/customer/tax-documents/combined?orderId=${encodeURIComponent(orderId)}`,
+      {
+        method: 'GET',
+        credentials: 'include',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      },
+    );
+    if (!res.ok) {
+      let message = 'Failed to download invoices';
+      try {
+        const j = await res.json();
+        message = j?.message ?? message;
+      } catch {
+        /* non-JSON error body — keep the default message */
+      }
+      throw new Error(message);
+    }
+    const blob = await res.blob();
+    // Filename from Content-Disposition (the API exposes that header via CORS).
+    const cd = res.headers.get('Content-Disposition') ?? '';
+    const m = cd.match(/filename="?([^"]+)"?/i);
+    const filename = m ? m[1]! : `${orderId}-tax-invoices.pdf`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
   }
 }
 

@@ -227,9 +227,6 @@ export class TcsService {
             // Phase 160 (§52 lifecycle audit test #14) — a DEBIT_NOTE is a
             // Section 34 upward correction; it INCREASES the net taxable
             // supply, so it must add to gross exactly like an invoice.
-            // It was silently dropped before (only TAX_INVOICE /
-            // INVOICE_CUM_BILL_OF_SUPPLY / CREDIT_NOTE were queried),
-            // understating TCS whenever a price was corrected upward.
             'DEBIT_NOTE',
             'CREDIT_NOTE',
           ],
@@ -251,25 +248,13 @@ export class TcsService {
     let interTaxable = 0n;
     let supplierGstin: string | null = null;
     let supplierStateCode: string | null = null;
-    // Phase 160 (§52 lifecycle audit #9) — track every distinct supplier
-    // GSTIN seen in the period. A seller operating across multiple states
-    // can hold more than one GSTIN; snapshotting only the first silently
-    // misattributes the period's TCS. We still snapshot the first (so the
-    // existing row shape is unchanged) but flag the spread as a warning.
     const distinctGstins = new Set<string>();
     let unknownPosSeen = false;
-    // Phase 159z (audit #4) — per-place-of-supply accumulator. Keyed by
-    // PoS state code; tracks gross / CN reversal separately so the CBIC
-    // GSTR-8 row can be emitted with both columns populated. The
-    // intra/inter split is also kept per-PoS so the TCS computation in
-    // the breakdown can use the same computeTcs helper as the rolled
-    // totals (consistent rate application + clamp semantics).
     const posAccumulator = new Map<
       string,
       { gross: bigint; cnReversal: bigint; intra: bigint; inter: bigint }
     >();
     for (const d of docs) {
-      // Snapshot the supplier identity from the first invoice we see.
       if (!supplierGstin) supplierGstin = d.supplierGstin;
       if (!supplierStateCode) supplierStateCode = d.sellerStateCode;
       if (d.supplierGstin) distinctGstins.add(d.supplierGstin);
@@ -283,10 +268,6 @@ export class TcsService {
         if (intraState) intraTaxable += d.taxableAmountInPaise;
         else interTaxable += d.taxableAmountInPaise;
       }
-      // Per-place-of-supply tally. CBIC GSTR-8 wants the supplier's
-      // place-of-supply (the buyer state); the source invoice already
-      // snapshotted it. When unresolved, key the bucket on 'UNK' so
-      // the breakdown doesn't silently drop the document.
       const posKey =
         d.placeOfSupplyStateCode && /^\d{2}$/.test(d.placeOfSupplyStateCode)
           ? d.placeOfSupplyStateCode

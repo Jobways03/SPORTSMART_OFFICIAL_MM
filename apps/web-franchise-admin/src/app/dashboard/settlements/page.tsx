@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import { adminFranchisesService } from '@/services/admin-franchises.service';
+import { validateDateRange } from '@/lib/validators';
 
 type SettlementStatus = 'PENDING' | 'APPROVED' | 'PAID' | 'FAILED';
 
@@ -88,15 +89,15 @@ export default function FranchiseSettlementsPage() {
     e.preventDefault();
     setCreateError('');
 
-    if (!createForm.periodStart || !createForm.periodEnd) {
-      setCreateError('Pick both a start and end date');
-      return;
-    }
     // Inline range validation. Without this the backend accepts an
     // inverted range and returns an empty cycle, which looks like a
     // silent no-op to the admin.
-    if (createForm.periodStart > createForm.periodEnd) {
-      setCreateError('End date must be on or after start date');
+    const rangeError = validateDateRange(
+      createForm.periodStart,
+      createForm.periodEnd,
+    );
+    if (rangeError) {
+      setCreateError(rangeError);
       return;
     }
 

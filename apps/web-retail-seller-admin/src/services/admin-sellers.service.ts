@@ -52,10 +52,17 @@ export interface SellerDetail {
   sellerShopLogoUrl: string | null;
   status: string;
   verificationStatus: string;
-  // KYC identity submitted via onboarding.
+  // KYC identity submitted via onboarding (shown in the Verify KYC review).
+  // Phase 254 — panVerified is what the §194-O TDS engine keys off (unverified →
+  // §206AA 5% penalty; verified → configured rate).
   legalBusinessName: string | null;
   gstin: string | null;
   gstStateCode: string | null;
+  panNumber: string | null;
+  panLast4: string | null;
+  panVerified?: boolean;
+  isGstVerified: boolean;
+  gstVerifiedAt?: string | null;
   gstRegistrationType: string | null;
   entityType: string | null;
   registeredBusinessAddressJson: {
@@ -67,8 +74,6 @@ export interface SellerDetail {
     pincode?: string;
     country?: string;
   } | null;
-  isGstVerified: boolean;
-  panLast4: string | null;
   // Bank payout details (masked).
   hasBankDetails: boolean;
   bankName: string | null;
@@ -138,6 +143,23 @@ export const adminSellersService = {
     return apiClient(`/admin/sellers/${sellerId}/verification`, {
       method: 'PATCH',
       body: JSON.stringify({ verificationStatus, reason }),
+    });
+  },
+
+  // Phase 254 — manual PAN / GSTIN verification. verifyPan flips the flag the
+  // §194-O TDS engine keys off (drops 5% no-PAN penalty → configured rate);
+  // verifyGstin marks the GSTIN verified for invoicing. Idempotent.
+  verifyPan(sellerId: string): Promise<ApiResponse> {
+    return apiClient(`/admin/sellers/${sellerId}/verify-pan`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  },
+
+  verifyGstin(sellerId: string): Promise<ApiResponse> {
+    return apiClient(`/admin/sellers/${sellerId}/verify-gstin`, {
+      method: 'POST',
+      body: JSON.stringify({}),
     });
   },
 

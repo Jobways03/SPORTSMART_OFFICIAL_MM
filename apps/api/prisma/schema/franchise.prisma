@@ -1121,6 +1121,14 @@ model FranchiseSettlement {
   frozenAt          DateTime? @map("frozen_at")
   frozenByAdminId   String?   @map("frozen_by_admin_id")
   paidAmountInPaise BigInt    @default(0) @map("paid_amount_in_paise")
+
+  // Phase 251 — dynamic settlement charge rules. When chargeRulesApplied, the
+  // wired payout deducts dynamicChargeTotalInPaise (the sum of chargeLines)
+  // instead of the legacy commission-GST/TCS/TDS. Frozen per-settlement so a
+  // later rule edit never changes a historical franchise payout.
+  dynamicChargeTotalInPaise BigInt  @default(0) @map("dynamic_charge_total_in_paise")
+  chargeRulesApplied        Boolean @default(false) @map("charge_rules_applied")
+
   createdAt        DateTime                  @default(now()) @map("created_at")
   updatedAt        DateTime                  @updatedAt @map("updated_at")
 
@@ -1133,6 +1141,8 @@ model FranchiseSettlement {
   // Phase 250 (Franchise tax) — party-generic statutory ledger links.
   tcsLedger     GstTcsSettlementLedger? @relation(fields: [tcsLedgerId], references: [id], onDelete: Restrict)
   tdsLedger     Section194OTdsLedger?   @relation(fields: [tdsLedgerId], references: [id], onDelete: Restrict)
+  // Phase 251 — frozen rule-wise dynamic charge breakup for this settlement.
+  chargeLines   FranchiseSettlementChargeLine[]
 
   @@unique([cycleId, franchiseId])
   @@index([cycleId])
@@ -1141,6 +1151,32 @@ model FranchiseSettlement {
   // Phase 178 (#1) — aging / overdue queries scan by (status, payoutDueBy).
   @@index([status, payoutDueBy])
   @@map("franchise_settlements")
+}
+
+/// Frozen per-franchise-settlement charge breakup (Phase 251). Mirrors
+/// SettlementChargeLine (seller side): one row per dynamic charge rule applied
+/// to a FranchiseSettlement at cycle creation, snapshotting rule name + rate +
+/// base amount + computed amount so the breakup (and net payout) never change
+/// when a rule is later edited — historical franchise settlements stay immutable.
+model FranchiseSettlementChargeLine {
+  id                String   @id @default(uuid())
+  settlementId      String   @map("settlement_id")
+  /// The rule that produced this line (nullable so a later rule delete doesn't
+  /// cascade-destroy history).
+  ruleId            String?  @map("rule_id")
+  ruleName          String   @map("rule_name")
+  baseType          String   @map("base_type")
+  baseRuleId        String?  @map("base_rule_id")
+  baseAmountInPaise BigInt   @map("base_amount_in_paise")
+  rateBps           Int      @map("rate_bps")
+  amountInPaise     BigInt   @map("amount_in_paise")
+  priority          Int      @default(0)
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  settlement FranchiseSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+
+  @@index([settlementId])
+  @@map("franchise_settlement_charge_lines")
 }
 
 /// Phase 177 (Per-Franchise Accounts audit #4 / audit #145 gap) — itemized

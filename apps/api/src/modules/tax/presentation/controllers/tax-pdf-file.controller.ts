@@ -2,6 +2,7 @@ import { Controller, Get, Logger, Param, Res } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { resolve, sep } from 'path';
+import { defaultStubTaxPdfDir } from '../../infrastructure/pdf/tax-pdf-storage.provider';
 
 /**
  * Dev-only static serve for stub-stored tax-document PDFs.
@@ -25,7 +26,9 @@ import { resolve, sep } from 'path';
 @Controller('tax-pdfs')
 export class TaxPdfFileController {
   private readonly logger = new Logger(TaxPdfFileController.name);
-  private readonly rootDir = resolve(process.cwd(), 'storage', 'tax-pdfs');
+  // Dev stub storage root — OUTSIDE the repo (OS temp dir). Must match the
+  // StubTaxPdfStorageProvider's root so the bytes it wrote are found here.
+  private readonly rootDir = defaultStubTaxPdfDir();
 
   @Get('file/:token')
   serve(@Param('token') token: string, @Res() res: Response): void {

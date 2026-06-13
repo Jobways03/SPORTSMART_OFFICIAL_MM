@@ -124,7 +124,12 @@ const ORDER_PROGRESS_STEPS = [
 ];
 
 const orderStatusToStepIndex = (status: string, paymentStatus?: string): number => {
-  if (paymentStatus === 'PAID') return 4; // Completed
+  // NOTE: payment being PAID does NOT advance the fulfillment progress. The
+  // pre-fix `if (paymentStatus === 'PAID') return 4` jumped every paid order
+  // straight to "Completed" — invisible for COD (paid only at delivery) but
+  // wrong for ONLINE orders (paid at placement), making a just-placed order
+  // show as Delivered/Completed before the admin even verified it. The order's
+  // own lifecycle drives the steps; "Completed" = Delivered AND Paid.
   switch (status) {
     case 'PLACED': return 0;
     case 'PENDING_VERIFICATION': return 0;
@@ -134,7 +139,8 @@ const orderStatusToStepIndex = (status: string, paymentStatus?: string): number 
     case 'PACKED': return 1;
     case 'SHIPPED': return 2;
     case 'DISPATCHED': return 2;
-    case 'DELIVERED': return 3;
+    case 'DELIVERED': return paymentStatus === 'PAID' ? 4 : 3;
+    case 'COMPLETED': return 4;
     case 'CANCELLED': return -1;
     case 'EXCEPTION_QUEUE': return 0;
     default: return 0;
@@ -142,14 +148,32 @@ const orderStatusToStepIndex = (status: string, paymentStatus?: string): number 
 };
 
 const fulfillmentToStepIndex = (status: string, paymentStatus?: string): number => {
-  if (paymentStatus === 'PAID') return 4;
+  // Same fix as orderStatusToStepIndex — PAID alone must not complete the bar.
   switch (status) {
-    case 'DELIVERED': return 3;
+    case 'DELIVERED': return paymentStatus === 'PAID' ? 4 : 3;
     case 'FULFILLED': return 2;
     case 'SHIPPED': return 2;
     case 'PACKED': return 1;
     case 'CANCELLED': return -1;
     default: return 0;
+  }
+};
+
+// Per-sub-order step index for the SHARED 5-step bar
+// [Placed, Confirmed, Shipped, Delivered, Completed]. Used to render an
+// INDEPENDENT progress bar per shipment on multi-seller orders, where the
+// rolled-up master status (e.g. PARTIALLY_SHIPPED) can't faithfully represent
+// "racket shipped, bat still being prepared". An accepted-but-unpacked item
+// sits at "Confirmed"; PACKED also shows as Confirmed (there's no Packed step
+// in the buyer bar — packing is internal).
+const subOrderStepIndex = (so: SubOrder, paymentStatus?: string): number => {
+  switch (so.fulfillmentStatus) {
+    case 'DELIVERED': return paymentStatus === 'PAID' ? 4 : 3;
+    case 'FULFILLED': return 2;
+    case 'SHIPPED': return 2;
+    case 'PACKED': return 1;
+    case 'CANCELLED': return -1;
+    default: return so.acceptStatus === 'ACCEPTED' ? 1 : 0;
   }
 };
 
@@ -279,7 +303,7 @@ function formatCountdown(iso: string): string | null {
   return remHr === 0 ? `${days} d left` : `${days} d ${remHr} hr left`;
 }
 
-function OrderProgressTracker({ orderStatus, fulfillmentStatus, paymentStatus }: { orderStatus?: string; fulfillmentStatus: string; paymentStatus?: string }) {
+function OrderProgressTracker({ orderStatus, fulfillmentStatus, paymentStatus, currentIdxOverride }: { orderStatus?: string; fulfillmentStatus: string; paymentStatus?: string; currentIdxOverride?: number }) {
   const isCancelled = orderStatus === 'CANCELLED' || fulfillmentStatus === 'CANCELLED';
   if (isCancelled) {
     return (
@@ -292,9 +316,11 @@ function OrderProgressTracker({ orderStatus, fulfillmentStatus, paymentStatus }:
     );
   }
 
-  const currentIdx = orderStatus
-    ? orderStatusToStepIndex(orderStatus, paymentStatus)
-    : fulfillmentToStepIndex(fulfillmentStatus, paymentStatus);
+  const currentIdx =
+    currentIdxOverride ??
+    (orderStatus
+      ? orderStatusToStepIndex(orderStatus, paymentStatus)
+      : fulfillmentToStepIndex(fulfillmentStatus, paymentStatus));
 
   const activeColor = paymentStatus === 'PAID' ? '#16a34a' : (orderStatus ? orderStatusColor(orderStatus, paymentStatus) : '#6366f1');
 
@@ -497,22 +523,29 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
   const handleRetryPayment = async () => {
     setRetryingPayment(true);
     try {
-      const res = await apiClient<{ razorpayOrderId: string; amountInPaise: number; currency: string }>(
+      // The backend nests the gateway details under `data.payment` with the
+      // amount in RUPEES (mirrors placeOrder). Pre-fix this read
+      // res.data.razorpayOrderId directly → undefined → the modal never
+      // opened (you'd only see the "New payment session created" toast).
+      const res = await apiClient<{
+        payment?: { razorpayOrderId: string; amount: number; currency: string };
+      }>(
         `/customer/checkout/payment/retry`,
         {
           method: 'POST',
           body: JSON.stringify({ orderNumber }),
         },
       );
-      if (!res.success || !res.data?.razorpayOrderId) {
+      const pay = res.data?.payment;
+      if (!res.success || !pay?.razorpayOrderId) {
         void notify(res.message || 'Failed to start a new payment session');
         return;
       }
       const { openRazorpayCheckout } = await import('@/lib/razorpay');
       const result = await openRazorpayCheckout({
-        razorpayOrderId: res.data.razorpayOrderId,
-        amountInPaise: res.data.amountInPaise,
-        currency: res.data.currency,
+        razorpayOrderId: pay.razorpayOrderId,
+        amountInPaise: Math.round((pay.amount ?? 0) * 100),
+        currency: pay.currency || 'INR',
         orderNumber: orderNumber!,
         customerName: order?.shippingAddressSnapshot?.fullName ?? null,
         customerPhone: order?.shippingAddressSnapshot?.phone ?? null,
@@ -559,6 +592,17 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
   const activeSubOrders = order.subOrders.filter((so: SubOrder) => so.acceptStatus !== 'REJECTED' && so.fulfillmentStatus !== 'CANCELLED');
   const displaySubOrders = activeSubOrders.length > 0 ? activeSubOrders : order.subOrders;
 
+  // Each sub-order is a distinct seller/fulfilment unit (the split happens by
+  // seller at routing), so >1 active sub-order ⇒ items ship from different
+  // sellers and progress INDEPENDENTLY. In that case a single rolled-up
+  // timeline at the top lies ("racket shipped, bat not"), so we render a
+  // per-shipment timeline inside each product group instead. A single
+  // sub-order (one seller) keeps the clean single timeline at the top.
+  const isMultiShipment = activeSubOrders.length > 1;
+  // Order-level events (no subOrderId) are shared by every shipment — they
+  // seed each per-shipment timeline before it diverges. Computed once.
+  const sharedTimelineEvents = (order.timeline ?? []).filter((e) => !e.subOrderId);
+
   // "Effectively cancelled" — same shortcut the orders LIST uses: when every
   // sub-order is cancelled/rejected (or the master/payment is cancelled) the
   // order IS cancelled, even if the master orderStatus didn't roll up (e.g. an
@@ -577,9 +621,13 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
       ? 'CANCELLED'
       : order.orderStatus || 'PLACED';
 
-  // Determine if order can be cancelled
+  // Determine if order can be cancelled.
+  // Phase 258 — a customer may cancel any order that has NOT yet shipped,
+  // INCLUDING paid online orders (the cancel refunds the full amount to the
+  // wallet). Pre-fix the `paymentStatus !== 'PAID'` condition hid the button
+  // for EVERY online order (which is PAID at placement), so a paid-but-
+  // unshipped order could never be cancelled. Shipment/delivery still block it.
   const canCancel = effectiveOrderStatus !== 'CANCELLED' &&
-    order.paymentStatus !== 'PAID' &&
     order.orderStatus !== 'DELIVERED' &&
     !displaySubOrders.some((so: SubOrder) => so.fulfillmentStatus === 'DELIVERED' || so.fulfillmentStatus === 'SHIPPED' || so.fulfillmentStatus === 'FULFILLED');
 
@@ -649,32 +697,44 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
           </div>
         </div>
 
-        {/* Order Progress Tracker */}
-        <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 16px', marginBottom: 20, background: '#fafafa' }}>
-          <OrderProgressTracker
-            orderStatus={effectiveOrderStatus}
-            paymentStatus={order.paymentStatus}
-            fulfillmentStatus={
-              displaySubOrders.length > 0
-                ? displaySubOrders.every((so: SubOrder) => so.fulfillmentStatus === 'DELIVERED')
-                  ? 'DELIVERED'
-                  : displaySubOrders.every((so: SubOrder) => ['FULFILLED', 'DELIVERED'].includes(so.fulfillmentStatus))
-                    ? 'FULFILLED'
-                    : displaySubOrders.some((so: SubOrder) => so.fulfillmentStatus === 'SHIPPED')
-                      ? 'SHIPPED'
-                      : displaySubOrders.some((so: SubOrder) => so.fulfillmentStatus === 'PACKED')
-                        ? 'PACKED'
-                        : 'UNFULFILLED'
-                : 'UNFULFILLED'
-            }
-          />
-        </div>
+        {/* Order Progress Tracker. For multi-shipment (multi-seller) orders
+            the items progress independently, so a single rolled-up bar is
+            misleading — we render a per-shipment bar inside each group below
+            instead. Single-shipment orders keep this clean top bar. */}
+        {!isMultiShipment && (
+          <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 16px', marginBottom: 20, background: '#fafafa' }}>
+            <OrderProgressTracker
+              orderStatus={effectiveOrderStatus}
+              paymentStatus={order.paymentStatus}
+              fulfillmentStatus={
+                displaySubOrders.length > 0
+                  ? displaySubOrders.every((so: SubOrder) => so.fulfillmentStatus === 'DELIVERED')
+                    ? 'DELIVERED'
+                    : displaySubOrders.every((so: SubOrder) => ['FULFILLED', 'DELIVERED'].includes(so.fulfillmentStatus))
+                      ? 'FULFILLED'
+                      : displaySubOrders.some((so: SubOrder) => so.fulfillmentStatus === 'SHIPPED')
+                        ? 'SHIPPED'
+                        : displaySubOrders.some((so: SubOrder) => so.fulfillmentStatus === 'PACKED')
+                          ? 'PACKED'
+                          : 'UNFULFILLED'
+                  : 'UNFULFILLED'
+              }
+            />
+          </div>
+        )}
+
+        {isMultiShipment && (
+          <div style={{ marginBottom: 20, fontSize: 13, color: '#6b7280' }}>
+            This order ships in {activeSubOrders.length} separate shipments — each
+            has its own progress below.
+          </div>
+        )}
 
         {/* Order Timeline — synthesized from row timestamps server-side.
-            Renders below the high-level progress tracker so customers can
-            see exactly when each transition happened (and, for multi-seller
-            orders, which shipment it relates to). */}
-        {order.timeline && order.timeline.length > 0 && (
+            Single-shipment only: for multi-shipment orders the per-shipment
+            timelines (inside each group below) carry the same detail scoped to
+            the right parcel, so a combined top timeline would just duplicate. */}
+        {!isMultiShipment && order.timeline && order.timeline.length > 0 && (
           <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 16, marginBottom: 20, background: '#fff' }}>
             <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12, color: '#111827' }}>Timeline</h3>
             <OrderTimeline events={order.timeline} />
@@ -768,6 +828,33 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
               </div>
               <span style={{ fontSize: 13, color: '#6b7280' }}>Subtotal: {formatPrice(Number(so.subTotal))}</span>
             </div>
+
+            {/* Per-shipment progress + timeline. Only for multi-shipment
+                (multi-seller) orders — each parcel moves on its own schedule,
+                so it gets its own bar (scoped via subOrderStepIndex) and its
+                own timeline (shared order-level events + this shipment's own
+                tracking/delivery events). Single-shipment orders use the top
+                bar/timeline instead. */}
+            {isMultiShipment && (
+              <div style={{ marginTop: 10, marginBottom: 6, padding: '4px 12px', background: '#fafafa', border: '1px solid #f1f5f9', borderRadius: 8 }}>
+                <OrderProgressTracker
+                  fulfillmentStatus={so.fulfillmentStatus}
+                  paymentStatus={order.paymentStatus}
+                  currentIdxOverride={subOrderStepIndex(so, order.paymentStatus)}
+                />
+                {(() => {
+                  const events = [
+                    ...sharedTimelineEvents,
+                    ...(order.timeline ?? []).filter((e) => e.subOrderId === so.id),
+                  ].sort((a, b) => new Date(a.at).getTime() - new Date(b.at).getTime());
+                  return events.length > 0 ? (
+                    <div style={{ paddingTop: 4, paddingBottom: 4, borderTop: '1px solid #f1f5f9' }}>
+                      <OrderTimeline events={events} />
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+            )}
 
             {/* Seller-accept countdown — only meaningful while we're
                 still waiting for the seller. Once they accept, the

@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { apiFetch } from '../../lib/api';
+import { validateEmail } from '../../lib/validators';
 import { CaptchaWidget } from '../../components/CaptchaWidget';
 
 const CAPTCHA_REQUIRED =
@@ -32,6 +33,11 @@ export default function ForgotPasswordPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setError(emailError);
+      return;
+    }
     if (CAPTCHA_REQUIRED && !captchaToken) {
       setError('Please complete the captcha challenge.');
       return;

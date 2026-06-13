@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { adminFranchisesService } from '@/services/admin-franchises.service';
+import { validateAmount } from '@/lib/validators';
 import { useModal } from '@sportsmart/ui';
 
 // A row in the render table. The admin sees every catalog mapping the
@@ -106,8 +107,13 @@ export default function FranchisePricingPage() {
 
   const handleSave = async (row: Row) => {
     const n = Number(row.draft);
-    if (!row.draft || Number.isNaN(n) || n < 0.01) {
-      setError('Enter a landed cost greater than 0');
+    const amountError = validateAmount(row.draft, {
+      min: 0.01,
+      max: 10_000_000,
+      label: 'Landed cost',
+    });
+    if (amountError) {
+      setError(amountError);
       return;
     }
     setError('');

@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { apiFetch, formatDate } from '../../../lib/api';
+import { validateIndianMobile, validateText } from '../../../lib/validators';
 
 interface Profile {
   id: string;
@@ -86,6 +87,19 @@ export default function ProfilePage() {
     if (Object.keys(patch).length === 0) {
       // Nothing changed — just bail out of edit mode.
       setEditing(false);
+      return;
+    }
+    // Validate only the changed fields so an unrelated edit isn't blocked.
+    const fieldError =
+      (patch.firstName !== undefined
+        ? validateText(form.firstName, { label: 'First name', min: 1, max: 64 })
+        : null) ||
+      (patch.lastName !== undefined
+        ? validateText(form.lastName, { label: 'Last name', min: 1, max: 64 })
+        : null) ||
+      (patch.phone !== undefined ? validateIndianMobile(form.phone) : null);
+    if (fieldError) {
+      setSaveError(fieldError);
       return;
     }
     setSaving(true);

@@ -28,6 +28,7 @@ import {
   isEditorEmpty,
   getPlainTextLength,
 } from '@/lib/profile-validators';
+import { validateIndianMobile, validatePincode } from '@/lib/validators';
 import './profile.css';
 
 const ReactQuill = dynamic(() => import('react-quill-new'), { ssr: false });
@@ -147,6 +148,11 @@ function computeDiff(current: FormData, initial: FormData): UpdateProfilePayload
     diff.sellerContactCountryCode = current.sellerContactCountryCode;
   }
   return diff;
+}
+
+function isIndiaCountry(country: string): boolean {
+  const c = (country || '').trim().toLowerCase();
+  return c === '' || c === 'india' || c === 'in' || c === 'bharat';
 }
 
 function getStatusBadgeClass(status: string): string {
@@ -530,12 +536,26 @@ export default function SellerProfilePage() {
       case 'sellerName': error = validateProfileSellerName(v); break;
       case 'sellerShopName': error = validateProfileShopName(v); break;
       case 'sellerContactCountryCode': error = validateCountryCode(v); break;
-      case 'sellerContactNumber': error = validateContactNumber(v); break;
+      case 'sellerContactNumber':
+        // Indian numbers (+91) must be a strict 10-digit 6-9 mobile,
+        // mirroring the backend DTO. International codes fall back to the
+        // looser length check.
+        error =
+          formData.sellerContactCountryCode.trim() === '+91' && v.trim()
+            ? validateIndianMobile(v)
+            : validateContactNumber(v);
+        break;
       case 'storeAddress': error = validateStoreAddress(v); break;
       case 'city': error = validateCity(v); break;
       case 'state': error = validateState(v); break;
       case 'country': error = validateCountry(v); break;
-      case 'sellerZipCode': error = validateZipCode(v); break;
+      case 'sellerZipCode':
+        // Indian addresses use a strict 6-digit PIN; non-India falls back
+        // to the generic ZIP shape.
+        error = isIndiaCountry(formData.country)
+          ? validatePincode(v)
+          : validateZipCode(v);
+        break;
     }
 
     setErrors(prev => {
@@ -564,7 +584,14 @@ export default function SellerProfilePage() {
     // Phone cross-field
     const codeErr = validateCountryCode(formData.sellerContactCountryCode);
     if (codeErr) newErrors.sellerContactCountryCode = codeErr;
-    const phoneErr = validateContactNumber(formData.sellerContactNumber);
+    // +91 numbers must satisfy the strict India mobile rule (10 digits,
+    // starts 6-9) like the backend; other country codes keep the lenient
+    // 7-15 digit check.
+    const phoneErr =
+      formData.sellerContactCountryCode.trim() === '+91' &&
+      formData.sellerContactNumber.trim()
+        ? validateIndianMobile(formData.sellerContactNumber)
+        : validateContactNumber(formData.sellerContactNumber);
     if (phoneErr) newErrors.sellerContactNumber = phoneErr;
     if (!codeErr && !phoneErr) {
       const crossErr = validatePhoneCrossField(
@@ -589,7 +616,11 @@ export default function SellerProfilePage() {
       if (stateErr) newErrors.state = stateErr;
       const countryErr = validateCountry(formData.country);
       if (countryErr) newErrors.country = countryErr;
-      const zipErr = validateZipCode(formData.sellerZipCode);
+      // Indian addresses require a strict 6-digit PIN; non-India keeps the
+      // generic ZIP shape.
+      const zipErr = isIndiaCountry(formData.country)
+        ? validatePincode(formData.sellerZipCode)
+        : validateZipCode(formData.sellerZipCode);
       if (zipErr) newErrors.sellerZipCode = zipErr;
     }
 

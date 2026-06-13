@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { ApiError } from '@/lib/api';
+import { validateOtp } from '@/lib/validators';
 import { adminAuthService } from '@/services/admin-mfa.service';
 
 /**
@@ -115,11 +116,12 @@ export default function LoginPage() {
     if (!mfa) return;
     const code = mfaCode.replace(/\s+/g, '');
     if (emailMode) {
-      if (!/^[0-9]{6}$/.test(code)) {
+      // Email OTP is a pure 6-digit code.
+      if (validateOtp(code) !== null) {
         setError('Enter the 6-digit code from your email.');
         return;
       }
-    } else if (!/^[0-9]{6}$/.test(code) && !/^[A-Za-z0-9]{5}-[A-Za-z0-9]{5}$/.test(code)) {
+    } else if (validateOtp(code) !== null && !/^[A-Za-z0-9]{5}-[A-Za-z0-9]{5}$/.test(code)) {
       setError('Enter the 6-digit code or a backup code (xxxxx-xxxxx).');
       return;
     }

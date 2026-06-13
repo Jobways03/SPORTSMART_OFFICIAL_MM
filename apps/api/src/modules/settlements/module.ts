@@ -1,7 +1,9 @@
 import { Module, forwardRef } from '@nestjs/common';
 import { SettlementsPublicFacade } from './application/facades/settlements-public.facade';
 import { SettlementService } from './settlement.service';
+import { SettlementChargeRuleService } from './settlement-charge-rule.service';
 import { AdminSettlementController } from './admin-settlement.controller';
+import { AdminSettlementChargeRuleController } from './admin-settlement-charge-rule.controller';
 import { SellerEarningsController } from './seller-earnings.controller';
 import { AdminAuthGuard, SellerAuthGuard } from '../../core/guards';
 import { MoneyModule } from '../../core/money/money.module';
@@ -14,10 +16,15 @@ import { TaxModule } from '../tax/module';
   // GSTR-8 reporting), so the relationship is circular — forwardRef
   // breaks the bootstrap-time chicken-and-egg.
   imports: [MoneyModule, forwardRef(() => TaxModule)],
-  controllers: [AdminSettlementController, SellerEarningsController],
+  controllers: [
+    AdminSettlementController,
+    AdminSettlementChargeRuleController,
+    SellerEarningsController,
+  ],
   providers: [
     SettlementsPublicFacade,
     SettlementService,
+    SettlementChargeRuleService,
     AdminAuthGuard,
     SellerAuthGuard,
   ],

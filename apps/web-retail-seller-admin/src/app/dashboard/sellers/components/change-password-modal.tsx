@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { SellerListItem, adminSellersService } from '@/services/admin-sellers.service';
 import { ApiError } from '@/lib/api-client';
+import { validateStrongPassword } from '@/lib/validators';
 import './modal.css';
 
 interface Props {
@@ -30,7 +31,15 @@ export default function ChangePasswordModal({ seller, onClose, onSuccess }: Prop
   const passwordsMatch = password === confirmPassword && confirmPassword.length > 0;
 
   const handleSubmit = async () => {
-    if (!allRulesMet || !passwordsMatch) return;
+    const pwError = validateStrongPassword(password);
+    if (pwError) {
+      setError(pwError);
+      return;
+    }
+    if (!passwordsMatch) {
+      setError('Passwords do not match');
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {

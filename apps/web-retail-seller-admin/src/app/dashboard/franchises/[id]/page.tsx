@@ -12,6 +12,12 @@ import {
 } from '@/services/admin-franchises.service';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
+import {
+  validateGSTIN,
+  validatePAN,
+  validatePincode,
+  validateIndianMobile,
+} from '@/lib/validators';
 import FranchiseStatusModal from '../components/franchise-status-modal';
 import FranchiseVerificationModal from '../components/franchise-verification-modal';
 import FranchiseCommissionModal from '../components/franchise-commission-modal';
@@ -132,9 +138,48 @@ export default function AdminFranchiseDetailPage() {
   };
 
   const handleEditSave = async () => {if (!franchise) return;
+    // Field-level checks for the statutory / contact identifiers. Each is
+    // optional, so only validate when the operator has actually entered one.
+    const gst = (editForm.gstNumber || '').trim();
+    if (gst) {
+      const gstError = validateGSTIN(gst);
+      if (gstError) { void notify(gstError); return; }
+    }
+    const pan = (editForm.panNumber || '').trim();
+    if (pan) {
+      const panError = validatePAN(pan);
+      if (panError) { void notify(panError); return; }
+    }
+    const phone = (editForm.phoneNumber || '').trim();
+    if (phone) {
+      // Tolerate common formatting (spaces, hyphens, a +91 / 91 country code)
+      // before applying the canonical 10-digit Indian-mobile rule.
+      const localPhone = phone
+        .replace(/[\s-]/g, '')
+        .replace(/^(\+?91)/, '');
+      const phoneError = validateIndianMobile(localPhone);
+      if (phoneError) { void notify(phoneError); return; }
+    }
+    const pincode = (editForm.pincode || '').trim();
+    if (pincode) {
+      const pincodeError = validatePincode(pincode);
+      if (pincodeError) { void notify(pincodeError); return; }
+    }
+    const warehousePincode = (editForm.warehousePincode || '').trim();
+    if (warehousePincode) {
+      const whPincodeError = validatePincode(warehousePincode);
+      if (whPincodeError) { void notify(`Warehouse pincode: ${whPincodeError}`); return; }
+    }
     setEditSaving(true);
     try {
-      await adminFranchisesService.editFranchise(franchise.id, editForm);
+      // Persist GSTIN / PAN in canonical uppercase so the stored value matches
+      // what was validated above.
+      const normalized = {
+        ...editForm,
+        ...(gst ? { gstNumber: gst.toUpperCase() } : {}),
+        ...(pan ? { panNumber: pan.toUpperCase() } : {}),
+      };
+      await adminFranchisesService.editFranchise(franchise.id, normalized);
       setEditSuccess('Profile updated successfully');
       setEditMode(false);
       setTimeout(() => setEditSuccess(''), 3000);

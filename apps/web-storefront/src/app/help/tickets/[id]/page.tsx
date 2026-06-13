@@ -22,6 +22,7 @@ import {
   TicketStatus,
   STATUS_LABEL,
 } from '@/services/support.service';
+import { validateText } from '@/lib/validators';
 
 const STATUS_TONE: Record<TicketStatus, { fg: string; bg: string }> = {
   OPEN: { fg: 'text-warning', bg: 'bg-gold-soft' },
@@ -55,7 +56,12 @@ export default function TicketThreadPage() {
 
   const sendReply = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!reply.trim() || sending) return;
+    if (sending) return;
+    const replyError = validateText(reply, { label: 'Reply', min: 1, max: 5000 });
+    if (replyError) {
+      setError(replyError);
+      return;
+    }
     setSending(true);
     try {
       const res = await supportService.reply(id, reply.trim());

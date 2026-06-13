@@ -4,6 +4,12 @@ import { useCallback, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { apiFetch, ApiError } from '@/lib/api';
+import {
+  validateEmail,
+  validateIndianMobile,
+  validatePassword,
+  validateText,
+} from '@/lib/validators';
 import { CaptchaWidget } from '@/components/CaptchaWidget';
 
 const CAPTCHA_REQUIRED =
@@ -54,6 +60,18 @@ export default function RegisterPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
+    // Field-level validation — browser `required`/`pattern` is bypassable, so
+    // enforce the real formats here before the API call.
+    const fieldError =
+      validateText(form.firstName, { label: 'First name', min: 1, max: 64 }) ||
+      validateText(form.lastName, { label: 'Last name', min: 1, max: 64 }) ||
+      validateEmail(form.email) ||
+      validateIndianMobile(form.phone) ||
+      validatePassword(form.password);
+    if (fieldError) {
+      setError(fieldError);
+      return;
+    }
     if (form.password !== form.confirmPassword) {
       setError('Passwords do not match.');
       return;

@@ -16,7 +16,7 @@ export function InvoiceDownloadCard({ orderId }: { orderId: string }) {
   const [docs, setDocs] = useState<CustomerTaxDocument[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -35,22 +35,18 @@ export function InvoiceDownloadCard({ orderId }: { orderId: string }) {
     void load();
   }, [load]);
 
-  const download = async (doc: CustomerTaxDocument) => {
-    setDownloadingId(doc.id);
+  // Download ALL of this order's invoices as ONE real PDF (each invoice on its
+  // own page). Multi-seller orders legally need one invoice per seller, so we
+  // bundle them into a single downloadable file rather than merging them.
+  const downloadAll = async () => {
+    setDownloading(true);
+    setError(null);
     try {
-      const res = await customerTaxService.getDownloadUrl(doc.id);
-      const url = res.data?.url;
-      if (!url) {
-        setError('Server did not return a download URL');
-        return;
-      }
-      // Stub provider returns file:// URL — opens in a new tab. Real
-      // S3 URL works the same way.
-      window.open(url, '_blank', 'noopener,noreferrer');
+      await customerTaxService.downloadCombined(orderId);
     } catch (err: any) {
       setError(err?.message ?? 'Download failed');
     } finally {
-      setDownloadingId(null);
+      setDownloading(false);
     }
   };
 
@@ -86,49 +82,45 @@ export function InvoiceDownloadCard({ orderId }: { orderId: string }) {
 
   return (
     <div style={card}>
-      <div style={{ fontWeight: 600, marginBottom: 8 }}>Tax Documents</div>
-      {docs.map((d) => {
-        const ready = d.status === 'PDF_GENERATED';
-        return (
-          <div
-            key={d.id}
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              padding: '8px 0',
-              borderTop: '1px solid #f3f4f6',
-            }}
-          >
-            <div>
-              <div style={{ fontFamily: 'monospace', fontSize: 13 }}>
-                {d.documentNumber}
-              </div>
-              <div style={{ fontSize: 11, color: '#6b7280' }}>
-                {labelForDocType(d.documentType)} · ₹{paiseToRupees(d.documentTotalInPaise)}
-                {' · '}
-                {d.generatedAt ? new Date(d.generatedAt).toLocaleDateString('en-IN') : '—'}
-              </div>
-            </div>
-            <button
-              onClick={() => download(d)}
-              disabled={!ready || downloadingId === d.id}
-              style={ready ? btnPrimary : btnDisabled}
-              title={
-                ready
-                  ? 'Download invoice'
-                  : 'Invoice PDF is still being generated — try again in a moment.'
-              }
-            >
-              {downloadingId === d.id
-                ? 'Opening…'
-                : ready
-                ? 'Download'
-                : 'Pending'}
-            </button>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+        <div style={{ fontWeight: 600 }}>Tax Documents</div>
+        {docs.length > 1 && (
+          <span style={{ fontSize: 11, color: '#6b7280' }}>{docs.length} invoices · 1 PDF</span>
+        )}
+      </div>
+
+      {/* Invoice rows — informational. The single button below downloads them
+          all as one PDF (each invoice on its own page). */}
+      {docs.map((d) => (
+        <div key={d.id} style={{ padding: '8px 0', borderTop: '1px solid #f3f4f6' }}>
+          <div style={{ fontFamily: 'monospace', fontSize: 13 }}>{d.documentNumber}</div>
+          <div style={{ fontSize: 11, color: '#6b7280' }}>
+            {labelForDocType(d.documentType)} · ₹{paiseToRupees(d.documentTotalInPaise)}
+            {' · '}
+            {d.generatedAt ? new Date(d.generatedAt).toLocaleDateString('en-IN') : '—'}
           </div>
-        );
-      })}
+        </div>
+      ))}
+
+      <button
+        onClick={downloadAll}
+        disabled={downloading}
+        style={{ ...(downloading ? btnDisabled : btnPrimary), width: '100%', marginTop: 12, padding: '10px 12px' }}
+        title="Download a single PDF with all invoices for this order"
+      >
+        {downloading
+          ? 'Preparing PDF…'
+          : docs.length > 1
+          ? `Download all ${docs.length} invoices (PDF)`
+          : 'Download invoice (PDF)'}
+      </button>
+
+      {docs.length > 1 && (
+        <div style={{ fontSize: 11, color: '#6b7280', marginTop: 8, lineHeight: 1.5 }}>
+          This order has items from different sellers. Each seller issues its own
+          GST tax invoice, so they're bundled into one PDF — one invoice per page.
+        </div>
+      )}
     </div>
   );
 }

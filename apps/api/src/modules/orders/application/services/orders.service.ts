@@ -1095,6 +1095,10 @@ export class OrdersService {
           masterOrderId: id,
           amountInPaise: totalAmountInPaise,
           baseIdempotencyKey: `verification-reject:${id}`,
+          // Phase 258 — a rejection always happens BEFORE seller acceptance, so
+          // the full paid amount is returned to the customer's wallet as store
+          // credit (not reversed to the card). Pre-fix this split wallet+gateway.
+          forceFullWallet: true,
         });
       } catch (err) {
         // Refund failure must not roll back the rejection — the
@@ -1635,6 +1639,13 @@ export class OrdersService {
           masterOrderId,
           amountInPaise: subTotalInPaise,
           baseIdempotencyKey: `cancel-sub-order:${subOrderId}`,
+          // Phase 258 — cancel-to-wallet window is BEFORE SHIPMENT. If this
+          // sub-order had NOT shipped yet, return the amount to the wallet as
+          // store credit. A force-cancel of already-shipped goods falls back to
+          // the normal wallet+gateway split (reverse the gateway portion).
+          forceFullWallet: !['SHIPPED', 'DELIVERED', 'FULFILLED'].includes(
+            previousFulfillmentStatus as string,
+          ),
         });
       } catch (err) {
         // Refund failure must not roll back the cancel — the order
@@ -3571,18 +3582,31 @@ export class OrdersService {
       search?: string;
     },
   ) {
-    // Sellers should only see orders that have been verified and routed (or beyond)
-    const routedOrLaterStatuses = [
-      'ROUTED_TO_SELLER',
-      'SELLER_ACCEPTED',
-      'DISPATCHED',
-      'DELIVERED',
+    // Sellers should see every order routed to them or beyond — including the
+    // multi-seller rollup states (PARTIALLY_SHIPPED / PARTIALLY_DELIVERED /
+    // PARTIALLY_CANCELLED) and terminal CANCELLED / EXCEPTION_QUEUE. We DENY
+    // only the pre-routing master statuses (which have no seller sub-orders yet
+    // anyway) rather than allow-listing, so a newly-added "later" status can
+    // never silently hide an order from the seller again.
+    //
+    // Bug this fixes: the old allow-list was ['ROUTED_TO_SELLER',
+    // 'SELLER_ACCEPTED', 'DISPATCHED', 'DELIVERED'] — it omitted
+    // PARTIALLY_SHIPPED. A multi-seller order where one seller ships before the
+    // other rolls the MASTER to PARTIALLY_SHIPPED, so the order disappeared from
+    // BOTH sellers' lists (the detail page still worked — it keys on sub-order
+    // id with no master-status filter).
+    const preRoutingStatuses = [
+      'PENDING_PAYMENT',
+      'PLACED',
+      'PENDING_VERIFICATION',
+      'VERIFIED',
+      'REJECTED',
     ] as const;
 
     const where: Prisma.SubOrderWhereInput = {
       sellerId,
       masterOrder: {
-        orderStatus: { in: [...routedOrLaterStatuses] },
+        orderStatus: { notIn: [...preRoutingStatuses] },
       },
     };
 

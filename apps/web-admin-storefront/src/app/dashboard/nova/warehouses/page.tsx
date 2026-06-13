@@ -8,6 +8,7 @@ import {
   OwnBrandWarehouse,
 } from '@/services/admin-nova.service';
 import { ApiError } from '@/lib/api-client';
+import { validatePincode, validateText } from '@/lib/validators';
 
 interface WarehouseForm {
   code: string;
@@ -55,7 +56,16 @@ export default function NovaWarehousesPage() {
     e.preventDefault();
     setError('');
     if (!form.code.trim() || !form.name.trim()) return setError('Code and name are required');
-    if (!/^\d{6}$/.test(form.pincode)) return setError('Pincode must be 6 digits');
+    // Address fields are required on a warehouse — stock can't be received
+    // against an addressless hub.
+    const addrErr = validateText(form.addressLine, { label: 'Address line', max: 200 });
+    if (addrErr) return setError(addrErr);
+    const cityErr = validateText(form.city, { label: 'City', max: 100 });
+    if (cityErr) return setError(cityErr);
+    const stateErr = validateText(form.state, { label: 'State', max: 100 });
+    if (stateErr) return setError(stateErr);
+    const pinErr = validatePincode(form.pincode);
+    if (pinErr) return setError(pinErr);
     setSaving(true);
     try {
       await adminNovaService.createWarehouse(form);

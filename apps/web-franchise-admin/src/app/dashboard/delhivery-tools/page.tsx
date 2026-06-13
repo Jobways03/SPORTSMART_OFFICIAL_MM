@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import { apiClient } from '@/lib/api-client';
+import { validatePincode } from '@/lib/validators';
 
 /**
  * Phase 4 Delhivery wiring (2026-06-02) — Delhivery operations console.
@@ -16,6 +17,9 @@ interface ToolField {
   label: string;
   required?: boolean;
   wide?: boolean;
+  // Optional field-level format check. Runs after the required check and
+  // only when the field has a value. Returns an error message or null.
+  validate?: (value: string) => string | null;
 }
 
 function ToolCard({
@@ -43,6 +47,17 @@ function ToolCard({
     if (missing.length) {
       setError(`Required: ${missing.map((m) => m.label).join(', ')}`);
       return;
+    }
+    // Field-level format checks (e.g. pincode) before the carrier call.
+    for (const f of fields) {
+      const v = values[f.name]?.trim();
+      if (f.validate && v) {
+        const fieldError = f.validate(v);
+        if (fieldError) {
+          setError(`${f.label}: ${fieldError}`);
+          return;
+        }
+      }
     }
     setLoading(true);
     try {
@@ -105,7 +120,7 @@ export default function DelhiveryToolsPage() {
         title="Pincode serviceability"
         desc="Is a destination pincode deliverable, and does it support COD / prepaid?"
         actionLabel="Check"
-        fields={[{ name: 'pincode', label: 'Pincode', required: true }]}
+        fields={[{ name: 'pincode', label: 'Pincode', required: true, validate: validatePincode }]}
         run={(v) => get(`/admin/delhivery/serviceability/${encodeURIComponent(v.pincode.trim())}`)}
       />
 
@@ -114,8 +129,8 @@ export default function DelhiveryToolsPage() {
         desc="Live cost quote between two pincodes. Mode S = Surface, E = Express."
         actionLabel="Calculate"
         fields={[
-          { name: 'origin', label: 'Origin pincode', required: true },
-          { name: 'destination', label: 'Destination pincode', required: true },
+          { name: 'origin', label: 'Origin pincode', required: true, validate: validatePincode },
+          { name: 'destination', label: 'Destination pincode', required: true, validate: validatePincode },
           { name: 'weightGrams', label: 'Weight (g)', required: true },
           { name: 'mode', label: 'Mode (S/E)' },
           { name: 'paymentType', label: 'Pre-paid / COD' },
@@ -137,8 +152,8 @@ export default function DelhiveryToolsPage() {
         desc="Estimated delivery days between two pincodes. mot S = Surface, E = Express."
         actionLabel="Check"
         fields={[
-          { name: 'origin', label: 'Origin pincode', required: true },
-          { name: 'destination', label: 'Destination pincode', required: true },
+          { name: 'origin', label: 'Origin pincode', required: true, validate: validatePincode },
+          { name: 'destination', label: 'Destination pincode', required: true, validate: validatePincode },
           { name: 'mot', label: 'Mode (S/E)' },
         ]}
         run={(v) => {

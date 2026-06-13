@@ -33,6 +33,13 @@ coverage
 result.txt
 *.scratch.md
 
+# Runtime-generated storage artifacts — tax-invoice documents, shipping
+# labels, exports, etc. These are produced by the running API per order and
+# must NEVER be committed (they leak customer/seller PII, GSTINs and invoice
+# numbers into the repo, and churn on every test order). The app re-creates
+# the directory tree on demand (mkdir -p), so no .gitkeep is needed.
+apps/api/storage/
+
 # pnpm-lock.yaml — INTENTIONALLY committed (reproducible installs +
 # CI cache hits). Do not add to this ignore file. Listed here as a
 # guard against future regressions; remove the explicit !-rule if pnpm

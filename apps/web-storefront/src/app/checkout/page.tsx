@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   Wallet,
+  CreditCard,
   Plus,
   Pencil,
   X,
@@ -21,10 +22,8 @@ import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { usePincodeLookup } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
-import {
-  customerTaxProfileService,
-  CustomerTaxProfile,
-} from '@/services/customer-tax-profile.service';
+import { openRazorpayCheckout } from '@/lib/razorpay';
+import { customerTaxProfileService } from '@/services/customer-tax-profile.service';
 
 interface Address {
   id: string;
@@ -156,6 +155,11 @@ export default function CheckoutPage() {
   const [initiating, setInitiating] = useState(false);
   const [placing, setPlacing] = useState(false);
   const [placedOrderNumber, setPlacedOrderNumber] = useState<string | null>(null);
+  // Phase 255 — payment method. Online is only offered when the public
+  // Razorpay key is configured at build time (NEXT_PUBLIC_RAZORPAY_KEY_ID);
+  // otherwise the modal can't open, so we hide the option and keep COD only.
+  const [paymentMethod, setPaymentMethod] = useState<'COD' | 'ONLINE'>('COD');
+  const onlineEnabled = !!process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;
   // Idempotency key for the place-order POST. Backend requires
   // `X-Idempotency-Key` on this endpoint so a retried submit (network
   // blip, double-click, refresh-during-call) returns the original
@@ -174,12 +178,6 @@ export default function CheckoutPage() {
   const [removingUnserviceable, setRemovingUnserviceable] = useState(false);
   const [error, setError] = useState('');
   const [checkoutData, setCheckoutData] = useState<CheckoutData | null>(null);
-  // Phase 36 — per-line tax drill-down expansion. Keyed by
-  // `${productId}:${variantId ?? ''}` so a product with multiple
-  // variants in the cart can expand independently.
-  const [expandedTaxLines, setExpandedTaxLines] = useState<Set<string>>(
-    new Set(),
-  );
 
   const [couponInput, setCouponInput] = useState('');
   const [couponApplying, setCouponApplying] = useState(false);
@@ -233,15 +231,10 @@ export default function CheckoutPage() {
   const [selectedPlace, setSelectedPlace] = useState('');
 
   // B2B tax profile — Phase 37 picker. Buyers with 2+ tax profiles can
-  // pick which GSTIN this order's invoice goes against; the chosen ID
-  // is sent to placeOrder and snapshotted on MasterOrder. Default
-  // selection mirrors the legacy "isDefault" rule.
-  const [taxProfiles, setTaxProfiles] = useState<CustomerTaxProfile[]>([]);
+  // Phase 258 — the GSTIN picker UI was removed from checkout. We still apply
+  // the customer's DEFAULT tax profile (if any) silently, so B2B customers keep
+  // getting their B2B invoice — only the on-page picker is gone.
   const [selectedTaxProfileId, setSelectedTaxProfileId] = useState<string | null>(null);
-  const defaultTaxProfile =
-    taxProfiles.find((p) => p.id === selectedTaxProfileId) ??
-    taxProfiles.find((p) => p.isDefault) ??
-    null;
 
   useEffect(() => {
     if (authStatus !== 'authed') return;
@@ -251,7 +244,6 @@ export default function CheckoutPage() {
       .then((res) => {
         if (cancelled) return;
         const profiles = res.data ?? [];
-        setTaxProfiles(profiles);
         const def = profiles.find((p) => p.isDefault) ?? null;
         setSelectedTaxProfileId(def?.id ?? null);
       })
@@ -562,7 +554,13 @@ export default function CheckoutPage() {
   // etc.) the existing error handler will surface it and we clear the
   // stale preview.
   useEffect(() => {
-    if (!checkoutData) return;
+    // Phase 258 — auto-apply the cart-previewed coupon as soon as we have ANY
+    // basis to validate against. The cart loads before the delivery check, and
+    // handleApplyCoupon already falls back to cart data when checkoutData is
+    // null. Pre-fix this waited for checkoutData (only set AFTER "Check delivery
+    // & continue"), so on the address step the coupon looked lost and customers
+    // re-entered it even though they'd already applied it on the cart.
+    if (!cart && !checkoutData) return;
     if (appliedCoupon) return; // already applied — don't fight the user
     if (typeof window === 'undefined') return;
     const raw = window.sessionStorage.getItem('sm.previewedCoupon');
@@ -585,7 +583,7 @@ export default function CheckoutPage() {
       });
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [checkoutData]);
+  }, [cart, checkoutData]);
 
   const handlePlaceOrder = async () => {
     if (!checkoutData) {
@@ -611,14 +609,25 @@ export default function CheckoutPage() {
       const walletApplyAmountInPaise = walletApplied
         ? Math.round(walletApplyAmount * 100)
         : 0;
-      const res = await apiClient<{ orderNumber: string }>('/customer/checkout/place-order', {
+      const res = await apiClient<{
+        orderNumber: string;
+        paymentMethod?: 'COD' | 'ONLINE';
+        // ONLINE orders return gateway handoff details (or a
+        // fullyCoveredByWallet flag when the wallet paid the whole amount).
+        payment?: {
+          fullyCoveredByWallet?: boolean;
+          razorpayOrderId?: string;
+          amount?: number; // rupees (legacy wire field)
+          currency?: string;
+        };
+      }>('/customer/checkout/place-order', {
         method: 'POST',
         // Backend `@Idempotent()` requires this. Same key across retries
         // of this checkout attempt returns the original response instead
         // of duplicating the order.
         headers: { 'X-Idempotency-Key': placeOrderIdemKey },
         body: JSON.stringify({
-          paymentMethod: 'COD',
+          paymentMethod,
           ...(appliedCoupon ? { couponCode: appliedCoupon.code } : {}),
           ...(selectedShippingOptionId ? { shippingOptionId: selectedShippingOptionId } : {}),
           ...(referralCode ? { referralCode } : {}),
@@ -637,6 +646,46 @@ export default function CheckoutPage() {
         setPlacing(false);
         return;
       }
+
+      // ONLINE — hand off to the Razorpay modal, UNLESS the wallet covered
+      // the full amount (then the order is already PLACED, no gateway needed).
+      const pay = res?.data?.payment;
+      if (
+        res?.data?.paymentMethod === 'ONLINE' &&
+        pay &&
+        !pay.fullyCoveredByWallet &&
+        pay.razorpayOrderId
+      ) {
+        const selectedAddr = addresses.find((a) => a.id === selectedAddressId);
+        const handoff = await openRazorpayCheckout({
+          razorpayOrderId: pay.razorpayOrderId,
+          amountInPaise: Math.round((pay.amount ?? payable) * 100),
+          currency: pay.currency || 'INR',
+          orderNumber,
+          customerName: selectedAddr?.fullName || form.fullName || null,
+          customerPhone: selectedAddr?.phone || form.phone || null,
+        });
+        if (handoff.status === 'success') {
+          // Backend already verified the signature + captured inside the
+          // modal handler; the order is now PLACED/PAID.
+          setPlacedOrderNumber(orderNumber);
+          router.replace(`/orders/${orderNumber}`);
+          return;
+        }
+        if (handoff.status === 'dismissed') {
+          // Customer closed the modal. The order shell exists in
+          // PENDING_PAYMENT — the order detail page has "Retry payment".
+          router.replace(`/orders/${orderNumber}`);
+          return;
+        }
+        // Hard error (declined / verify failed). Keep them here with the
+        // reason; the order can still be retried from My Orders.
+        setError(handoff.error || 'Payment failed. You can retry from My Orders.');
+        setPlacing(false);
+        return;
+      }
+
+      // COD (or wallet-fully-covered ONLINE): the order is already placed.
       setPlacedOrderNumber(orderNumber);
       router.prefetch(`/orders/${orderNumber}`);
       router.replace(`/orders/${orderNumber}`);
@@ -808,6 +857,11 @@ export default function CheckoutPage() {
   const walletBalanceInRupees = walletBalanceInPaise / 100;
   const walletApplyAmount = walletApplied ? Math.min(walletBalanceInRupees, total) : 0;
   const payable = Math.max(0, total - walletApplyAmount);
+  // Phase 262 — wallet covers the ENTIRE order → nothing is left to pay, so the
+  // COD / Pay-online choice is moot. We use this to replace the payment-method
+  // picker with a "paid fully by wallet" note instead of leaving COD confusingly
+  // selected. (placeOrder already marks such orders PAID via the wallet.)
+  const walletCoversAll = walletApplied && payable <= 0;
 
   return (
     <StorefrontShell>
@@ -1144,7 +1198,17 @@ export default function CheckoutPage() {
 
             {/* Order items */}
             <section className="mt-10">
-              <h2 className="font-display text-h3 text-ink-900 mb-4">Order items</h2>
+              <div className="flex items-baseline justify-between mb-5">
+                <h2 className="font-display text-h3 text-ink-900">Order items</h2>
+                {(() => {
+                  const n = checkoutData ? checkoutData.items.length : cart.items.length;
+                  return (
+                    <span className="text-caption text-ink-500 font-medium">
+                      {n} {itemNoun(n)}
+                    </span>
+                  );
+                })()}
+              </div>
 
               {checkoutData && !checkoutData.allServiceable && (
                 <div className="mb-4 p-4 border border-warning/30 bg-amber-50 text-warning">
@@ -1169,7 +1233,7 @@ export default function CheckoutPage() {
                 </div>
               )}
 
-              <ul className="bg-white border border-ink-200 divide-y divide-ink-100 rounded-2xl overflow-hidden">
+              <ul className="border-t border-ink-100 divide-y divide-ink-100">
                 {(checkoutData ? checkoutData.items : cart.items.map((c) => ({
                   cartItemId: c.id, productId: c.productId ?? '', variantId: null,
                   productTitle: c.productTitle, variantTitle: c.variantTitle,
@@ -1177,158 +1241,81 @@ export default function CheckoutPage() {
                   unitPrice: c.unitPrice, lineTotal: c.lineTotal, serviceable: true,
                   allocatedSellerName: null, estimatedDeliveryDays: null,
                   reservationId: null,
-                } as CheckoutItem))).map((item, idx) => {
-                  // Phase 36 — look up the matching per-line tax entry
-                  // returned by the preview. Exact match on
-                  // (productId, variantId).
-                  const taxLine = checkoutData?.taxPreview?.lines?.find(
-                    (l) =>
-                      l.productId === item.productId &&
-                      (l.variantId ?? null) === (item.variantId ?? null),
-                  );
-                  const taxKey = `${item.productId}:${item.variantId ?? ''}`;
-                  const isExpanded = expandedTaxLines.has(taxKey);
-                  const toggleTax = () => {
-                    setExpandedTaxLines((prev) => {
-                      const next = new Set(prev);
-                      if (next.has(taxKey)) next.delete(taxKey);
-                      else next.add(taxKey);
-                      return next;
-                    });
-                  };
-                  return (
+                } as CheckoutItem))).map((item, idx) => (
                   <li
                     key={idx}
-                    className={`p-4 ${item.serviceable ? '' : 'opacity-60'}`}
+                    className={`flex items-start gap-4 py-5 ${
+                      item.serviceable ? '' : 'opacity-60'
+                    }`}
                   >
-                    <div className="flex gap-4">
-                    <div className="size-16 bg-ink-100 grid place-items-center overflow-hidden shrink-0">
+                    {/* Thumbnail — plain, no gradient or badge */}
+                    <div className="size-16 shrink-0 rounded-lg border border-ink-200 bg-white grid place-items-center overflow-hidden">
                       {item.imageUrl ? (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
                           src={item.imageUrl}
                           alt={item.productTitle}
                           loading="lazy"
-                          className="size-full object-contain p-1"
+                          className="size-full object-contain p-1.5"
                         />
                       ) : (
                         <ImageIcon
-                          className="size-5 text-ink-400"
+                          className="size-5 text-ink-300"
                           strokeWidth={1.5}
                           aria-label={`${item.productTitle} — no image`}
                         />
                       )}
                     </div>
+
+                    {/* Details — title + price on one row, then variant + a
+                        single muted meta line (qty · delivery · unit price). */}
                     <div className="flex-1 min-w-0">
-                      <div className="text-body font-medium text-ink-900 truncate">
-                        {item.productTitle}
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="text-body font-medium text-ink-900">
+                          {item.productTitle}
+                        </div>
+                        <div
+                          className={`text-body font-semibold tabular shrink-0 ${
+                            item.serviceable ? 'text-ink-900' : 'text-danger line-through'
+                          }`}
+                        >
+                          {formatPrice(item.lineTotal)}
+                        </div>
                       </div>
+
                       {item.variantTitle && (
-                        <div className="text-caption text-ink-600 truncate">{item.variantTitle}</div>
-                      )}
-                      <div className="text-caption text-ink-500 mt-0.5">
-                        Qty: {item.quantity}
-                      </div>
-                      {item.serviceable && item.estimatedDeliveryDays !== null && (
-                        <div className="mt-1 inline-flex items-center gap-1 text-caption text-success">
-                          <Truck className="size-3" />
-                          Delivery in {item.estimatedDeliveryDays} day{item.estimatedDeliveryDays !== 1 ? 's' : ''}
+                        <div className="text-caption text-ink-500 mt-1 leading-relaxed">
+                          {item.variantTitle}
                         </div>
                       )}
+
+                      <div className="text-caption text-ink-500 mt-1">
+                        <span>Qty {item.quantity}</span>
+                        {item.serviceable && item.estimatedDeliveryDays !== null && (
+                          <>
+                            <span className="mx-1.5 text-ink-300">·</span>
+                            <span>
+                              Delivery in {item.estimatedDeliveryDays} day{item.estimatedDeliveryDays !== 1 ? 's' : ''}
+                            </span>
+                          </>
+                        )}
+                        {item.quantity > 1 && (
+                          <>
+                            <span className="mx-1.5 text-ink-300">·</span>
+                            <span className="tabular">{formatPrice(item.unitPrice)} each</span>
+                          </>
+                        )}
+                      </div>
+
                       {!item.serviceable && (
-                        <div className="mt-1 inline-flex items-center gap-1 text-caption text-danger font-medium">
-                          <AlertCircle className="size-3" />
+                        <div className="mt-1.5 inline-flex items-center gap-1.5 text-caption text-danger font-medium">
+                          <AlertCircle className="size-3.5 shrink-0" strokeWidth={2} />
                           {item.unserviceableReason || 'Cannot be delivered to this address'}
                         </div>
                       )}
-                      {/* Phase 36 — drill-down toggle. Only shows when
-                          the backend returned a tax line for this row. */}
-                      {item.serviceable && taxLine && (
-                        <button
-                          type="button"
-                          onClick={toggleTax}
-                          className="mt-1 text-caption text-ink-600 underline hover:text-ink-900"
-                          aria-expanded={isExpanded}
-                        >
-                          {isExpanded ? 'Hide GST breakdown' : 'GST breakdown'}
-                        </button>
-                      )}
                     </div>
-                    <div className="text-body font-semibold text-ink-900 tabular">
-                      {item.serviceable
-                        ? formatPrice(item.lineTotal)
-                        : <span className="text-danger line-through">{formatPrice(item.lineTotal)}</span>}
-                    </div>
-                    </div>
-                    {/* Phase 36 — expanded per-line GST breakdown */}
-                    {isExpanded && taxLine && (
-                      <div className="mt-3 ml-20 p-3 bg-ink-50 rounded text-caption text-ink-800">
-                        <div className="flex justify-between">
-                          <span>Taxable value</span>
-                          <span className="tabular font-medium">
-                            {formatPaiseString(taxLine.taxableInPaise)}
-                          </span>
-                        </div>
-                        {taxLine.supplyTaxability !== 'TAXABLE' &&
-                          taxLine.supplyTaxability !== 'ZERO_RATED' && (
-                            <div className="text-ink-600 mt-1">
-                              {taxLine.supplyTaxability.replace(/_/g, ' ')} —
-                              no GST applies
-                            </div>
-                          )}
-                        {taxLine.isIntraState &&
-                          (taxLine.cgstInPaise !== '0' ||
-                            taxLine.sgstInPaise !== '0') && (
-                            <>
-                              <div className="flex justify-between mt-1">
-                                <span>
-                                  CGST ({(taxLine.gstRateBps / 200).toFixed(2)}%)
-                                </span>
-                                <span className="tabular">
-                                  {formatPaiseString(taxLine.cgstInPaise)}
-                                </span>
-                              </div>
-                              <div className="flex justify-between">
-                                <span>
-                                  SGST ({(taxLine.gstRateBps / 200).toFixed(2)}%)
-                                </span>
-                                <span className="tabular">
-                                  {formatPaiseString(taxLine.sgstInPaise)}
-                                </span>
-                              </div>
-                            </>
-                          )}
-                        {!taxLine.isIntraState && taxLine.igstInPaise !== '0' && (
-                          <div className="flex justify-between mt-1">
-                            <span>
-                              IGST ({(taxLine.gstRateBps / 100).toFixed(2)}%)
-                            </span>
-                            <span className="tabular">
-                              {formatPaiseString(taxLine.igstInPaise)}
-                            </span>
-                          </div>
-                        )}
-                        {taxLine.cessInPaise !== '0' && (
-                          <div className="flex justify-between mt-1">
-                            <span>
-                              Cess ({(taxLine.cessRateBps / 100).toFixed(2)}%)
-                            </span>
-                            <span className="tabular">
-                              {formatPaiseString(taxLine.cessInPaise)}
-                            </span>
-                          </div>
-                        )}
-                        {taxLine.isIncomplete && (
-                          <div className="mt-2 text-ink-600">
-                            Tax config incomplete — the final invoice may
-                            differ.
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </li>
-                  );
-                })}
+                ))}
               </ul>
             </section>
           </div>
@@ -1342,106 +1329,116 @@ export default function CheckoutPage() {
               <div className="text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2">
                 Payment
               </div>
-              <div className="flex items-center gap-3 p-3 border-2 border-ink-900 bg-accent-soft/30">
-                <div className="size-9 grid place-items-center bg-ink-900 text-white">
-                  <Wallet className="size-4" strokeWidth={1.75} />
-                </div>
-                <div>
-                  <div className="text-body font-semibold text-ink-900">Cash on Delivery</div>
-                  <div className="text-caption text-ink-600">Pay when you receive</div>
-                </div>
+              <div className="space-y-2">
+                {walletCoversAll ? (
+                  <div className="flex items-center gap-3 p-3 border-2 border-accent-dark/40 bg-accent-soft/40 rounded-xl">
+                    <div className="size-9 grid place-items-center bg-ink-900 text-white rounded-lg">
+                      <Wallet className="size-4" strokeWidth={1.75} />
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-body font-semibold text-ink-900">
+                        Paid fully by wallet
+                      </div>
+                      <div className="text-caption text-ink-600">
+                        Your wallet covers the entire amount — no card or cash needed.
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                <>
+                {/* Pay online (UPI / card / netbanking) — only when Razorpay
+                    is configured. Selecting it hands off to the Razorpay modal
+                    after the order is created. */}
+                {onlineEnabled && (
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('ONLINE')}
+                    aria-pressed={paymentMethod === 'ONLINE'}
+                    className={`w-full flex items-center gap-3 p-3 border-2 text-left transition-colors rounded-xl ${
+                      paymentMethod === 'ONLINE'
+                        ? 'border-ink-900 bg-accent-soft/30'
+                        : 'border-ink-200 hover:border-ink-400'
+                    }`}
+                  >
+                    <div className="size-9 grid place-items-center bg-ink-900 text-white rounded-lg">
+                      <CreditCard className="size-4" strokeWidth={1.75} />
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-body font-semibold text-ink-900">Pay online</div>
+                      <div className="text-caption text-ink-600">UPI, card, netbanking — via Razorpay</div>
+                    </div>
+                    <div
+                      className={`size-4 rounded-full border-2 ${
+                        paymentMethod === 'ONLINE' ? 'border-ink-900 bg-ink-900' : 'border-ink-300'
+                      }`}
+                    />
+                  </button>
+                )}
+                {/* Cash on Delivery */}
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('COD')}
+                  aria-pressed={paymentMethod === 'COD'}
+                  className={`w-full flex items-center gap-3 p-3 border-2 text-left transition-colors rounded-xl ${
+                    paymentMethod === 'COD'
+                      ? 'border-ink-900 bg-accent-soft/30'
+                      : 'border-ink-200 hover:border-ink-400'
+                  }`}
+                >
+                  <div className="size-9 grid place-items-center bg-ink-900 text-white rounded-lg">
+                    <Wallet className="size-4" strokeWidth={1.75} />
+                  </div>
+                  <div className="flex-1">
+                    <div className="text-body font-semibold text-ink-900">Cash on Delivery</div>
+                    <div className="text-caption text-ink-600">Pay when you receive</div>
+                  </div>
+                  <div
+                    className={`size-4 rounded-full border-2 ${
+                      paymentMethod === 'COD' ? 'border-ink-900 bg-ink-900' : 'border-ink-300'
+                    }`}
+                  />
+                </button>
+                </>
+                )}
               </div>
             </div>
 
-            {/* Phase 37 — Tax invoice picker. Three states:
-                  - 0 profiles: B2C invoice; offer add-GSTIN link
-                  - 1 profile: show as read-only with "Change" link
-                  - 2+ profiles: dropdown to pick which GSTIN this
-                    order's invoice goes against. ID is sent to
-                    placeOrder and snapshotted on MasterOrder so
-                    tax-document.service prefers it over the global
-                    default. */}
-            <div className="mb-5">
-              <div className="text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2">
-                Tax invoice
-              </div>
-              {taxProfiles.length === 0 ? (
-                <div className="flex items-start justify-between gap-3 p-3 border border-dashed border-ink-300 rounded-lg bg-ink-50">
-                  <div className="min-w-0">
-                    <div className="text-body font-medium text-ink-900">
-                      Personal (B2C) invoice
-                    </div>
-                    <div className="text-caption text-ink-600">
-                      Buying for business? Add your GSTIN to get a B2B tax invoice.
-                    </div>
-                  </div>
-                  <Link
-                    href="/account/tax-profiles"
-                    className="text-caption font-semibold text-ink-900 underline shrink-0"
-                  >
-                    Add GSTIN
-                  </Link>
-                </div>
-              ) : taxProfiles.length === 1 && defaultTaxProfile ? (
-                <div className="flex items-start justify-between gap-3 p-3 border border-ink-200 rounded-lg bg-white">
-                  <div className="min-w-0">
-                    <div className="text-body font-semibold text-ink-900 truncate">
-                      {defaultTaxProfile.legalName}
-                    </div>
-                    <div
-                      className="text-caption text-ink-600 truncate"
-                      style={{ fontFamily: 'var(--font-mono, monospace)' }}
-                    >
-                      GSTIN: {defaultTaxProfile.gstin}
-                    </div>
-                    <div className="text-caption text-ink-500 mt-1">
-                      Invoice issued as B2B.
-                    </div>
-                  </div>
-                  <Link
-                    href="/account/tax-profiles"
-                    className="text-caption font-semibold text-ink-900 underline shrink-0"
-                  >
-                    Change
-                  </Link>
-                </div>
-              ) : (
-                <div className="p-3 border border-ink-200 rounded-lg bg-white">
-                  <label className="text-caption text-ink-600 block mb-1">
-                    Pick a GSTIN for this order
-                  </label>
-                  <select
-                    value={selectedTaxProfileId ?? ''}
-                    onChange={(e) =>
-                      setSelectedTaxProfileId(e.target.value || null)
-                    }
-                    className="w-full border border-ink-300 rounded p-2 text-body"
-                  >
-                    {taxProfiles.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.legalName} — {p.gstin}
-                        {p.isDefault ? ' (default)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                  {defaultTaxProfile && (
-                    <div className="mt-2 text-caption text-ink-500">
-                      Invoice issued as B2B to{' '}
-                      <span className="font-medium text-ink-700">
-                        {defaultTaxProfile.legalName}
+            {/* Wallet apply — grouped WITH the Payment section (a wallet is a
+                payment source). Server-side debit is handled at place-order. */}
+            {walletBalanceInPaise > 0 && (
+              <div className="border border-ink-200 rounded-2xl p-4 mb-5 bg-accent-soft/40">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={walletApplied}
+                    onChange={(e) => setWalletApplied(e.target.checked)}
+                    className="mt-1 size-4 rounded accent-ink-900"
+                  />
+                  <div className="flex-1">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-body font-semibold text-ink-900">
+                        Use wallet balance
                       </span>
-                      .
+                      <span className="text-body font-semibold text-accent-dark tabular">
+                        ₹{walletBalanceInRupees.toLocaleString('en-IN', {
+                          minimumFractionDigits: 0,
+                          maximumFractionDigits: 2,
+                        })}
+                      </span>
                     </div>
-                  )}
-                  <Link
-                    href="/account/tax-profiles"
-                    className="mt-2 inline-block text-caption text-ink-700 underline"
-                  >
-                    Manage profiles
-                  </Link>
-                </div>
-              )}
-            </div>
+                    <p className="text-caption text-ink-600 mt-0.5">
+                      {walletApplied
+                        ? `₹${walletApplyAmount.toLocaleString('en-IN')} will be deducted from your wallet.`
+                        : 'Pay any portion from your Sportsmart wallet.'}
+                    </p>
+                  </div>
+                </label>
+              </div>
+            )}
+
+            {/* Phase 258 — Tax invoice (GSTIN / B2C) picker removed from
+                checkout per product decision. Orders default to a B2C invoice;
+                B2B GSTIN profiles are managed under Account → Tax profiles. */}
 
             {/* Shipping options (v1) */}
             {shippingOptions.length > 0 && (
@@ -1571,38 +1568,6 @@ export default function CheckoutPage() {
                 </>
               )}
             </div>
-
-            {/* Wallet apply (UI scaffold — server-side debit lands in Phase 7) */}
-            {walletBalanceInPaise > 0 && (
-              <div className="border border-ink-200 rounded-2xl p-4 mb-4 bg-accent-soft/40">
-                <label className="flex items-start gap-3 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={walletApplied}
-                    onChange={(e) => setWalletApplied(e.target.checked)}
-                    className="mt-1 size-4 rounded accent-ink-900"
-                  />
-                  <div className="flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-body font-semibold text-ink-900">
-                        Use wallet balance
-                      </span>
-                      <span className="text-body font-semibold text-accent-dark tabular">
-                        ₹{walletBalanceInRupees.toLocaleString('en-IN', {
-                          minimumFractionDigits: 0,
-                          maximumFractionDigits: 2,
-                        })}
-                      </span>
-                    </div>
-                    <p className="text-caption text-ink-600 mt-0.5">
-                      {walletApplied
-                        ? `₹${walletApplyAmount.toLocaleString('en-IN')} will be deducted from your wallet.`
-                        : 'Pay any portion from your Sportsmart wallet.'}
-                    </p>
-                  </div>
-                </label>
-              </div>
-            )}
 
             {/* Totals */}
             <div className="space-y-2 text-body pb-4 border-b border-ink-200">
@@ -1751,12 +1716,14 @@ export default function CheckoutPage() {
               >
                 {placing && <Loader2 className="size-4 animate-spin" />}
                 {placing
-                  ? 'Placing order…'
+                  ? (paymentMethod === 'ONLINE' ? 'Starting payment…' : 'Placing order…')
                   : !checkoutData.allServiceable
                     ? 'Remove unserviceable items first'
                     : (
                       <>
-                        Place order (COD)
+                        {paymentMethod === 'ONLINE'
+                          ? `Pay ${formatPrice(payable)} online`
+                          : 'Place order (COD)'}
                         <ArrowRight className="size-4" />
                       </>
                     )}

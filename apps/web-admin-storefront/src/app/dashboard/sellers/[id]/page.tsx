@@ -171,8 +171,13 @@ export default function SellerDetailPage() {
   const [loadingSeller, setLoadingSeller] = useState(true);
   const [loadingCommission, setLoadingCommission] = useState(true);
   const [notFound, setNotFound] = useState(false);
+  // Phase 254 — manual PAN / GSTIN verification from this screen.
+  const [verifying, setVerifying] = useState<null | 'pan' | 'gst'>(null);
+  const [taxMsg, setTaxMsg] = useState<
+    { kind: 'ok' | 'err'; text: string } | null
+  >(null);
 
-  useEffect(() => {
+  const loadSeller = () =>
     apiClient<Seller>(`/admin/sellers/${id}`)
       .then((res) => {
         if (res.data) setSeller(res.data);
@@ -180,6 +185,9 @@ export default function SellerDetailPage() {
       })
       .catch(() => setNotFound(true))
       .finally(() => setLoadingSeller(false));
+
+  useEffect(() => {
+    void loadSeller();
 
     apiClient<CommissionResponse>(
       `/admin/commission?sellerId=${encodeURIComponent(id)}&limit=100`,
@@ -189,7 +197,45 @@ export default function SellerDetailPage() {
       })
       .catch((err) => console.warn(err))
       .finally(() => setLoadingCommission(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  const verifyTaxId = async (which: 'pan' | 'gst') => {
+    if (verifying) return;
+    const label = which === 'pan' ? 'PAN' : 'GSTIN';
+    const ok = window.confirm(
+      `Confirm you have verified this seller's ${label} on the official portal.\n\n` +
+        (which === 'pan'
+          ? 'This drops their §194-O TDS from the 5% no-PAN penalty rate to the configured rate (e.g. 1%).'
+          : 'This marks the GSTIN as verified for tax invoicing.'),
+    );
+    if (!ok) return;
+    setVerifying(which);
+    setTaxMsg(null);
+    try {
+      const res = await apiClient(
+        `/admin/sellers/${id}/${
+          which === 'pan' ? 'verify-pan' : 'verify-gstin'
+        }`,
+        { method: 'POST', body: JSON.stringify({}) },
+      );
+      if ((res as { success?: boolean })?.success === false) {
+        throw new Error(
+          (res as { message?: string })?.message ?? 'Verification failed',
+        );
+      }
+      setTaxMsg({ kind: 'ok', text: `${label} verified.` });
+      await loadSeller();
+    } catch (err) {
+      setTaxMsg({
+        kind: 'err',
+        text:
+          (err as Error)?.message ?? `${label} verification failed`,
+      });
+    } finally {
+      setVerifying(null);
+    }
+  };
 
   const stats = useMemo(() => {
     const records = commission?.records ?? [];
@@ -377,6 +423,74 @@ export default function SellerDetailPage() {
             />
           )}
         </div>
+        {((seller.panNumber && !seller.panVerified) ||
+          (seller.gstin && !seller.isGstVerified)) && (
+          <div
+            style={{
+              display: 'flex',
+              gap: 10,
+              marginTop: 14,
+              flexWrap: 'wrap',
+              alignItems: 'center',
+            }}
+          >
+            {seller.panNumber && !seller.panVerified && (
+              <button
+                type="button"
+                onClick={() => void verifyTaxId('pan')}
+                disabled={verifying !== null}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 6,
+                  border: '1px solid #047857',
+                  background: verifying === 'pan' ? '#9CA3AF' : '#059669',
+                  color: '#fff',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: verifying ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {verifying === 'pan' ? 'Verifying…' : 'Verify PAN'}
+              </button>
+            )}
+            {seller.gstin && !seller.isGstVerified && (
+              <button
+                type="button"
+                onClick={() => void verifyTaxId('gst')}
+                disabled={verifying !== null}
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 6,
+                  border: '1px solid #1D4ED8',
+                  background: verifying === 'gst' ? '#9CA3AF' : '#2563EB',
+                  color: '#fff',
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: verifying ? 'not-allowed' : 'pointer',
+                }}
+              >
+                {verifying === 'gst' ? 'Verifying…' : 'Verify GSTIN'}
+              </button>
+            )}
+            <span style={{ fontSize: 12, color: '#6B7280' }}>
+              Confirms you checked the ID on the official portal. PAN
+              verification is what drops §194-O TDS from 5% to the configured
+              rate.
+            </span>
+          </div>
+        )}
+        {taxMsg && (
+          <p
+            style={{
+              marginTop: 10,
+              fontSize: 13,
+              fontWeight: 600,
+              color: taxMsg.kind === 'ok' ? '#047857' : '#B91C1C',
+            }}
+          >
+            {taxMsg.text}
+          </p>
+        )}
         {seller.gstVerificationNotes && (
           <p style={{ marginTop: 12, padding: 10, background: '#f9fafb', border: '1px solid #e5e7eb', borderRadius: 6, fontSize: 13, color: '#374151' }}>
             <strong style={{ color: '#111827' }}>Verification notes:</strong> {seller.gstVerificationNotes}

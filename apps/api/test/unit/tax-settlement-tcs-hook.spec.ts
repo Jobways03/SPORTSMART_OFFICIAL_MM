@@ -44,32 +44,40 @@ function makeService(): {
     computeForSeller: jest.fn(),
     markCollected: jest.fn(),
   };
-  const service = new SettlementTcsHookService(prisma as any, tcs as any);
+  // Phase 252 — TCS slice now reads the configured base off the settlement;
+  // default base = GST (the commission-GST amount, "TCS on GST").
+  const taxConfig = {
+    getSettlementTaxConfig: jest.fn().mockResolvedValue({
+      gst: { rateBps: 1800, baseType: 'COMMISSION' },
+      tcs: { rateBps: 100, baseType: 'GST' },
+      tds: { rateBps: 100, baseType: 'COMMISSION' },
+    }),
+  };
+  const service = new SettlementTcsHookService(
+    prisma as any,
+    tcs as any,
+    taxConfig as any,
+  );
   return { service, prisma, tcs };
 }
 
 /**
- * Wire commissionRecord + taxDocument so computeSettlementTcs (the shipped
- * per-settlement slice) returns a deterministic taxable base per settlement.
- * `taxableBySettlement` maps a settlementId to its tax-invoice taxable value
- * (ex-GST, in paise); the per-settlement TCS is then rate × that value.
+ * Phase 252 — wire sellerSettlement.findUnique so the per-settlement TCS slice
+ * (now base × rate on the configured settlement column — default GST) returns a
+ * deterministic base per settlement. `baseBySettlement` maps a settlementId to
+ * the commission-GST amount (paise); the per-settlement TCS is rate × that.
  */
 function mockPerSettlementTaxable(
   prisma: MockPrisma,
-  taxableBySettlement: Record<string, bigint>,
+  baseBySettlement: Record<string, bigint>,
 ): void {
-  prisma.commissionRecord.findMany.mockImplementation(
-    async ({ where }: any) => [{ masterOrderId: `mo-${where.settlementId}` }],
+  prisma.sellerSettlement.findUnique.mockImplementation(
+    async ({ where }: any) => ({
+      totalPlatformMarginInPaise: 0n,
+      totalPlatformAmountInPaise: 0n,
+      totalCommissionGstInPaise: baseBySettlement[where.id] ?? 0n,
+    }),
   );
-  prisma.taxDocument.findMany.mockImplementation(async ({ where }: any) => {
-    const settlementId = String(where.masterOrderId.in[0]).replace(/^mo-/, '');
-    return [
-      {
-        documentType: 'TAX_INVOICE',
-        taxableAmountInPaise: taxableBySettlement[settlementId] ?? 0n,
-      },
-    ];
-  });
 }
 
 describe('SettlementTcsHookService.applyToCycleOnApprove', () => {

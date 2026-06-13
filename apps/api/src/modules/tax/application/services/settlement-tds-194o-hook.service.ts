@@ -25,6 +25,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { Tds194OService } from './tds-194o.service';
+import { TaxConfigService } from './tax-config.service';
 
 export interface ApplyToCycleResult {
   cycleId: string;
@@ -44,6 +45,9 @@ export class SettlementTds194OHookService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tds: Tds194OService,
+    // Phase 252 — per-settlement TDS slice uses the configured base (commission
+    // vs product) so it reconciles with the quarterly Form-26Q aggregate.
+    private readonly taxConfig: TaxConfigService,
   ) {}
 
   /**
@@ -166,14 +170,50 @@ export class SettlementTds194OHookService {
   }
 
   /**
+   * Phase 253 — reverse the §194-O TDS ledgers stamped on a cycle's settlements
+   * when an APPROVED (unpaid) cycle is rejected, so a fresh cycle recomputes
+   * cleanly. The ledger is a quarterly Form-26Q aggregate; reversing it assumes
+   * this cycle is the only one in the quarter (the redo flow). Best-effort.
+   */
+  async reverseCycleOnCancel(
+    cycleId: string,
+    reversedBy: string,
+    reason: string,
+  ): Promise<number> {
+    const settlements = await this.prisma.sellerSettlement.findMany({
+      where: { cycleId, tdsLedgerId: { not: null } },
+      select: { tdsLedgerId: true },
+    });
+    const ledgerIds = [
+      ...new Set(
+        settlements
+          .map((s) => s.tdsLedgerId)
+          .filter((x): x is string => !!x),
+      ),
+    ];
+    let reversed = 0;
+    for (const ledgerId of ledgerIds) {
+      try {
+        await this.tds.reverse({
+          ledgerId,
+          reversedBy,
+          reason: `Cycle ${cycleId} rejected: ${reason}`,
+        });
+        reversed++;
+      } catch (e) {
+        this.logger.warn(
+          `TDS ledger ${ledgerId} reverse failed: ${(e as Error).message}`,
+        );
+      }
+    }
+    return reversed;
+  }
+
+  /**
    * TDS attributable to a SINGLE settlement = rate × this settlement's own
-   * net gross sale (totalPlatformAmountInPaise incl GST, less its own
-   * negative refund/clawback adjustments, clamped at zero). This is the
-   * amount deducted from THIS payout — distinct from the quarterly
-   * Section194OTdsLedger.tdsInPaise (deposited once for the whole quarter
-   * via Form 26Q). Uses the same gross + refund basis as the quarterly
-   * ledger (tds-194o.service.ts computeForSeller) so per-settlement amounts
-   * reconcile to it. Parallels SettlementTcsHookService.computeSettlementTcs.
+   * configured base (less its own negative refund/clawback adjustments,
+   * clamped at zero). This is the amount deducted from THIS payout — distinct
+   * from the quarterly Section194OTdsLedger.tdsInPaise (Form 26Q).
    */
   private async computeSettlementTds(
     settlementId: string,
@@ -183,20 +223,28 @@ export class SettlementTds194OHookService {
       where: { id: settlementId },
       select: {
         totalPlatformAmountInPaise: true,
+        totalPlatformMarginInPaise: true,
         adjustments: { select: { amountInPaise: true } },
       },
     });
     if (!settlement) return 0n;
 
+    // Phase 252 — use the CONFIGURED base column (same as the quarterly
+    // aggregate) so the slice reconciles to the Form-26Q ledger.
+    const tdsCfg = (await this.taxConfig.getSettlementTaxConfig()).tds;
+    const baseInPaise =
+      tdsCfg.baseType === 'COMMISSION'
+        ? settlement.totalPlatformMarginInPaise
+        : settlement.totalPlatformAmountInPaise;
+
     // Negative adjustments = refunds / clawbacks; sum their magnitudes as
     // the refund reversal, matching the quarterly aggregation. Positive
-    // adjustments are already inside totalPlatformAmountInPaise.
+    // adjustments are already inside the base column.
     let refundReversalInPaise = 0n;
     for (const adj of settlement.adjustments) {
       if (adj.amountInPaise < 0n) refundReversalInPaise += -adj.amountInPaise;
     }
-    const netSaleInPaise =
-      settlement.totalPlatformAmountInPaise - refundReversalInPaise;
+    const netSaleInPaise = baseInPaise - refundReversalInPaise;
     if (netSaleInPaise <= 0n) return 0n;
     // rate in basis points (100 = 1%); round half-up — same as the
     // tds-194o-calculator's mulBpsRoundHalfAway for positive values and the
@@ -343,11 +391,22 @@ export class SettlementTds194OHookService {
   ): Promise<bigint> {
     const s = await this.prisma.franchiseSettlement.findUnique({
       where: { id: settlementId },
-      select: { totalOnlineAmount: true, reversalAmount: true },
+      select: {
+        totalOnlineAmount: true,
+        totalOnlineCommission: true,
+        reversalAmount: true,
+      },
     });
     if (!s) return 0n;
+    // Phase 252 — configured base column (commission vs product), matching the
+    // quarterly franchise aggregate.
+    const tdsCfg = (await this.taxConfig.getSettlementTaxConfig()).tds;
+    const baseDecimal =
+      tdsCfg.baseType === 'COMMISSION'
+        ? s.totalOnlineCommission
+        : s.totalOnlineAmount;
     const netSaleInPaise =
-      BigInt(s.totalOnlineAmount.mul(100).toFixed(0)) -
+      BigInt(baseDecimal.mul(100).toFixed(0)) -
       BigInt(s.reversalAmount.mul(100).toFixed(0));
     if (netSaleInPaise <= 0n) return 0n;
     return (netSaleInPaise * BigInt(rateBps) + 5000n) / 10000n;

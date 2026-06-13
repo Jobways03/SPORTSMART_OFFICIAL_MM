@@ -39,6 +39,7 @@ import {
   TAX_PDF_STORAGE_PROVIDER,
   type TaxPdfStorageProvider,
 } from '../../infrastructure/pdf/tax-pdf-storage.provider';
+import { HtmlToPdfService } from '../../infrastructure/pdf/html-to-pdf.service';
 import { TaxModeService } from './tax-mode.service';
 
 export class PdfDocumentNotReadyError extends Error {
@@ -71,7 +72,54 @@ export class TaxDocumentPdfService {
     // Phase 23 — drives the DRAFT banner suppression once CA signs off
     // and the system flips to STRICT mode.
     private readonly taxMode: TaxModeService,
+    // Real HTML→PDF renderer (headless Chromium) for the combined
+    // customer-facing invoice download.
+    private readonly htmlToPdf: HtmlToPdfService,
   ) {}
+
+  /**
+   * Build ONE PDF containing every active tax invoice for a master order —
+   * each invoice on its own page. Multi-seller orders produce one invoice per
+   * seller (different GSTINs ⇒ legally separate invoices that GST forbids
+   * merging), so this bundles them into a single downloadable file for the
+   * customer without merging the invoices themselves.
+   *
+   * Returns null when the order has no renderable invoice yet (so the caller
+   * can 404 cleanly). Ownership is the CALLER's responsibility — pass a
+   * masterOrderId already verified to belong to the requester.
+   */
+  async buildOrderInvoicesPdf(
+    masterOrderId: string,
+  ): Promise<{ buffer: Buffer; count: number; orderNumber: string } | null> {
+    const docs = await this.prisma.taxDocument.findMany({
+      where: {
+        masterOrderId,
+        documentType: { in: ['TAX_INVOICE', 'INVOICE_CUM_BILL_OF_SUPPLY'] },
+        status: { notIn: ['VOIDED_DRAFT', 'SUPERSEDED'] },
+      },
+      include: { lines: { orderBy: { lineNumber: 'asc' } } },
+      // Stable, human-sensible order: oldest invoice first.
+      orderBy: { generatedAt: 'asc' },
+    });
+    if (docs.length === 0) return null;
+
+    const order = await this.prisma.masterOrder.findUnique({
+      where: { id: masterOrderId },
+      select: { orderNumber: true },
+    });
+
+    const mode = await this.taxMode.getMode();
+    const htmls = docs.map((doc) =>
+      renderHtmlForDocument({ mode, document: doc, lines: doc.lines } as TemplateInput),
+    );
+    const combined = combineInvoiceHtml(htmls);
+    const buffer = await this.htmlToPdf.render(combined);
+    return {
+      buffer,
+      count: docs.length,
+      orderNumber: order?.orderNumber ?? masterOrderId,
+    };
+  }
 
   /**
    * Render + upload the PDF for one document. Returns the updated
@@ -251,4 +299,44 @@ export class TaxDocumentPdfService {
     const safeNumber = doc.documentNumber.replace(/[/\\]/g, '-');
     return `${doc.financialYear}/${supplier}/${doc.documentType}/${safeNumber}.html`;
   }
+}
+
+/**
+ * Merge several full invoice HTML documents into ONE document, each invoice on
+ * its own page. renderHtmlForDocument emits a complete, self-contained doc
+ * (`<!DOCTYPE html>…<style>…</style>…<body>…</body>…`); invoices all share the
+ * same template stylesheet, so we keep ONE copy of the styles (from the first)
+ * and stitch each document's <body> inner HTML into a page-break section. This
+ * lets a single headless-Chromium render produce a clean multi-page PDF without
+ * a separate PDF-merge dependency.
+ */
+function combineInvoiceHtml(htmls: string[]): string {
+  if (htmls.length === 1) return htmls[0]!;
+
+  const styleMatch = htmls[0]!.match(/<style>([\s\S]*?)<\/style>/i);
+  const styles = styleMatch ? styleMatch[1] : '';
+
+  const sections = htmls
+    .map((html, i) => {
+      const bodyMatch = html.match(/<body[^>]*>([\s\S]*?)<\/body>/i);
+      const inner = bodyMatch ? bodyMatch[1] : html;
+      const last = i === htmls.length - 1;
+      // Each invoice on its own page; the last one mustn't force a trailing
+      // blank page.
+      return `<section style="${last ? '' : 'page-break-after: always; break-after: page;'}">${inner}</section>`;
+    })
+    .join('\n');
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <style>${styles}
+  /* Combined-invoice page breaks (one invoice per page). */
+  section { break-after: page; page-break-after: always; }
+  section:last-child { break-after: auto; page-break-after: auto; }
+  </style>
+</head>
+<body>${sections}</body>
+</html>`;
 }

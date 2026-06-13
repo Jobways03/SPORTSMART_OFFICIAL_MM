@@ -234,6 +234,14 @@ model SellerSettlement {
   frozenAt          DateTime? @map("frozen_at")
   frozenByAdminId   String?   @map("frozen_by_admin_id")
   paidAmountInPaise BigInt    @default(0) @map("paid_amount_in_paise")
+  // Dynamic settlement charge rules (Phase 251). When chargeRulesApplied is
+  // true (cycles created after the rule engine shipped), the net payout is
+  // gross − dynamicChargeTotalInPaise (the sum of the rule-wise charge lines
+  // below) instead of the legacy tcs+tds+commissionGst columns. Older cycles
+  // keep chargeRulesApplied=false and the legacy formula, so historical
+  // payouts never shift.
+  dynamicChargeTotalInPaise BigInt  @default(0) @map("dynamic_charge_total_in_paise")
+  chargeRulesApplied        Boolean @default(false) @map("charge_rules_applied")
   createdAt    DateTime               @default(now()) @map("created_at")
   updatedAt    DateTime               @updatedAt @map("updated_at")
 
@@ -245,6 +253,8 @@ model SellerSettlement {
   paidByAdmin       Admin?                  @relation("SellerSettlementPaidBy", fields: [paidByAdminId], references: [id], onDelete: SetNull)
   // Phase 12 (2026-05-16) — back-relation for the SettlementAdjustment FK.
   adjustments       SettlementAdjustment[]
+  // Phase 251 — frozen rule-wise charge breakup for this settlement.
+  chargeLines       SettlementChargeLine[]
   // Phase 151 — the payout batch lock (duplicate-batch guard).
   payoutBatch       PayoutBatch?            @relation(fields: [payoutBatchId], references: [id], onDelete: SetNull)
 
@@ -322,4 +332,58 @@ model SettlementAdjustment {
   @@index([adjustmentType])
   @@index([status])
   @@map("settlement_adjustments")
+}
+
+/// Admin-configurable settlement tax/charge rule (dynamic charges).
+/// A rule is `rateBps` applied to a base: PRICE_OF_GOODS_SOLD, COMMISSION, or
+/// another rule (baseRuleId). Managed by a super-admin. NOTE: this is the rule
+/// master only — the settlement calculation/ledger that consumes these rules is
+/// a later phase, so creating rules here does not yet affect any payout.
+model SettlementChargeRule {
+  id            String    @id @default(uuid())
+  name          String
+  /// Rate in basis points (1% = 100). Non-negative.
+  rateBps       Int       @map("rate_bps")
+  /// PRICE_OF_GOODS_SOLD | COMMISSION | RULE
+  baseType      String    @map("base_type")
+  /// Set only when baseType = RULE — the rule this one is levied on.
+  baseRuleId    String?   @map("base_rule_id")
+  status        String    @default("ACTIVE") // ACTIVE | INACTIVE
+  effectiveFrom DateTime  @default(now()) @map("effective_from")
+  effectiveTo   DateTime? @map("effective_to")
+  priority      Int       @default(0)
+  createdBy     String?   @map("created_by")
+  updatedBy     String?   @map("updated_by")
+  version       Int       @default(0)
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  @@index([status, effectiveFrom])
+  @@index([baseRuleId])
+  @@map("settlement_charge_rules")
+}
+
+/// Frozen per-settlement charge breakup (Phase 251). One row per rule applied
+/// to a SellerSettlement at cycle creation. Snapshots the rule name + rate +
+/// base amount + computed amount so the breakup (and net payout) never change
+/// when a rule is later edited — historical settlements stay immutable.
+model SettlementChargeLine {
+  id                String   @id @default(uuid())
+  settlementId      String   @map("settlement_id")
+  /// The rule that produced this line (kept for traceability; nullable so a
+  /// later rule delete doesn't cascade-destroy history).
+  ruleId            String?  @map("rule_id")
+  ruleName          String   @map("rule_name")
+  baseType          String   @map("base_type")
+  baseRuleId        String?  @map("base_rule_id")
+  baseAmountInPaise BigInt   @map("base_amount_in_paise")
+  rateBps           Int      @map("rate_bps")
+  amountInPaise     BigInt   @map("amount_in_paise")
+  priority          Int      @default(0)
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  settlement SellerSettlement @relation(fields: [settlementId], references: [id], onDelete: Cascade)
+
+  @@index([settlementId])
+  @@map("settlement_charge_lines")
 }

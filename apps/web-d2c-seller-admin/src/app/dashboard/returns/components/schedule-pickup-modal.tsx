@@ -29,6 +29,15 @@ export default function SchedulePickupModal({
       setError('Pickup date/time is required');
       return;
     }
+    const scheduledTime = new Date(scheduledAt).getTime();
+    if (Number.isNaN(scheduledTime)) {
+      setError('Enter a valid pickup date/time');
+      return;
+    }
+    if (scheduledTime <= Date.now()) {
+      setError('Pickup date/time must be in the future');
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {

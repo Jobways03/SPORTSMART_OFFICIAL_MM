@@ -45,6 +45,7 @@ import { ReturnRiskScorerService } from './application/services/return-risk-scor
 import { ReplacementOrderService } from './application/services/replacement-order.service';
 import { ReturnsPublicFacade } from './application/facades/returns-public.facade';
 import { ReturnNotificationHandler } from './application/event-handlers/return-notification.handler';
+import { ReturnReverseBookedHandler } from './application/event-handlers/return-reverse-booked.handler';
 import { CustomerReturnsController } from './presentation/controllers/customer-returns.controller';
 import { AdminReturnsController } from './presentation/controllers/admin-returns.controller';
 import { SellerReturnsController } from './presentation/controllers/seller-returns.controller';
@@ -99,6 +100,7 @@ import { MoneyModule } from '../../core/money/money.module';
     ReplacementOrderService,
     ReturnsPublicFacade,
     ReturnNotificationHandler,
+    ReturnReverseBookedHandler,
     MediaStorageAdapter,
     RazorpayRefundWebhookService,
     RefundStatusPollerCron,

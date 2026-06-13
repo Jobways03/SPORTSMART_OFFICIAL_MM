@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { FranchiseListItem, adminFranchisesService } from '@/services/admin-franchises.service';
 import { ApiError } from '@/lib/api-client';
+import { validateText } from '@/lib/validators';
 import '../../sellers/components/modal.css';
 
 interface Props {
@@ -23,6 +24,24 @@ export default function SendMessageModal({ franchise, onClose, onSuccess }: Prop
   const handleSubmit = async () => {
     if (!subject.trim() || !message.trim()) return;
     if (subjectError || messageError) return;
+    const subjectValidation = validateText(subject, {
+      min: 3,
+      max: 200,
+      label: 'Subject',
+    });
+    if (subjectValidation) {
+      setError(subjectValidation);
+      return;
+    }
+    const messageValidation = validateText(message, {
+      min: 5,
+      max: 5000,
+      label: 'Message',
+    });
+    if (messageValidation) {
+      setError(messageValidation);
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {

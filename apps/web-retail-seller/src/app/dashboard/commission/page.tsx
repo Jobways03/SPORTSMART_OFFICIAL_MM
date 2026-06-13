@@ -70,9 +70,31 @@ interface SettlementRecord {
   sgstOnCommissionInPaise?: string;
   igstOnCommissionInPaise?: string;
   totalCommissionGstInPaise?: string;
+  // Phase 251 — dynamic settlement charge rules. When chargeRulesApplied is
+  // true the net deducts dynamicChargeTotalInPaise (the sum of chargeLines)
+  // instead of the legacy commission-GST/TCS/TDS above. chargeLines is the
+  // frozen rule-wise breakup (e.g. STT / ATT / UHS) applied at cycle creation,
+  // so it changes only for cycles created after a rule edit.
+  dynamicChargeTotalInPaise?: string;
+  chargeRulesApplied?: boolean;
+  chargeLines?: SettlementChargeLineRecord[];
+  // Phase 251 — net wired (paise), computed once by the backend
+  // (getSellerSettlementHistory). The breakdown reads this instead of
+  // re-deriving the formula.
+  netPayableInPaise?: string;
   // Commission tax invoice (SAC 9985) issued at cycle approval. Present ⇒
   // the seller can download it from the payout breakdown.
   commissionInvoiceNumber?: string | null;
+}
+
+// Phase 251 — one frozen dynamic charge-rule line captured at cycle creation.
+interface SettlementChargeLineRecord {
+  id: string;
+  ruleName: string;
+  baseType: string;
+  rateBps: number;
+  baseAmountInPaise: string;
+  amountInPaise: string;
 }
 
 interface SettlementResponse {
@@ -210,26 +232,11 @@ export default function SellerCommissionPage() {
   // SettlementTds194OHookService.computeNetPayoutInPaise):
   //   totalSettlement \u2212 tcsDeducted \u2212 tdsDeducted \u2212 totalCommissionGst
   // Returns the result as a BigInt-paise string for fmtPaise().
-  const computeNetPayoutPaise = (s: SettlementRecord): string => {
-    const ZERO = BigInt(0);
-    // The legacy Decimal columns come over as numbers; convert through
-    // rupees \u2192 paise (\u00D7 100, rounded). Future PR can switch to the
-    // BigInt paise sibling when the API returns it directly.
-    const settlementPaise = BigInt(
-      Math.round(Number(s.totalSettlementAmount) * 100),
-    );
-    let result =
-      settlementPaise -
-      (s.tcsDeductedInPaise ? BigInt(s.tcsDeductedInPaise) : ZERO) -
-      (s.tdsDeductedInPaise ? BigInt(s.tdsDeductedInPaise) : ZERO) -
-      (s.totalCommissionGstInPaise
-        ? BigInt(s.totalCommissionGstInPaise)
-        : ZERO);
-    // Clamp at zero \u2014 a misconfigured deduction shouldn't render as
-    // a negative payout in the UI. The backend helper does the same.
-    if (result < ZERO) result = ZERO;
-    return result.toString();
-  };
+  // Phase 251 \u2014 single source of truth: the backend computes the net once
+  // (getSellerSettlementHistory \u2192 netPayableInPaise, already clamped \u22650) and
+  // this just reads it, so the seller portal can't drift from what was wired.
+  const computeNetPayoutPaise = (s: SettlementRecord): string =>
+    String(s.netPayableInPaise ?? '0');
 
   const fmtDate = (d: string) =>
     new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
@@ -636,13 +643,24 @@ function SettlementBreakdown({
   fmtPaise: (paise: string | undefined | null) => string;
 }) {
   const commissionGstSplit = settlement.commissionGstSplitType;
+  // Phase 251 — when dynamic charge rules drove this settlement, the deduction
+  // story is the rule-wise breakup (e.g. STT / ATT / UHS), NOT the legacy
+  // commission-GST/TCS/TDS. `useDynamicCharges` switches the breakdown so the
+  // seller sees exactly what was deducted (and it changes when the rules do).
+  const useDynamicCharges = !!settlement.chargeRulesApplied;
+  const dynamicLines = (settlement.chargeLines ?? []).filter(
+    (l) => BigInt(l.amountInPaise || '0') > BigInt(0),
+  );
   const hasCommissionGst =
+    !useDynamicCharges &&
     !!settlement.totalCommissionGstInPaise &&
     settlement.totalCommissionGstInPaise !== '0';
   const hasTcs =
+    !useDynamicCharges &&
     !!settlement.tcsDeductedInPaise &&
     settlement.tcsDeductedInPaise !== '0';
   const hasTds =
+    !useDynamicCharges &&
     !!settlement.tdsDeductedInPaise &&
     settlement.tdsDeductedInPaise !== '0';
 
@@ -702,8 +720,25 @@ function SettlementBreakdown({
               label="Settlement amount"
               value={fmt(Number(settlement.totalSettlementAmount))}
               emphasis
-              hint="Gross GMV − Commission. Before statutory deductions below."
+              hint="Gross GMV − Commission. Before the deductions below."
             />
+            {useDynamicCharges && (
+              <>
+                <BreakdownRow
+                  label="Settlement charges"
+                  value={`−${fmtPaise(settlement.dynamicChargeTotalInPaise)}`}
+                  valueColor="#dc2626"
+                  hint="Tax/charge rules applied to this settlement. Each line below is a configured rule; the set changes when an admin edits the rules."
+                />
+                {dynamicLines.map((l) => (
+                  <BreakdownSubRow
+                    key={l.id}
+                    label={`${l.ruleName} @ ${l.rateBps / 100}%`}
+                    value={`−${fmtPaise(l.amountInPaise)}`}
+                  />
+                ))}
+              </>
+            )}
             {hasCommissionGst && (
               <>
                 <BreakdownRow
@@ -769,7 +804,7 @@ function SettlementBreakdown({
             />
           </tbody>
         </table>
-        {!hasCommissionGst && !hasTcs && !hasTds && (
+        {!useDynamicCharges && !hasCommissionGst && !hasTcs && !hasTds && (
           <p style={{ marginTop: 12, fontSize: 12, color: '#6b7280', fontStyle: 'italic' }}>
             This settlement was created before statutory-deduction tracking was
             enabled. Net payout equals the settlement amount.
@@ -800,9 +835,19 @@ function SettlementBreakdown({
           Compliance notes
         </div>
         <ul style={{ margin: 0, paddingLeft: 16, lineHeight: 1.6 }}>
-          <li>TCS and TDS amounts are remitted to the government by the marketplace.</li>
-          <li>Reconcile TCS in your GSTR-2A/2B; reconcile TDS via Form 16A.</li>
-          <li>Commission GST is claimable as ITC.</li>
+          {useDynamicCharges ? (
+            <>
+              <li>Settlement charges are the tax/charge rules configured by the marketplace for this period.</li>
+              <li>Each charge above is applied to your settlement and deducted from the net payout.</li>
+              <li>The charges that apply can change for future settlement cycles when the rules are updated.</li>
+            </>
+          ) : (
+            <>
+              <li>TCS and TDS amounts are remitted to the government by the marketplace.</li>
+              <li>Reconcile TCS in your GSTR-2A/2B; reconcile TDS via Form 16A.</li>
+              <li>Commission GST is claimable as ITC.</li>
+            </>
+          )}
         </ul>
         {(settlement.status === 'APPROVED' ||
           settlement.status === 'PAID' ||

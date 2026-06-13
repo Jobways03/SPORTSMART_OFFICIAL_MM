@@ -72,20 +72,22 @@ export class AdminShipmentEvidenceController {
     const rows = await this.shipmentEvidence.listForSubOrder(subOrderId, {
       includeDeleted: false,
     });
-    const data = rows.map((r) => ({
-      id: r.id,
-      kind: r.kind,
-      capturedAt: r.capturedAt,
-      uploadedBy: r.uploadedBy,
-      uploadedByRole: r.uploadedByRole,
-      geoLat: r.geoLat,
-      geoLng: r.geoLng,
-      courierWaybill: r.courierWaybill,
-      signedByName: r.signedByName,
-      frozenAt: r.frozenAt,
-      file: r.file,
-      viewUrl: this.fileService.viewUrlFor(r.file),
-    }));
+    const data = await Promise.all(
+      rows.map(async (r) => ({
+        id: r.id,
+        kind: r.kind,
+        capturedAt: r.capturedAt,
+        uploadedBy: r.uploadedBy,
+        uploadedByRole: r.uploadedByRole,
+        geoLat: r.geoLat,
+        geoLng: r.geoLng,
+        courierWaybill: r.courierWaybill,
+        signedByName: r.signedByName,
+        frozenAt: r.frozenAt,
+        file: r.file,
+        viewUrl: await this.fileService.viewUrlForAsync(r.file),
+      })),
+    );
     return { success: true, message: 'Shipment evidence retrieved', data };
   }
 

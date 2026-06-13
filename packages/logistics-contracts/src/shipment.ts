@@ -147,6 +147,11 @@ export const CreateShipmentRequest = z.object({
   // Optional fulfilment mode hint — adapters use this to pick the
   // right partner product line. Defaults to MARKETPLACE.
   fulfilmentMode: FulfilmentMode.optional(),
+  // Forward (normal delivery) vs reverse (customer return pickup). Defaults to
+  // 'forward'. When 'reverse' the adapter books a reverse pickup (Delhivery
+  // RVP) instead of a forward shipment — `pickup` is the customer's address and
+  // `drop` is the seller/warehouse return address.
+  direction: z.enum(['forward', 'reverse']).optional(),
 }).superRefine((val, ctx) => {
   if (val.cod && val.codAmountPaise === undefined) {
     ctx.addIssue({

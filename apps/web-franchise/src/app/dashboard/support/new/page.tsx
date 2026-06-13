@@ -8,6 +8,7 @@ import {
   TicketCategory,
   TicketPriority,
 } from '@/services/support.service';
+import { validateText } from '@/lib/validators';
 
 const PRIORITIES: TicketPriority[] = ['LOW', 'NORMAL', 'HIGH', 'URGENT'];
 
@@ -28,8 +29,21 @@ export default function NewFranchiseTicketPage() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!subject.trim()) return setError('Subject is required');
-    if (!body.trim()) return setError('Please describe the issue');
+    // Field-level length checks so a near-empty subject/body can't be
+    // submitted. The textarea caps length at 5000; enforce a sensible
+    // minimum so agents get enough context to act on the ticket.
+    const subjectError = validateText(subject, {
+      min: 5,
+      max: 200,
+      label: 'Subject',
+    });
+    if (subjectError) return setError(subjectError);
+    const bodyError = validateText(body, {
+      min: 10,
+      max: 5000,
+      label: 'Description',
+    });
+    if (bodyError) return setError(bodyError);
     setSubmitting(true);
     try {
       const res = await franchiseSupportService.createTicket({

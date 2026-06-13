@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
+import { validateAmount, validateDateRange, validateText } from '@/lib/validators';
 
 /* ── Types ── */
 
@@ -76,6 +77,16 @@ interface CycleListResponse {
   pagination: { page: number; limit: number; total: number; totalPages: number };
 }
 
+// Phase 251 — one frozen dynamic charge-rule line captured at cycle creation.
+interface SettlementChargeLine {
+  id: string;
+  ruleName: string;
+  baseType: string;
+  rateBps: number;
+  baseAmountInPaise: string;
+  amountInPaise: string;
+}
+
 interface SellerSettlement {
   id: string;
   sellerId: string;
@@ -90,6 +101,16 @@ interface SellerSettlement {
   tcsDeductedInPaise?: string;
   tdsDeductedInPaise?: string;
   totalCommissionGstInPaise?: string;
+  // Snapshotted commission-GST rate (bps) for the breakdown's rate label.
+  commissionGstRateBps?: number;
+  // Phase 251 — dynamic charge rules. When chargeRulesApplied is true the net
+  // deducts dynamicChargeTotalInPaise (paise) instead of the legacy TCS/TDS/GST.
+  // chargeLines is the frozen rule-wise breakup (GST / TDS / TCS …).
+  dynamicChargeTotalInPaise?: string;
+  chargeRulesApplied?: boolean;
+  chargeLines?: SettlementChargeLine[];
+  // Phase 251 — net wired (paise), computed once by the backend (getCycleDetail).
+  netPayableInPaise?: string;
   status: string;
   paidAt: string | null;
   utrReference: string | null;
@@ -172,13 +193,20 @@ export default function AdminCommissionPage() {
 
   const submitAdjust = async () => {
     if (!historyFor) return;
-    const parsed = Number(adjustNewEarning);
-    if (isNaN(parsed)) {
-      setAdjustError('newAdminEarning must be a number');
+    // Signed adjustment — the new admin earning may be positive or negative.
+    const amountError = validateAmount(adjustNewEarning, {
+      min: -10_000_000,
+      max: 10_000_000,
+      label: 'New admin earning',
+    });
+    if (amountError) {
+      setAdjustError(amountError);
       return;
     }
-    if (!adjustReason.trim()) {
-      setAdjustError('Reason is required');
+    const parsed = Number(adjustNewEarning);
+    const reasonError = validateText(adjustReason, { min: 1, max: 500, label: 'Reason' });
+    if (reasonError) {
+      setAdjustError(reasonError);
       return;
     }
     setAdjustSaving(true);
@@ -344,6 +372,11 @@ export default function AdminCommissionPage() {
   /* ── Create cycle handler ── */
   const handleCreateCycle = async () => {
     if (!createStart || !createEnd) return;
+    const rangeError = validateDateRange(createStart, createEnd, { allowEqual: true });
+    if (rangeError) {
+      notify({ kind: 'error', message: rangeError });
+      return;
+    }
     setCreating(true);
     try {
       await apiClient('/admin/settlements/create-cycle', {
@@ -381,9 +414,44 @@ export default function AdminCommissionPage() {
     }
   };
 
+  /* ── Reject cycle handler ──
+   * Cancels a DRAFT/PREVIEWED or APPROVED (unpaid) cycle: releases its
+   * commission records back to the PENDING pool so a fresh cycle can be created
+   * for the same period, and (for an approved cycle) reverses the TCS/TDS
+   * ledgers. Marks the cycle + its settlements CANCELLED. Blocked once any
+   * settlement is paid. A reason is required (min 3 chars). */
+  const handleRejectCycle = async (cycleId: string) => {
+    const reason = window.prompt(
+      'Reject this cycle? Its commission records are released so you can recreate it; an approved cycle also has its TCS/TDS reversed. (Blocked if any settlement is already paid.) Enter a reason:',
+      'Rejected — recreating cycle',
+    );
+    if (reason === null) return; // cancelled the prompt
+    if (reason.trim().length < 3) {
+      window.alert('A reason of at least 3 characters is required to reject a cycle.');
+      return;
+    }
+    try {
+      await apiClient(`/admin/settlements/cycles/${cycleId}/cancel`, {
+        method: 'PATCH',
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+      fetchCycles(cyclePage);
+      if (cycleDetail?.id === cycleId) {
+        setCycleDetail(null);
+      }
+    } catch {
+      // error handled by apiClient
+    }
+  };
+
   /* ── Mark paid handler ── */
   const handleMarkPaid = async (settlementId: string) => {
     if (!utrInput.trim()) return;
+    const utrError = validateText(utrInput, { min: 6, max: 50, label: 'UTR reference' });
+    if (utrError) {
+      notify({ kind: 'error', message: utrError });
+      return;
+    }
     try {
       await apiClient(`/admin/settlements/${settlementId}/mark-paid`, {
         method: 'PATCH',
@@ -806,6 +874,12 @@ export default function AdminCommissionPage() {
                       Approve Cycle
                     </button>
                   )}
+                  {/* Reject is allowed for DRAFT/PREVIEWED and APPROVED (unpaid) cycles. */}
+                  {(cycleDetail.status === 'DRAFT' || cycleDetail.status === 'PREVIEWED' || cycleDetail.status === 'APPROVED') && (
+                    <button onClick={() => handleRejectCycle(cycleDetail.id)} style={{ ...filterBtnStyle, background: '#dc2626' }}>
+                      Reject Cycle
+                    </button>
+                  )}
                   <button onClick={() => setCycleDetail(null)} style={{ ...filterBtnStyle, background: '#fff', color: '#374151', border: '1px solid #d1d5db' }}>
                     Close
                   </button>
@@ -847,14 +921,41 @@ export default function AdminCommissionPage() {
                         <td style={tdNumStyle}>{fmt(Number(ss.totalPlatformAmount))}</td>
                         <td style={{ ...tdNumStyle, fontWeight: 600 }}>
                           {fmt(Number(ss.totalSettlementAmount))}
-                          {(Number(ss.tcsDeductedInPaise ?? 0) + Number(ss.tdsDeductedInPaise ?? 0) + Number(ss.totalCommissionGstInPaise ?? 0)) > 0 && (
+                          {(ss.chargeRulesApplied
+                            ? Number(ss.dynamicChargeTotalInPaise ?? 0)
+                            : Number(ss.tcsDeductedInPaise ?? 0) + Number(ss.tdsDeductedInPaise ?? 0) + Number(ss.totalCommissionGstInPaise ?? 0)) > 0 && (
                             <div
-                              title="Statutory deductions are remitted to the government on the seller's behalf (the seller reclaims them). The NET is what you wire to the seller's bank."
+                              title="Deductions are netted off the gross settlement. The NET is what is wired to the seller's bank."
                               style={{ fontSize: 10, fontWeight: 400, color: '#6b7280', marginTop: 3, lineHeight: 1.6 }}
                             >
-                              {Number(ss.totalCommissionGstInPaise ?? 0) > 0 && <div>− GST (18%) {fmt(Number(ss.totalCommissionGstInPaise) / 100)}</div>}
-                              {Number(ss.tcsDeductedInPaise ?? 0) > 0 && <div>− TCS (1%) {fmt(Number(ss.tcsDeductedInPaise) / 100)}</div>}
-                              {Number(ss.tdsDeductedInPaise ?? 0) > 0 && <div>− TDS {fmt(Number(ss.tdsDeductedInPaise) / 100)}</div>}
+                              {ss.chargeRulesApplied ? (
+                                // Phase 251 — settlement-charge total + rule-wise breakup
+                                // (GST / TDS / TCS …) frozen onto this settlement.
+                                <>
+                                  <div style={{ fontWeight: 600, color: '#374151' }}>
+                                    settlement charges {fmt(Number(ss.dynamicChargeTotalInPaise) / 100)}
+                                  </div>
+                                  {(ss.chargeLines ?? [])
+                                    .filter((l) => Number(l.amountInPaise) > 0)
+                                    .map((l) => (
+                                      <div key={l.id} style={{ paddingLeft: 10 }}>
+                                        − {l.ruleName} ({(l.rateBps / 100).toFixed(2).replace(/\.?0+$/, '')}%) {fmt(Number(l.amountInPaise) / 100)}
+                                      </div>
+                                    ))}
+                                </>
+                              ) : (
+                                <>
+                                  {Number(ss.totalCommissionGstInPaise ?? 0) > 0 && <div>− GST ({(ss.commissionGstRateBps ?? 1800) / 100}%) {fmt(Number(ss.totalCommissionGstInPaise) / 100)}</div>}
+                                  {Number(ss.tcsDeductedInPaise ?? 0) > 0 && <div>− TCS (1%) {fmt(Number(ss.tcsDeductedInPaise) / 100)}</div>}
+                                  {Number(ss.tdsDeductedInPaise ?? 0) > 0 && <div>− TDS {fmt(Number(ss.tdsDeductedInPaise) / 100)}</div>}
+                                  {/* TCS + TDS are computed at cycle approval — flag that on a Draft cycle so the GST-only breakdown isn't mistaken for the full picture. */}
+                                  {(cycleDetail.status === 'DRAFT' || cycleDetail.status === 'PREVIEWED') && (
+                                    <div style={{ fontStyle: 'italic', color: '#9ca3af', marginTop: 1 }}>
+                                      + TCS &amp; TDS added on approval
+                                    </div>
+                                  )}
+                                </>
+                              )}
                               <div style={{ fontWeight: 700, color: '#15803d', marginTop: 2 }}>
                                 net pay {fmt(sellerNet(ss))}
                               </div>
@@ -955,6 +1056,14 @@ export default function AdminCommissionPage() {
                                   style={{ fontSize: 11, padding: '4px 10px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
                                 >
                                   Approve
+                                </button>
+                              )}
+                              {(c.status === 'DRAFT' || c.status === 'PREVIEWED' || c.status === 'APPROVED') && (
+                                <button
+                                  onClick={() => handleRejectCycle(c.id)}
+                                  style={{ fontSize: 11, padding: '4px 10px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}
+                                >
+                                  Reject
                                 </button>
                               )}
                             </div>
@@ -1217,17 +1326,11 @@ function SummaryCard({
   );
 }
 
-// Net amount actually wired to a seller = gross settlement − TCS − TDS −
-// commission GST (the deductions are remitted to the government on the
-// seller's behalf and reclaimed by them).
+// Net amount actually wired to a seller (rupees). Phase 251 — single source of
+// truth: the backend computes the net once (getCycleDetail → netPayableInPaise)
+// and this just reads it, so the formula can't drift across UIs.
 function sellerNet(ss: SellerSettlement): number {
-  return (
-    Number(ss.totalSettlementAmount) -
-    (Number(ss.tcsDeductedInPaise ?? 0) +
-      Number(ss.tdsDeductedInPaise ?? 0) +
-      Number(ss.totalCommissionGstInPaise ?? 0)) /
-      100
-  );
+  return Number(ss.netPayableInPaise ?? 0) / 100;
 }
 function cycleNetPayout(cd: CycleDetail): number {
   return cd.sellerSettlements.reduce((sum, ss) => sum + sellerNet(ss), 0);

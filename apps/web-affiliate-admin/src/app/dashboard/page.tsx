@@ -2,6 +2,11 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { apiFetch, formatDate, formatINR } from '../../lib/api';
+import {
+  validateAmount,
+  validateFutureDate,
+  validateText,
+} from '../../lib/validators';
 
 interface Affiliate {
   id: string;
@@ -163,6 +168,11 @@ export default function ApplicationsPage() {
 
   const handleReject = async (affiliateId: string, reason: string) => {
     setActionError('');
+    const reasonErr = validateText(reason, { min: 1, max: 500, label: 'Reason' });
+    if (reasonErr) {
+      setActionError(reasonErr);
+      return;
+    }
     setActionId(affiliateId);
     try {
       await apiFetch(`/admin/affiliates/${affiliateId}/reject`, {
@@ -1132,7 +1142,14 @@ function StatusSection({
           />
           <div style={{ display: 'flex', gap: 8 }}>
             <button
-              onClick={() => callAction('suspend', { reason: reason.trim() })}
+              onClick={() => {
+                const reasonErr = validateText(reason, { min: 1, max: 500, label: 'Reason' });
+                if (reasonErr) {
+                  setErr(reasonErr);
+                  return;
+                }
+                callAction('suspend', { reason: reason.trim() });
+              }}
               disabled={busy || !reason.trim()}
               style={{
                 ...btnDanger,
@@ -1295,6 +1312,48 @@ function CouponEditor({
 
   const save = async () => {
     setErr('');
+
+    // Field-level validation before building the patch body.
+    if (discountKind !== 'NONE') {
+      const max = discountKind === 'PERCENT' ? 100 : 10_000_000;
+      const discountErr = validateAmount(discountValue, {
+        min: 0,
+        max,
+        decimals: discountKind === 'PERCENT' ? 2 : 0,
+        label: 'Discount value',
+      });
+      if (discountErr) {
+        setErr(discountErr);
+        return;
+      }
+    }
+    const expiryErr = validateFutureDate(expiresAt, { label: 'Expiry date' });
+    if (expiryErr) {
+      setErr(expiryErr);
+      return;
+    }
+    if (maxUses !== '') {
+      const maxUsesErr = validateAmount(maxUses, {
+        min: 0,
+        decimals: 0,
+        label: 'Max total uses',
+      });
+      if (maxUsesErr) {
+        setErr(maxUsesErr);
+        return;
+      }
+    }
+    if (minOrderValue !== '') {
+      const minOrderErr = validateAmount(minOrderValue, {
+        min: 0,
+        label: 'Minimum order value',
+      });
+      if (minOrderErr) {
+        setErr(minOrderErr);
+        return;
+      }
+    }
+
     setSaving(true);
     try {
       const body: any = { isActive };
@@ -1303,12 +1362,6 @@ function CouponEditor({
         body.customerDiscountValue = null;
       } else {
         const n = Number(discountValue);
-        if (!Number.isFinite(n) || n < 0) {
-          throw new Error('Discount value must be ≥ 0.');
-        }
-        if (discountKind === 'PERCENT' && n > 100) {
-          throw new Error('Percentage discount cannot exceed 100.');
-        }
         body.customerDiscountType = discountKind;
         body.customerDiscountValue = n;
       }

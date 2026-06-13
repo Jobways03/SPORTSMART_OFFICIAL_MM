@@ -267,11 +267,19 @@ export class PrismaOrderRepository implements OrderRepository {
     id: string,
     sellerId: string,
   ): Promise<any | null> {
-    const routedOrLaterStatuses = [
-      'ROUTED_TO_SELLER',
-      'SELLER_ACCEPTED',
-      'DISPATCHED',
-      'DELIVERED',
+    // Deny-list the pre-routing master statuses rather than allow-listing the
+    // "routed or later" ones — the old allow-list omitted PARTIALLY_SHIPPED /
+    // PARTIALLY_DELIVERED / PARTIALLY_CANCELLED, so once a multi-seller order
+    // rolled into one of those states (e.g. one seller ships before the other)
+    // this lookup returned null and the seller's OWN sub-order detail page 404'd
+    // with "Order not found". A sub-order only exists post-routing anyway, so
+    // these pre-routing statuses can never legitimately match.
+    const preRoutingStatuses = [
+      'PENDING_PAYMENT',
+      'PLACED',
+      'PENDING_VERIFICATION',
+      'VERIFIED',
+      'REJECTED',
     ] as const;
 
     return this.prisma.subOrder.findFirst({
@@ -279,7 +287,7 @@ export class PrismaOrderRepository implements OrderRepository {
         id,
         sellerId,
         masterOrder: {
-          orderStatus: { in: [...routedOrLaterStatuses] },
+          orderStatus: { notIn: [...preRoutingStatuses] },
         },
       },
       include: {

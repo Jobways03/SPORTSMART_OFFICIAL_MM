@@ -37,6 +37,7 @@ import { RtoSideEffectsHandler } from './application/event-handlers/rto-side-eff
 // Phase 3 Delhivery wiring (2026-06-02) — auto-book Delhivery + attach
 // AWB when a DELHIVERY sub-order is marked PACKED.
 import { DelhiveryAutoBookHandler } from './application/event-handlers/delhivery-auto-book.handler';
+import { ReturnReverseAutoBookHandler } from './application/event-handlers/return-reverse-auto-book.handler';
 // Phase 3 Delhivery wiring (2026-06-02) — cancel the Delhivery shipment
 // when a sub-order with an AWB is cancelled by admin.
 import { DelhiveryCancelHandler } from './application/event-handlers/delhivery-cancel.handler';
@@ -97,6 +98,7 @@ import { PublicShippingLabelController } from './presentation/controllers/public
     ShipmentAuditHandler,
     RtoSideEffectsHandler,
     DelhiveryAutoBookHandler,
+    ReturnReverseAutoBookHandler,
     DelhiveryCancelHandler,
     ShipmentEvidenceRetentionCron,
     ...shippingProviders,

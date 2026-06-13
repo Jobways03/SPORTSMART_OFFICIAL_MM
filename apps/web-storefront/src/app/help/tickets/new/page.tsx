@@ -11,6 +11,7 @@ import {
   TicketCategory,
   TicketPriority,
 } from '@/services/support.service';
+import { validateText } from '@/lib/validators';
 
 const PRIORITY_OPTIONS: TicketPriority[] = ['LOW', 'NORMAL', 'HIGH', 'URGENT'];
 
@@ -41,12 +42,14 @@ export default function NewTicketPage() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!subject.trim()) {
-      setError('Please enter a subject');
+    const subjectError = validateText(subject, { label: 'Subject', min: 3, max: 200 });
+    if (subjectError) {
+      setError(subjectError);
       return;
     }
-    if (!body.trim()) {
-      setError('Please describe the issue');
+    const bodyError = validateText(body, { label: 'Description', min: 3, max: 5000 });
+    if (bodyError) {
+      setError(bodyError);
       return;
     }
     setSubmitting(true);

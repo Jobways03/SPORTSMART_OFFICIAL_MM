@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { sellerProductService } from '@/services/product.service';
 import { apiClient, ApiError } from '@/lib/api-client';
+import { validateAmount } from '@/lib/validators';
 import '../product-form.css';
 import { RichTextEditor, useModal } from '@sportsmart/ui';
 // Phase 39 (2026-05-21) — category metafield section.
@@ -269,8 +270,11 @@ export default function CreateProductPage() {
       errs.title = 'Title is required';
     }
     if (!form.hasVariants) {
-      if (!form.basePrice || isNaN(Number(form.basePrice)) || Number(form.basePrice) <= 0) {
-        errs.basePrice = 'Price is required and must be greater than 0';
+      // Price is money into the catalog — finite, > 0, <= 10,000,000, at
+      // most 2 decimal places (canonical validateAmount).
+      const priceErr = validateAmount(form.basePrice, { min: 0.01, label: 'Price' });
+      if (priceErr) {
+        errs.basePrice = priceErr;
       }
       if (form.baseStock === '' || isNaN(Number(form.baseStock)) || Number(form.baseStock) < 0) {
         errs.baseStock = 'Stock is required and must be 0 or more';

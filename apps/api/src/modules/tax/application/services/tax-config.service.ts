@@ -10,6 +10,12 @@
 
 import { Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import {
+  DEFAULT_SETTLEMENT_TAX_CONFIG,
+  isSettlementTaxBaseType,
+  type SettlementTaxBaseType,
+  type SettlementTaxConfig,
+} from '../../domain/settlement-tax-config';
 
 /**
  * Known config keys with their value type. Keep this union exhaustive
@@ -57,7 +63,17 @@ export type TaxConfigKey =
   // for the marketplace's own commission supply (SAC 9985 / 18% today).
   // Snapshotted onto SellerSettlement at commission-invoice issue time.
   | 'commission_sac_code'
-  | 'commission_gst_rate_bps';
+  | 'commission_gst_rate_bps'
+  // Phase 252 — settlement tax BASE config ('what each tax is levied on':
+  // 'COMMISSION' | 'PRICE_OF_GOODS_SOLD'). The rate keys already exist
+  // (tcs_rate_bps / commission_gst_rate_bps); tds_rate_bps is added so the
+  // §194-O rate is admin-tunable too. Read by the statutory engine so a CA /
+  // regulatory change (e.g. "TDS on commission, not product") is a config edit
+  // that flows to BOTH the payout AND the GSTR-8 / Form-26Q filings.
+  | 'commission_gst_base_type'
+  | 'tcs_base_type'
+  | 'tds_rate_bps'
+  | 'tds_base_type';
 
 const CACHE_TTL_MS = 60_000;
 
@@ -173,6 +189,80 @@ export class TaxConfigService {
       updatedAt: row.updatedAt.toISOString(),
       createdAt: row.createdAt.toISOString(),
     };
+  }
+
+  // ── Phase 252 — settlement tax config (rate + base for GST / TCS / TDS) ──
+  //
+  // The single source the statutory engine reads. TCS base stays statutory
+  // (taxable value of supplies, §52) and is not a commission/product knob —
+  // only its rate is tunable. GST and TDS expose both rate and base.
+
+  async getSettlementTaxConfig(): Promise<SettlementTaxConfig> {
+    const d = DEFAULT_SETTLEMENT_TAX_CONFIG;
+    const baseOf = async (
+      key: 'commission_gst_base_type' | 'tcs_base_type' | 'tds_base_type',
+      fallback: SettlementTaxBaseType,
+    ): Promise<SettlementTaxBaseType> => {
+      const v = await this.getString(key, fallback);
+      return isSettlementTaxBaseType(v) ? v : fallback;
+    };
+    return {
+      gst: {
+        rateBps: await this.getNumber('commission_gst_rate_bps', d.gst.rateBps),
+        baseType: await baseOf('commission_gst_base_type', d.gst.baseType),
+      },
+      tcs: {
+        rateBps: await this.getNumber('tcs_rate_bps', d.tcs.rateBps),
+        baseType: await baseOf('tcs_base_type', d.tcs.baseType),
+      },
+      tds: {
+        rateBps: await this.getNumber('tds_rate_bps', d.tds.rateBps),
+        baseType: await baseOf('tds_base_type', d.tds.baseType),
+      },
+    };
+  }
+
+  /** Editor write path — validates rate ≥ 0 and base ∈ allowed set per tax. */
+  async setSettlementTaxConfig(
+    input: {
+      gst?: { rateBps?: number; baseType?: string };
+      tcs?: { rateBps?: number; baseType?: string };
+      tds?: { rateBps?: number; baseType?: string };
+    },
+    actor: string,
+  ): Promise<SettlementTaxConfig> {
+    const rate = (v: number | undefined, label: string): number => {
+      if (v === undefined) return v as unknown as number;
+      if (!Number.isInteger(v) || v < 0 || v > 10_000) {
+        throw new Error(`${label} rate must be a whole number 0-10000 basis points`);
+      }
+      return v;
+    };
+    const base = (v: string | undefined, label: string): string | undefined => {
+      if (v === undefined) return undefined;
+      if (!isSettlementTaxBaseType(v)) {
+        throw new Error(`${label} base must be COMMISSION or PRICE_OF_GOODS_SOLD`);
+      }
+      return v;
+    };
+    const writes: Array<{ key: string; value: unknown }> = [];
+    if (input.gst?.rateBps !== undefined)
+      writes.push({ key: 'commission_gst_rate_bps', value: rate(input.gst.rateBps, 'GST') });
+    if (input.gst?.baseType !== undefined)
+      writes.push({ key: 'commission_gst_base_type', value: base(input.gst.baseType, 'GST') });
+    if (input.tcs?.rateBps !== undefined)
+      writes.push({ key: 'tcs_rate_bps', value: rate(input.tcs.rateBps, 'TCS') });
+    if (input.tcs?.baseType !== undefined)
+      writes.push({ key: 'tcs_base_type', value: base(input.tcs.baseType, 'TCS') });
+    if (input.tds?.rateBps !== undefined)
+      writes.push({ key: 'tds_rate_bps', value: rate(input.tds.rateBps, 'TDS') });
+    if (input.tds?.baseType !== undefined)
+      writes.push({ key: 'tds_base_type', value: base(input.tds.baseType, 'TDS') });
+
+    for (const w of writes) {
+      await this.setAdmin({ key: w.key, value: w.value, actor });
+    }
+    return this.getSettlementTaxConfig();
   }
 }
 

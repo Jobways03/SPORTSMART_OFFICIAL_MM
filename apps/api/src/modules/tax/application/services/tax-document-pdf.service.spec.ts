@@ -38,8 +38,11 @@ function makeMocks() {
     createSignedUrl: jest.fn(),
   };
   const taxMode: any = { getMode: jest.fn().mockResolvedValue('OFF') };
-  const svc = new TaxDocumentPdfService(prisma, storage, taxMode);
-  return { svc, prisma, taxDocument, storage, taxMode };
+  // Combined-invoice PDF renderer (headless Chromium) — not exercised by these
+  // unit tests, so a no-op stub satisfies the constructor.
+  const htmlToPdf: any = { render: jest.fn().mockResolvedValue(Buffer.from('')) };
+  const svc = new TaxDocumentPdfService(prisma, storage, taxMode, htmlToPdf);
+  return { svc, prisma, taxDocument, storage, taxMode, htmlToPdf };
 }
 
 const aDoc = (over: Record<string, unknown> = {}) => ({

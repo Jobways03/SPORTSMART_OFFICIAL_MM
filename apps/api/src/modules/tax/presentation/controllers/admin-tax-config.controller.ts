@@ -49,4 +49,33 @@ export class AdminTaxConfigController {
     });
     return { success: true, message: 'Tax config saved', data: row };
   }
+
+  // ── Phase 252 — settlement tax editor (GST / TCS / TDS rate + base) ──
+  // A focused, validated view over the generic key/value store, powering the
+  // admin "Settlement Charges" page.
+
+  @Get('settlement-charges')
+  @Permissions('tax.master.read')
+  async getSettlementCharges() {
+    const data = await this.taxConfig.getSettlementTaxConfig();
+    return { success: true, message: 'Settlement tax config', data };
+  }
+
+  @Put('settlement-charges')
+  @Permissions('tax.master.write')
+  async setSettlementCharges(
+    @Req() req: any,
+    @Body()
+    body: {
+      gst?: { rateBps?: number; baseType?: string };
+      tcs?: { rateBps?: number; baseType?: string };
+      tds?: { rateBps?: number; baseType?: string };
+    },
+  ) {
+    const data = await this.taxConfig.setSettlementTaxConfig(
+      body,
+      req.adminId ?? 'admin',
+    );
+    return { success: true, message: 'Settlement tax config saved', data };
+  }
 }

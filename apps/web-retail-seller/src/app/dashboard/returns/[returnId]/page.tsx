@@ -11,6 +11,7 @@ import {
   sellerDisputesService,
   DisputeKind,
 } from '@/services/disputes.service';
+import { validateUploadFile } from '@/lib/validators';
 
 // Match the backend enum. "Requested / Approved" are upstream states
 // the customer or admin drives; seller-side actions start at RECEIVED.
@@ -118,6 +119,15 @@ export default function SellerReturnDetailPage() {
       setActionMsg('Pick an image file first');
       return;
     }
+    // QC evidence is photos of the returned product — image types only,
+    // 5MB cap, matching the backend upload guard.
+    const fileErr = validateUploadFile(evidenceFile, {
+      types: ['image/jpeg', 'image/png', 'image/webp'],
+    });
+    if (fileErr) {
+      setActionMsg(fileErr);
+      return;
+    }
     setBusy('upload');
     setActionMsg('');
     try {
@@ -145,6 +155,22 @@ export default function SellerReturnDetailPage() {
     if (respondDecision === 'CONTESTED' && !respondNotes.trim()) {
       setActionMsg('Please add notes when contesting the claim');
       return;
+    }
+    // Evidence URL is optional, but if supplied it must be a real
+    // http(s) link — the backend stores it verbatim and renders it.
+    const evidenceUrl = respondEvidenceUrl.trim();
+    if (evidenceUrl) {
+      let okUrl = false;
+      try {
+        const parsed = new URL(evidenceUrl);
+        okUrl = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+      } catch {
+        okUrl = false;
+      }
+      if (!okUrl) {
+        setActionMsg('Enter a valid http(s) evidence URL or leave it blank.');
+        return;
+      }
     }
     setBusy('respond');
     setActionMsg('');

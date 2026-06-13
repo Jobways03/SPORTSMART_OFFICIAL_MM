@@ -424,7 +424,7 @@ export class ShipmentEvidenceService {
       capturedAt: row.capturedAt,
       signedByName: row.signedByName,
       courierWaybill: row.courierWaybill,
-      viewUrl: this.fileService.viewUrlFor(row.file),
+      viewUrl: await this.fileService.viewUrlForAsync(row.file),
     };
   }
 

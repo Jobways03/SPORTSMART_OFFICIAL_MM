@@ -42,7 +42,20 @@ function makeService(): {
     computeForSeller: jest.fn(),
     markWithheld: jest.fn(),
   };
-  const service = new SettlementTds194OHookService(prisma as any, tds as any);
+  // Phase 252 — TDS slice reads the configured base; default to product (PGS)
+  // so these tests keep computing on totalPlatformAmountInPaise.
+  const taxConfig = {
+    getSettlementTaxConfig: jest.fn().mockResolvedValue({
+      gst: { rateBps: 1800, baseType: 'COMMISSION' },
+      tcs: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
+      tds: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
+    }),
+  };
+  const service = new SettlementTds194OHookService(
+    prisma as any,
+    tds as any,
+    taxConfig as any,
+  );
   return { service, prisma, tds };
 }
 
