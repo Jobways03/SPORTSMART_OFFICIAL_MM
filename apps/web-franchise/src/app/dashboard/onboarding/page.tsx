@@ -22,15 +22,24 @@ import { validatePincode } from '@/lib/validators';
 import './franchise-onboarding.css';
 
 type GstType = 'REGULAR' | 'COMPOSITION' | 'CASUAL';
+type EntityType =
+  | 'PUBLIC_LIMITED'
+  | 'PRIVATE_LIMITED'
+  | 'SOLE_PROPRIETORSHIP'
+  | 'GENERAL_PARTNERSHIP'
+  | 'LLP';
 
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 const PIN_RE = /^\d{6}$/;
 const STATE_CODE_RE = /^\d{2}$/;
+const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const ACCOUNT_RE = /^[0-9]{9,18}$/;
 
 interface FormState {
   legalBusinessName: string;
   gstRegistrationType: GstType;
+  entityType: '' | EntityType;
   gstNumber: string;
   gstStateCode: string;
   panNumber: string;
@@ -46,12 +55,18 @@ interface FormState {
   warehouseState: string;
   warehousePincode: string;
   warehouseLocality: string;
+  sameAsBusinessAddress: boolean;
+  bankAccountHolderName: string;
+  bankAccountNumber: string;
+  bankIfscCode: string;
+  bankName: string;
   confirmedAccurate: boolean;
 }
 
 const EMPTY: FormState = {
   legalBusinessName: '',
   gstRegistrationType: 'REGULAR',
+  entityType: '',
   gstNumber: '',
   gstStateCode: '',
   panNumber: '',
@@ -67,6 +82,11 @@ const EMPTY: FormState = {
   warehouseState: '',
   warehousePincode: '',
   warehouseLocality: '',
+  sameAsBusinessAddress: false,
+  bankAccountHolderName: '',
+  bankAccountNumber: '',
+  bankIfscCode: '',
+  bankName: '',
   confirmedAccurate: false,
 };
 
@@ -79,6 +99,29 @@ export default function FranchiseOnboardingPage() {
   const [serverError, setServerError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // Mirror the warehouse address to the business address while
+  // "same as business address" is ticked.
+  useEffect(() => {
+    if (!form.sameAsBusinessAddress) return;
+    setForm((f) => ({
+      ...f,
+      warehouseLine1: f.businessLine1,
+      warehouseLine2: f.businessLine2,
+      warehousePincode: f.businessPincode,
+      warehouseCity: f.businessCity,
+      warehouseState: f.businessState,
+      warehouseLocality: f.businessLocality,
+    }));
+  }, [
+    form.sameAsBusinessAddress,
+    form.businessLine1,
+    form.businessLine2,
+    form.businessPincode,
+    form.businessCity,
+    form.businessState,
+    form.businessLocality,
+  ]);
 
   useEffect(() => {
     let cancelled = false;
@@ -95,6 +138,9 @@ export default function FranchiseOnboardingPage() {
           setForm((prev) => ({
             ...prev,
             legalBusinessName: res.data!.businessName ?? prev.legalBusinessName,
+            entityType:
+              (res.data as { entityType?: EntityType }).entityType ??
+              prev.entityType,
             gstNumber: res.data!.gstNumber ?? prev.gstNumber,
             gstStateCode: res.data!.gstNumber
               ? res.data!.gstNumber.slice(0, 2)
@@ -122,6 +168,9 @@ export default function FranchiseOnboardingPage() {
     if (form.legalBusinessName.trim().length < 2) {
       next.legalBusinessName = 'Legal business name is required';
     }
+    if (!form.entityType) {
+      next.entityType = 'Type of entity is required';
+    }
     if (!GSTIN_RE.test(form.gstNumber.trim().toUpperCase())) {
       next.gstNumber = 'Enter a valid 15-character GSTIN';
     }
@@ -146,7 +195,7 @@ export default function FranchiseOnboardingPage() {
     ) {
       next.panNumber = 'PAN must match the embedded PAN inside GSTIN';
     }
-    if (!form.businessLine1.trim()) next.businessLine1 = 'Address line 1 is required';
+    if (!form.businessLine1.trim()) next.businessLine1 = 'Street address is required';
     if (!form.businessCity.trim()) next.businessCity = 'City is required';
     if (!form.businessState.trim()) next.businessState = 'State is required';
     if (!PIN_RE.test(form.businessPincode.trim())) {
@@ -164,6 +213,18 @@ export default function FranchiseOnboardingPage() {
     if (warehouseStarted) {
       const whPinError = validatePincode(form.warehousePincode);
       if (whPinError) next.warehousePincode = whPinError;
+    }
+    if (form.bankAccountHolderName.trim().length < 2) {
+      next.bankAccountHolderName = 'Account holder name is required';
+    }
+    if (!ACCOUNT_RE.test(form.bankAccountNumber.replace(/\s+/g, ''))) {
+      next.bankAccountNumber = 'Account number must be 9–18 digits';
+    }
+    if (!IFSC_RE.test(form.bankIfscCode.trim().toUpperCase())) {
+      next.bankIfscCode = 'IFSC must be 4 letters + 0 + 6 alphanumerics';
+    }
+    if (form.bankName.trim().length < 2) {
+      next.bankName = 'Bank name is required';
     }
     if (!form.confirmedAccurate) {
       next.confirmedAccurate = 'You must confirm the details are accurate';
@@ -184,13 +245,14 @@ export default function FranchiseOnboardingPage() {
       const payload = {
         legalBusinessName: form.legalBusinessName.trim(),
         gstRegistrationType: form.gstRegistrationType,
+        entityType: form.entityType,
         gstNumber: form.gstNumber.trim().toUpperCase(),
         gstStateCode: form.gstStateCode.trim(),
         panNumber: form.panNumber.trim().toUpperCase(),
         businessAddress: {
           line1: form.businessLine1.trim(),
-          line2:
-            form.businessLine2.trim() || form.businessLocality || undefined,
+          line2: form.businessLine2.trim() || undefined,
+          locality: form.businessLocality || undefined,
           city: form.businessCity.trim(),
           state: form.businessState.trim(),
           pincode: form.businessPincode.trim(),
@@ -199,10 +261,8 @@ export default function FranchiseOnboardingPage() {
         warehouseAddress: warehouseFilled
           ? {
               line1: form.warehouseLine1.trim(),
-              line2:
-                form.warehouseLine2.trim() ||
-                form.warehouseLocality ||
-                undefined,
+              line2: form.warehouseLine2.trim() || undefined,
+              locality: form.warehouseLocality || undefined,
               city: form.warehouseCity.trim(),
               state: form.warehouseState.trim(),
               pincode: form.warehousePincode.trim(),
@@ -211,6 +271,16 @@ export default function FranchiseOnboardingPage() {
           : undefined,
         confirmedAccurate: form.confirmedAccurate,
       };
+      // Save the payout bank account first (encrypted server-side), then KYC.
+      await apiClient('/franchise/bank-details', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          accountHolderName: form.bankAccountHolderName.trim(),
+          accountNumber: form.bankAccountNumber.replace(/\s+/g, ''),
+          ifscCode: form.bankIfscCode.trim().toUpperCase(),
+          bankName: form.bankName.trim() || undefined,
+        }),
+      });
       await apiClient('/franchise/onboarding/submit', {
         method: 'POST',
         body: JSON.stringify(payload),
@@ -344,6 +414,26 @@ export default function FranchiseOnboardingPage() {
           />
 
           <Field
+            label="Type of Entity *"
+            error={errors.entityType}
+            input={
+              <select
+                value={form.entityType}
+                onChange={(e) =>
+                  setForm({ ...form, entityType: e.target.value as EntityType })
+                }
+              >
+                <option value="">Select entity type…</option>
+                <option value="PUBLIC_LIMITED">Public Limited Company</option>
+                <option value="PRIVATE_LIMITED">Private Limited Company</option>
+                <option value="SOLE_PROPRIETORSHIP">Sole Proprietorship</option>
+                <option value="GENERAL_PARTNERSHIP">General Partnership</option>
+                <option value="LLP">Limited Liability Partnership (LLP)</option>
+              </select>
+            }
+          />
+
+          <Field
             label="GST Registration Type *"
             input={
               <select
@@ -356,8 +446,11 @@ export default function FranchiseOnboardingPage() {
                 }
               >
                 <option value="REGULAR">Regular</option>
-                <option value="COMPOSITION">Composition</option>
-                <option value="CASUAL">Casual</option>
+                {/* Composition & Casual hidden for now — only Regular is offered
+                    (default stays REGULAR). Re-enable these <option>s to restore
+                    the full GST registration type list. */}
+                {/* <option value="COMPOSITION">Composition</option> */}
+                {/* <option value="CASUAL">Casual</option> */}
               </select>
             }
           />
@@ -370,9 +463,15 @@ export default function FranchiseOnboardingPage() {
                 type="text"
                 maxLength={15}
                 value={form.gstNumber}
-                onChange={(e) =>
-                  setForm({ ...form, gstNumber: e.target.value.toUpperCase() })
-                }
+                onChange={(e) => {
+                  const v = e.target.value.toUpperCase();
+                  // GST state code = the first 2 digits of the GSTIN — auto-derive.
+                  setForm({
+                    ...form,
+                    gstNumber: v,
+                    gstStateCode: v.slice(0, 2).replace(/\D/g, ''),
+                  });
+                }}
                 placeholder="15-character GSTIN"
               />
             }
@@ -386,17 +485,16 @@ export default function FranchiseOnboardingPage() {
                 type="text"
                 maxLength={2}
                 value={form.gstStateCode}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    gstStateCode: e.target.value.replace(/\D/g, '').slice(0, 2),
-                  })
-                }
-                placeholder="2-digit code"
+                readOnly
+                placeholder="Auto-filled from GSTIN"
                 inputMode="numeric"
+                style={{ background: '#f1f5f9', color: '#475569', cursor: 'not-allowed' }}
               />
             }
           />
+          <p style={{ fontSize: 12, color: '#6b7280', margin: '-4px 0 4px' }}>
+            Auto-filled from the first 2 digits of your GSTIN.
+          </p>
 
           <Field
             label="PAN Number *"
@@ -414,12 +512,11 @@ export default function FranchiseOnboardingPage() {
             }
           />
 
-          <h2 style={{ marginTop: 24, marginBottom: 8, fontSize: 16 }}>
-            Business Address
-          </h2>
+          <fieldset className="fr-group">
+            <legend>Business Address *</legend>
 
           <Field
-            label="Address Line 1 *"
+            label="Street address *"
             error={errors.businessLine1}
             input={
               <input
@@ -427,19 +524,6 @@ export default function FranchiseOnboardingPage() {
                 value={form.businessLine1}
                 onChange={(e) =>
                   setForm({ ...form, businessLine1: e.target.value })
-                }
-              />
-            }
-          />
-
-          <Field
-            label="Address Line 2"
-            input={
-              <input
-                type="text"
-                value={form.businessLine2}
-                onChange={(e) =>
-                  setForm({ ...form, businessLine2: e.target.value })
                 }
               />
             }
@@ -463,32 +547,43 @@ export default function FranchiseOnboardingPage() {
               }))
             }
           />
+          </fieldset>
 
-          <h2 style={{ marginTop: 24, marginBottom: 8, fontSize: 16 }}>
-            Warehouse Address (optional)
-          </h2>
+          <fieldset className="fr-group">
+            <legend>Warehouse Address (optional)</legend>
+
+          <label
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              fontSize: 13,
+              fontWeight: 600,
+              color: '#374151',
+              margin: '4px 0 10px',
+              cursor: 'pointer',
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={form.sameAsBusinessAddress}
+              onChange={(e) =>
+                setForm({ ...form, sameAsBusinessAddress: e.target.checked })
+              }
+              style={{ width: 'auto' }}
+            />
+            <span>Same as business address</span>
+          </label>
 
           <Field
-            label="Address Line 1"
+            label="Street address"
             input={
               <input
                 type="text"
                 value={form.warehouseLine1}
+                disabled={form.sameAsBusinessAddress}
                 onChange={(e) =>
                   setForm({ ...form, warehouseLine1: e.target.value })
-                }
-              />
-            }
-          />
-
-          <Field
-            label="Address Line 2"
-            input={
-              <input
-                type="text"
-                value={form.warehouseLine2}
-                onChange={(e) =>
-                  setForm({ ...form, warehouseLine2: e.target.value })
                 }
               />
             }
@@ -497,6 +592,7 @@ export default function FranchiseOnboardingPage() {
           <PincodeFields
             idPrefix="wh"
             errors={{ pincode: errors.warehousePincode }}
+            disabled={form.sameAsBusinessAddress}
             value={{
               pincode: form.warehousePincode,
               city: form.warehouseCity,
@@ -513,6 +609,82 @@ export default function FranchiseOnboardingPage() {
               }))
             }
           />
+          </fieldset>
+
+          <fieldset className="fr-group">
+            <legend>Bank account details *</legend>
+
+          <Field
+            label="Account holder name *"
+            error={errors.bankAccountHolderName}
+            input={
+              <input
+                type="text"
+                maxLength={150}
+                value={form.bankAccountHolderName}
+                onChange={(e) =>
+                  setForm({ ...form, bankAccountHolderName: e.target.value })
+                }
+                placeholder="Name as per bank records"
+              />
+            }
+          />
+
+          <Field
+            label="Account number *"
+            error={errors.bankAccountNumber}
+            input={
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={18}
+                value={form.bankAccountNumber}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    bankAccountNumber: e.target.value.replace(/\D/g, '').slice(0, 18),
+                  })
+                }
+                placeholder="9–18 digit account number"
+              />
+            }
+          />
+
+          <Field
+            label="IFSC code *"
+            error={errors.bankIfscCode}
+            input={
+              <input
+                type="text"
+                maxLength={11}
+                value={form.bankIfscCode}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    bankIfscCode: e.target.value.toUpperCase().slice(0, 11),
+                  })
+                }
+                placeholder="e.g. HDFC0001234"
+              />
+            }
+          />
+
+          <Field
+            label="Bank name *"
+            error={errors.bankName}
+            input={
+              <input
+                type="text"
+                maxLength={150}
+                value={form.bankName}
+                onChange={(e) =>
+                  setForm({ ...form, bankName: e.target.value })
+                }
+                placeholder="e.g. HDFC Bank"
+              />
+            }
+          />
+          </fieldset>
 
           <label
             style={{

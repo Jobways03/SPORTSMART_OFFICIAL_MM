@@ -128,6 +128,17 @@ const router = useRouter();
     Record<string, InventoryPanelData>
   >({});
 
+  // Admin role — gates the SUPER_ADMIN-only "Make Live" action in the row menu.
+  const [adminRole, setAdminRole] = useState('');
+  useEffect(() => {
+    try {
+      const adminData = sessionStorage.getItem('admin');
+      if (adminData) setAdminRole(JSON.parse(adminData).role || '');
+    } catch {
+      // ignore
+    }
+  }, []);
+
   const loadInventory = useCallback(async (productId: string) => {
     try {
       const [sellersRes, franchisesRes] = await Promise.allSettled([
@@ -258,13 +269,23 @@ const router = useRouter();
     }
   };
 
-  const handleStopMappingInline = async (mappingId: string) => {setMappingActionLoading(mappingId);
+  // This list shows PENDING_APPROVAL mappings only, so the valid takedown is
+  // REJECT (not /stop, which is APPROVED-only and would 400). Reject needs a
+  // reason (backend min 3 chars).
+  const handleRejectMappingInline = async (mappingId: string) => {
+    const reason = (window.prompt('Reason for rejecting this seller mapping:') || '').trim();
+    if (!reason) return; // cancelled
+    if (reason.length < 3) {
+      void notify('Reject reason must be at least 3 characters.');
+      return;
+    }
+    setMappingActionLoading(mappingId);
     try {
-      await adminProductsService.stopMapping(mappingId);
+      await adminProductsService.rejectMapping(mappingId, reason);
       setPendingMappings(prev => prev.filter(m => m.id !== mappingId));
       setPendingMappingsCount(prev => Math.max(0, prev - 1));
     } catch (err) {
-      void notify(err instanceof ApiError ? err.message : 'Failed to stop mapping');
+      void notify(err instanceof ApiError ? err.message : 'Failed to reject mapping');
     } finally {
       setMappingActionLoading(null);
     }
@@ -314,6 +335,22 @@ const router = useRouter();
         return;
       }
       void notify(err instanceof ApiError ? err.message : 'Failed to update status');
+    }
+  };
+
+  // Make a catalog-approved product live (SUPER_ADMIN only; the menu item is
+  // gated the same way). Runs the server-side tax/publish gate.
+  const handleMakeLive = async (product: ProductListItem) => {
+    try {
+      const res = await adminProductsService.makeLive(product.id);
+      void notify(res?.message || 'Product is now live');
+      fetchProducts({ page: pagination.page });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        router.replace('/login');
+        return;
+      }
+      void notify(err instanceof ApiError ? err.message : 'Failed to make product live');
     }
   };
 
@@ -579,7 +616,7 @@ const router = useRouter();
                           Approve
                         </button>
                         <button
-                          onClick={() => handleStopMappingInline(mapping.id)}
+                          onClick={() => handleRejectMappingInline(mapping.id)}
                           disabled={mappingActionLoading === mapping.id}
                           style={{
                             padding: '5px 14px',
@@ -593,7 +630,7 @@ const router = useRouter();
                             opacity: mappingActionLoading === mapping.id ? 0.6 : 1,
                           }}
                         >
-                          Stop
+                          Reject
                         </button>
                       </div>
                     </td>
@@ -644,8 +681,10 @@ const router = useRouter();
                     product.seller ? (
                       <ActionMenu
                         product={product}
+                        adminRole={adminRole}
                         onEdit={() => router.push(`/dashboard/products/${product.id}/edit`)}
                         onApprove={() => handleApprove(product)}
+                        onMakeLive={() => handleMakeLive(product)}
                         onReject={() => openModal('reject', product)}
                         onRequestChanges={() => openModal('requestChanges', product)}
                         onStatusChange={(status) => handleStatusChange(product, status)}

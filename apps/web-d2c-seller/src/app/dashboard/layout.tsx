@@ -204,6 +204,9 @@ export default function DashboardLayout({
   // banner is wrapped in a Link to /dashboard/onboarding so a
   // click goes straight to the wizard.
   const banner = (() => {
+    // On the onboarding page itself every banner would just self-link back
+    // here, so hide it — the page already shows the relevant step inline.
+    if (pathname === '/dashboard/onboarding') return null;
     if (isEmailUnverified) {
       return {
         href: '/dashboard/onboarding',

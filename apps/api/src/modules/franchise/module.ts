@@ -147,6 +147,7 @@ import { AdminUpdateFranchiseCommissionUseCase } from './application/use-cases/a
 import { AdminEditFranchiseProfileUseCase } from './application/use-cases/admin-edit-franchise-profile.use-case';
 import { AdminSendFranchiseMessageUseCase } from './application/use-cases/admin-send-franchise-message.use-case';
 import { AdminChangeFranchisePasswordUseCase } from './application/use-cases/admin-change-franchise-password.use-case';
+import { AdminUpdateFranchiseBankUseCase } from './application/use-cases/admin-update-franchise-bank.use-case';
 import { AdminImpersonateFranchiseUseCase } from './application/use-cases/admin-impersonate-franchise.use-case';
 import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delete-franchise.use-case';
 
@@ -260,6 +261,7 @@ import { AdminDeleteFranchiseUseCase } from './application/use-cases/admin-delet
     AdminEditFranchiseProfileUseCase,
     AdminSendFranchiseMessageUseCase,
     AdminChangeFranchisePasswordUseCase,
+    AdminUpdateFranchiseBankUseCase,
     AdminImpersonateFranchiseUseCase,
     AdminDeleteFranchiseUseCase,
     SendFranchiseEmailVerificationUseCase,

@@ -8,7 +8,6 @@ import { adminMetafieldsService } from '@/services/admin-metafields.service';
 import { apiClient, ApiError } from '@/lib/api-client';
 import RejectModal from '../../components/reject-modal';
 import RequestChangesModal from '../../components/request-changes-modal';
-import { PricingTiersPanel } from '../../components/PricingTiersPanel';
 // Phase 45 (2026-05-21) — tax-config attestation panel (closes audit Gap #5).
 import { TaxConfigPanel } from '../../components/TaxConfigPanel';
 import '../../product-form.css';
@@ -138,6 +137,19 @@ const router = useRouter();
   const [statusAction, setStatusAction] = useState('');
   const [statusChanging, setStatusChanging] = useState(false);
 
+  // Admin role — only a SUPER_ADMIN may make a product live (status → ACTIVE),
+  // which is the tax/finance signoff step. The option is hidden for other admins
+  // (the backend also enforces it).
+  const [adminRole, setAdminRole] = useState('');
+  useEffect(() => {
+    try {
+      const adminData = sessionStorage.getItem('admin');
+      if (adminData) setAdminRole(JSON.parse(adminData).role || '');
+    } catch {
+      // ignore
+    }
+  }, []);
+
   // Metafield state
   interface MetafieldEntry {
     definition: { id: string; namespace: string; key: string; name: string; description: string | null; type: string; choices: any[] | null; isRequired: boolean; sortOrder: number; ownerType?: string };
@@ -156,6 +168,9 @@ const router = useRouter();
 
   // Image state
   const [uploadingImage, setUploadingImage] = useState(false);
+  // Per-batch upload progress so the gallery can show "Uploading X of Y…" and a
+  // matching number of skeleton tiles while files upload + the reload runs.
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Seller inventory state
@@ -607,6 +622,14 @@ const router = useRouter();
       errs.title = 'Title is required';
     }
     // Stock and SKU are managed by sellers, not platform admin
+    // Taxonomy is referenced by id — a typed value that didn't match an existing
+    // category/brand can't be saved (the backend rejects free-text names).
+    if (!form.categoryId && form.categoryName?.trim()) {
+      errs.category = 'Select an existing category from the list';
+    }
+    if (!form.brandId && form.brandName?.trim()) {
+      errs.brand = 'Select an existing brand from the list';
+    }
     setErrors(errs);
     return Object.keys(errs).length === 0;
   }
@@ -618,10 +641,11 @@ const router = useRouter();
       title: form.title.trim(),
     };
 
+    // Admins reference existing taxonomy by id only — the update DTO rejects
+    // free-text categoryName/brandName (forbidNonWhitelisted). Send ids only;
+    // a typed-but-unmatched value is blocked in validate().
     if (form.categoryId) payload.categoryId = form.categoryId;
-    else if (form.categoryName?.trim()) payload.categoryName = form.categoryName.trim();
     if (form.brandId) payload.brandId = form.brandId;
-    else if (form.brandName?.trim()) payload.brandName = form.brandName.trim();
     payload.shortDescription = form.shortDescription.trim();
     payload.description = form.description.trim();
 
@@ -848,6 +872,7 @@ const router = useRouter();
     if (validFiles.length === 0) return;
 
     setUploadingImage(true);
+    setUploadProgress({ done: 0, total: validFiles.length });
     let uploaded = 0;
     let failed = 0;
 
@@ -858,6 +883,7 @@ const router = useRouter();
       } catch {
         failed++;
       }
+      setUploadProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
     }
 
     if (failed > 0) {
@@ -868,6 +894,7 @@ const router = useRouter();
 
     await loadProduct();
     setUploadingImage(false);
+    setUploadProgress(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
@@ -1816,23 +1843,36 @@ const router = useRouter();
 
         {isEditable && (
           <div
-            className="image-upload-area"
-            onClick={() => fileInputRef.current?.click()}
+            className={`image-upload-area${uploadingImage ? ' is-uploading' : ''}`}
+            onClick={() => {
+              if (!uploadingImage) fileInputRef.current?.click();
+            }}
+            aria-busy={uploadingImage}
           >
             <input
               ref={fileInputRef}
               type="file"
               accept="image/*"
               multiple
+              disabled={uploadingImage}
               onChange={handleImageUpload}
               style={{ display: 'none' }}
             />
-            <p>{uploadingImage ? 'Uploading...' : 'Click to upload images'}</p>
+            {uploadingImage ? (
+              <div className="upload-progress" role="status" aria-live="polite">
+                <span className="upload-spinner" aria-hidden="true" />
+                <p>
+                  Uploading {uploadProgress?.done ?? 0} of {uploadProgress?.total ?? 0}…
+                </p>
+              </div>
+            ) : (
+              <p>Click to upload images</p>
+            )}
             <p className="upload-hint">Select one or more images. Max 5MB each. JPG, PNG, or WebP.</p>
           </div>
         )}
 
-        {sortedImages.length > 0 ? (
+        {sortedImages.length > 0 || uploadingImage ? (
           <div className="image-grid">
             {sortedImages.map((img: any, idx: number) => (
               <div key={img.id}>
@@ -1882,6 +1922,12 @@ const router = useRouter();
                 )}
               </div>
             ))}
+            {uploadingImage &&
+              Array.from({ length: uploadProgress?.total ?? 0 }).map((_, i) => (
+                <div key={`upload-skeleton-${i}`}>
+                  <div className="image-card image-skeleton" aria-hidden="true" />
+                </div>
+              ))}
           </div>
         ) : (
           <p style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>No images uploaded yet.</p>
@@ -2056,9 +2102,13 @@ const router = useRouter();
             <label className="form-label" style={{ marginBottom: 6, display: 'block' }}>Current: <strong>{product.status}</strong></label>
             <select className="form-select" value={statusAction} onChange={e => setStatusAction(e.target.value)}>
               <option value="">Change status...</option>
-              {product.status !== 'ACTIVE' && <option value="ACTIVE">Active — Visible on storefront</option>}
+              {adminRole === 'SUPER_ADMIN' && product.status !== 'ACTIVE' && (
+                <option value="ACTIVE">Active — make live (visible on storefront)</option>
+              )}
               {product.status !== 'DRAFT' && <option value="DRAFT">Draft — Hidden from storefront</option>}
-              {product.status !== 'SUSPENDED' && <option value="SUSPENDED">Suspended</option>}
+              {product.status !== 'SUSPENDED' && product.status !== 'APPROVED' && (
+                <option value="SUSPENDED">Suspended</option>
+              )}
               {product.status !== 'ARCHIVED' && <option value="ARCHIVED">Archived</option>}
             </select>
           </div>
@@ -2076,24 +2126,18 @@ const router = useRouter();
             className="form-btn"
             onClick={() => handleSave()}
             disabled={saving}
+            aria-busy={saving}
           >
-            {saving ? 'Saving...' : 'Save Changes'}
+            {saving ? (
+              <>
+                <span className="btn-spinner" aria-hidden="true" />
+                Saving…
+              </>
+            ) : (
+              'Save Changes'
+            )}
           </button>
         </div>
-      )}
-
-      {/* Story 3.5 — volume pricing tier manager. Mounts only when
-          we have a product loaded; passes the existing variant list
-          so the create form can scope a tier to a specific SKU. */}
-      {product && (
-        <PricingTiersPanel
-          productId={productId}
-          variants={(product.variants ?? []).map((v: any) => ({
-            id: v.id,
-            title: v.title ?? v.name ?? null,
-            sku: v.sku ?? null,
-          }))}
-        />
       )}
 
       {/* Phase 45 (2026-05-21) — admin tax-config attestation panel.
@@ -2361,9 +2405,11 @@ type StatusHistoryEntry = {
 };
 
 function StatusHistoryPanel({ entries }: { entries: StatusHistoryEntry[] }) {
+  // Newest first — the latest moderation decision should lead the timeline
+  // (parity with the seller-side panels).
   const ordered = [...entries].sort(
     (a, b) =>
-      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
 
   const palette = (status: string): string => {

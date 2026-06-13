@@ -366,6 +366,14 @@ export class SellerProductsController {
     // Validate ownership
     await this.ownershipService.validateOwnership(sellerId, productId);
 
+    // A suspended/deactivated seller must not keep mutating their catalog
+    // (mirrors the create gate + the self-status-resume re-check). Checked
+    // after ownership so a non-owner doesn't learn anything about the account.
+    const sellerAccount = await this.productRepo.findSellerById(sellerId);
+    if (!sellerAccount || sellerAccount.status !== 'ACTIVE') {
+      throw new ForbiddenAppException('Your account must be active to edit products.');
+    }
+
     // Phase 249 (#4) — stamp AI provenance + flip the log to ACCEPTED.
     // Done up front (independent of the field-diff below) so it still
     // records even when this PATCH changes nothing else — e.g. the
@@ -379,6 +387,9 @@ export class SellerProductsController {
 
     // Fetch current product to compare values — only include fields that actually changed
     const current = await this.productRepo.findByIdBasic(productId);
+    if (current && current.status === 'ARCHIVED') {
+      throw new BadRequestAppException('Cannot edit an archived product.');
+    }
 
     const updateData: any = {};
     if (dto.title !== undefined && dto.title !== current?.title) {
@@ -599,8 +610,53 @@ export class SellerProductsController {
           'Your account is not active. Resume the listing once your account status is restored.',
         );
       }
+
+      // 2026-06-13 — resume re-runs the publish-readiness/tax gate via
+      // reactivateInTransaction (NOT the bare status write). This (a) re-checks
+      // taxConfigVerified so a product whose tax config was reset can't be quietly
+      // resumed to a live, purchasable state, and (b) closes a make-live bypass:
+      // only a genuinely publish-ready product re-activates. A SUSPENDED row is
+      // always previously-live (admin APPROVED→SUSPENDED is no longer allowed),
+      // so this can never let a seller make a never-live product live.
+      try {
+        await this.productRepo.reactivateInTransaction(
+          productId,
+          [
+            {
+              fromStatus: existing.status,
+              toStatus: 'ACTIVE',
+              changedBy: sellerId,
+              reason: body?.reason || 'Seller resumed the listing',
+            },
+          ],
+          // A seller resume is NOT a moderation action — preserve the existing
+          // moderator/reviewedAt rather than stamping the seller as the moderator.
+          { moderatorId: existing.moderatorId, reviewedAt: existing.reviewedAt ?? undefined },
+        );
+      } catch (err) {
+        // Gate failed (e.g. tax config no longer verified) — the seller can't fix
+        // that; route them to admin instead of leaking the internal detail.
+        if (err instanceof BadRequestAppException) {
+          throw new ForbiddenAppException(
+            'This listing needs admin review before it can be resumed. Please contact support.',
+            'RESUME_NEEDS_ADMIN',
+          );
+        }
+        throw err;
+      }
+
+      this.logger.log(
+        `Seller ${sellerId} self-transitioned product ${productId}: ${existing.status} -> ACTIVE`,
+      );
+      return {
+        success: true,
+        message: 'Product resumed',
+        data: { productId, status: 'ACTIVE' },
+      };
     }
 
+    // Pause (ACTIVE → SUSPENDED) — a bare status write; stopping sales on a live
+    // product needs no publish gate.
     await this.productRepo.updateStatusInTransaction(
       productId,
       { status: target },
@@ -608,11 +664,7 @@ export class SellerProductsController {
         fromStatus: existing.status,
         toStatus: target,
         changedBy: sellerId,
-        reason:
-          body?.reason ||
-          (target === 'SUSPENDED'
-            ? 'Seller paused the listing'
-            : 'Seller resumed the listing'),
+        reason: body?.reason || 'Seller paused the listing',
       },
     );
 
@@ -622,7 +674,7 @@ export class SellerProductsController {
 
     return {
       success: true,
-      message: target === 'SUSPENDED' ? 'Product paused' : 'Product resumed',
+      message: 'Product paused',
       data: { productId, status: target },
     };
   }

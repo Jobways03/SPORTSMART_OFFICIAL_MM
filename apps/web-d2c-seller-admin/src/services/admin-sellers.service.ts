@@ -61,8 +61,25 @@ export interface SellerDetail {
   // Phase 254 — verification flags. panVerified is what the §194-O TDS engine
   // keys off (unverified → §206AA 5% penalty; verified → configured rate).
   panVerified?: boolean;
-  isGstVerified?: boolean;
+  isGstVerified: boolean;
   gstVerifiedAt?: string | null;
+  gstRegistrationType: string | null;
+  entityType: string | null;
+  registeredBusinessAddressJson: {
+    line1?: string;
+    line2?: string;
+    locality?: string;
+    city?: string;
+    state?: string;
+    pincode?: string;
+    country?: string;
+  } | null;
+  // Bank payout details (masked).
+  hasBankDetails: boolean;
+  bankName: string | null;
+  bankAccountHolderName: string | null;
+  bankAccountLast4: string | null;
+  bankIfscCode: string | null;
   isEmailVerified: boolean;
   profileCompletionPercentage: number;
   isProfileCompleted: boolean;
@@ -178,6 +195,22 @@ export const adminSellersService = {
     return apiClient(`/admin/sellers/${sellerId}/message`, {
       method: 'POST',
       body: JSON.stringify({ subject, message, channel }),
+    });
+  },
+
+  updateBankDetails(
+    sellerId: string,
+    dto: {
+      accountHolderName: string;
+      accountNumber: string;
+      ifscCode: string;
+      bankName: string;
+      upiVpa?: string;
+    },
+  ): Promise<ApiResponse> {
+    return apiClient(`/admin/sellers/${sellerId}/bank-details`, {
+      method: 'PATCH',
+      body: JSON.stringify(dto),
     });
   },
 

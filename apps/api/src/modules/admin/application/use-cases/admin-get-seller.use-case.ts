@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { NotFoundAppException } from '../../../../core/exceptions';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   AdminRepository,
   ADMIN_REPOSITORY,
@@ -10,6 +11,7 @@ export class AdminGetSellerUseCase {
   constructor(
     @Inject(ADMIN_REPOSITORY)
     private readonly adminRepo: AdminRepository,
+    private readonly prisma: PrismaService,
   ) {}
 
   async execute(sellerId: string) {
@@ -51,6 +53,8 @@ export class AdminGetSellerUseCase {
       gstin: true,
       gstStateCode: true,
       gstRegistrationType: true,
+      entityType: true,
+      registeredBusinessAddressJson: true,
       legalBusinessName: true,
       panNumber: true,
       panLast4: true,
@@ -64,6 +68,20 @@ export class AdminGetSellerUseCase {
     if (!seller || seller.isDeleted) {
       throw new NotFoundAppException('Seller not found');
     }
+
+    // Bank payout details (masked) — joined so the admin can see the
+    // seller's settlement account without leaving the record.
+    const bank = await this.prisma.sellerBankDetails
+      .findUnique({
+        where: { sellerId },
+        select: {
+          accountNumberLast4: true,
+          bankName: true,
+          accountHolderName: true,
+          ifscCode: true,
+        },
+      })
+      .catch(() => null);
 
     return {
       sellerId: seller.id,
@@ -98,6 +116,9 @@ export class AdminGetSellerUseCase {
       gstin: (seller as any).gstin ?? null,
       gstStateCode: (seller as any).gstStateCode ?? null,
       gstRegistrationType: (seller as any).gstRegistrationType ?? null,
+      entityType: (seller as any).entityType ?? null,
+      registeredBusinessAddressJson:
+        (seller as any).registeredBusinessAddressJson ?? null,
       legalBusinessName: (seller as any).legalBusinessName ?? null,
       panNumber: (seller as any).panNumber ?? null,
       panLast4: (seller as any).panLast4 ?? null,
@@ -106,6 +127,12 @@ export class AdminGetSellerUseCase {
       gstVerifiedBy: (seller as any).gstVerifiedBy ?? null,
       gstVerificationNotes: (seller as any).gstVerificationNotes ?? null,
       panVerified: (seller as any).panVerified ?? false,
+      // Bank payout details (masked) for the admin Bank section.
+      hasBankDetails: !!bank,
+      bankName: bank?.bankName ?? null,
+      bankAccountHolderName: bank?.accountHolderName ?? null,
+      bankAccountLast4: bank?.accountNumberLast4 ?? null,
+      bankIfscCode: bank?.ifscCode ?? null,
     };
   }
 }

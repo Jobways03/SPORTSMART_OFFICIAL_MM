@@ -332,7 +332,7 @@ export function TaxConfigPanel({ productId }: Props) {
         </div>
       )}
 
-      {!verified && (
+      {!verified && isSuperAdmin && (
         <div style={attestBox}>
           <div style={{ fontSize: 13, fontWeight: 600, color: '#374151', marginBottom: 6 }}>
             Attest this tax config

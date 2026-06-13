@@ -31,6 +31,15 @@ export enum FranchiseGstRegistrationTypeDto {
   CASUAL = 'CASUAL',
 }
 
+/** Legal entity type — mirrors prisma enum `BusinessEntityType`. */
+export enum FranchiseEntityTypeDto {
+  PUBLIC_LIMITED = 'PUBLIC_LIMITED',
+  PRIVATE_LIMITED = 'PRIVATE_LIMITED',
+  SOLE_PROPRIETORSHIP = 'SOLE_PROPRIETORSHIP',
+  GENERAL_PARTNERSHIP = 'GENERAL_PARTNERSHIP',
+  LLP = 'LLP',
+}
+
 export class SubmitFranchiseOnboardingDto {
   @IsNotEmpty({ message: 'Legal business name is required' })
   @IsString()
@@ -43,6 +52,12 @@ export class SubmitFranchiseOnboardingDto {
     message: 'GST registration type must be REGULAR, COMPOSITION, or CASUAL',
   })
   gstRegistrationType!: FranchiseGstRegistrationTypeDto;
+
+  @IsEnum(FranchiseEntityTypeDto, {
+    message:
+      'Entity type must be a public/private limited company, sole proprietorship, general partnership, or LLP',
+  })
+  entityType!: FranchiseEntityTypeDto;
 
   @IsNotEmpty({ message: 'GSTIN is required' })
   @IsString()

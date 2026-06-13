@@ -28,13 +28,14 @@ import ApproveCatalogMappingModal from '../components/approve-catalog-mapping-mo
 import StopCatalogMappingModal from '../components/stop-catalog-mapping-modal';
 import SendMessageModal from '../components/send-message-modal';
 import ChangePasswordModal from '../components/change-password-modal';
+import EditBankModal from '../components/edit-bank-modal';
 import ImpersonateModal from '../components/impersonate-modal';
 import DeleteFranchiseModal from '../components/delete-franchise-modal';
 import CreatePenaltyModal from '../components/create-penalty-modal';
 import CreateAdjustmentModal from '../components/create-adjustment-modal';
 import '../franchises.css';
 
-type ModalType = 'status' | 'verification' | 'commission' | 'approve-mapping' | 'stop-mapping' | 'message' | 'password' | 'impersonate' | 'delete' | 'penalty' | 'adjustment' | null;
+type ModalType = 'status' | 'verification' | 'commission' | 'approve-mapping' | 'stop-mapping' | 'message' | 'password' | 'impersonate' | 'delete' | 'penalty' | 'adjustment' | 'editbank' | null;
 type TabKey = 'profile' | 'location' | 'catalog' | 'inventory' | 'orders' | 'commission' | 'finance' | 'settlements' | 'pos' | 'tax';
 
 interface FranchiseTaxSummary {
@@ -540,35 +541,13 @@ export default function AdminFranchiseDetailPage() {
           <span className={getVerificationBadgeClass(franchise.verificationStatus)}>
             {formatStatus(franchise.verificationStatus)}
           </span>
-          {/* Quick link to delivery-method entitlements (Self Delivery) */}
-          <button
-            type="button"
-            onClick={() => router.push(`/dashboard/franchises/${franchise.id}/delivery-methods`)}
-            style={{
-              marginLeft: 'auto',
-              padding: '6px 12px',
-              fontSize: 12,
-              fontWeight: 600,
-              color: '#1e3a8a',
-              background: '#eff6ff',
-              border: '1px solid #bfdbfe',
-              borderRadius: 999,
-              cursor: 'pointer',
-              display: 'inline-flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            <span aria-hidden="true">🚚</span>
-            Delivery Methods
-          </button>
           {/* Logistics partners (courier registration). The Settings panel
               reads the entity id from ?sellerId=, so we pass the franchise id. */}
           <button
             type="button"
             onClick={() => router.push(`/dashboard/settings?sellerId=${franchise.id}`)}
             style={{
-              marginLeft: 8,
+              marginLeft: 'auto',
               padding: '6px 12px',
               fontSize: 12,
               fontWeight: 600,
@@ -755,6 +734,47 @@ export default function AdminFranchiseDetailPage() {
                   </div>
                 )}
               </div>
+
+              {/* Bank Account — dedicated card with admin-only edit. Extracted
+                  from the Business Details grid so payout-account changes have
+                  their own surface + masked-edit affordance. */}
+              {!editMode && (
+                <div className="franchise-card">
+                  <div className="franchise-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                    <div>
+                      <h2>Bank Account</h2>
+                      <p>Settlement payout account (masked)</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setActiveModal('editbank')}
+                      style={{
+                        padding: '6px 14px', fontSize: 12, fontWeight: 600,
+                        border: '1px solid var(--border, #e5e7eb)', borderRadius: 8,
+                        background: '#fff', cursor: 'pointer', color: 'var(--primary, #2563eb)',
+                        whiteSpace: 'nowrap',
+                      }}
+                    >
+                      {franchise.hasBankDetails ? 'Edit' : 'Add'}
+                    </button>
+                  </div>
+                  {franchise.hasBankDetails ? (
+                    <div className="info-grid">
+                      <InfoItem label="Bank Name" value={franchise.bankName} />
+                      <InfoItem label="Account Holder" value={franchise.bankAccountHolderName} />
+                      <InfoItem
+                        label="Account Number"
+                        value={franchise.bankAccountLast4 ? `••••••${franchise.bankAccountLast4}` : null}
+                      />
+                      <InfoItem label="IFSC Code" value={franchise.bankIfscCode} />
+                    </div>
+                  ) : (
+                    <div className="info-grid">
+                      <InfoItem label="Bank account" value="Not provided yet" />
+                    </div>
+                  )}
+                </div>
+              )}
 
               {editMode && (
                 <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 16 }}>
@@ -1592,31 +1612,13 @@ export default function AdminFranchiseDetailPage() {
         <aside className="franchise-detail-sidebar">
           <div className="franchise-sidebar-card">
             <h3>Actions</h3>
-            <button className="sidebar-action-btn" onClick={() => setActiveModal('status')}>
-              Update Status
-            </button>
-            <button className="sidebar-action-btn" onClick={() => setActiveModal('verification')}>
-              Update Verification
-            </button>
-            <button className="sidebar-action-btn" onClick={() => setActiveModal('commission')}>
-              Update Commission
-            </button>
-            <button className="sidebar-action-btn" onClick={() => setActiveModal('message')}>
-              Send Message
-            </button>
-            <button className="sidebar-action-btn" onClick={() => setActiveModal('password')}>
-              Change Password
-            </button>
-            <button className="sidebar-action-btn" onClick={() => setActiveModal('impersonate')}>
-              Impersonate
-            </button>
-            <button
-              className="sidebar-action-btn"
-              style={{ color: '#dc2626', borderColor: '#fecaca' }}
-              onClick={() => setActiveModal('delete')}
-            >
-              Delete Franchise
-            </button>
+            <SidebarBtn label="Update Status" icon="status" onClick={() => setActiveModal('status')} />
+            <SidebarBtn label="Update Verification" icon="verify" onClick={() => setActiveModal('verification')} />
+            <SidebarBtn label="Update Commission" icon="commission" onClick={() => setActiveModal('commission')} />
+            <SidebarBtn label="Send Message" icon="message" onClick={() => setActiveModal('message')} />
+            <SidebarBtn label="Change Password" icon="password" onClick={() => setActiveModal('password')} />
+            <SidebarBtn label="Impersonate" icon="impersonate" onClick={() => setActiveModal('impersonate')} />
+            <SidebarBtn label="Delete Franchise" icon="delete" danger onClick={() => setActiveModal('delete')} />
           </div>
 
           <div className="franchise-sidebar-card">
@@ -1713,6 +1715,19 @@ export default function AdminFranchiseDetailPage() {
           onSuccess={() => { closeModal(); fetchFranchise(); }}
         />
       )}
+      {activeModal === 'editbank' && franchiseListItem && (
+        <EditBankModal
+          franchise={franchiseListItem}
+          initial={{
+            bankName: franchise.bankName,
+            accountHolderName: franchise.bankAccountHolderName,
+            accountLast4: franchise.bankAccountLast4,
+            ifscCode: franchise.bankIfscCode,
+          }}
+          onClose={closeModal}
+          onSuccess={() => { closeModal(); fetchFranchise(); }}
+        />
+      )}
       {activeModal === 'impersonate' && franchiseListItem && (
         <ImpersonateModal
           franchise={franchiseListItem}
@@ -1786,6 +1801,79 @@ export default function AdminFranchiseDetailPage() {
         </div>
       )}
     </div>
+  );
+}
+
+const SIDEBAR_ICONS = {
+  status: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 3 4 7l4 4" />
+      <path d="M4 7h16" />
+      <path d="m16 21 4-4-4-4" />
+      <path d="M20 17H4" />
+    </svg>
+  ),
+  verify: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  ),
+  commission: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <line x1="19" x2="5" y1="5" y2="19" />
+      <circle cx="6.5" cy="6.5" r="2.5" />
+      <circle cx="17.5" cy="17.5" r="2.5" />
+    </svg>
+  ),
+  message: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <rect width="20" height="16" x="2" y="4" rx="2" />
+      <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+    </svg>
+  ),
+  password: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  ),
+  impersonate: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  ),
+  delete: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h18" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <line x1="10" x2="10" y1="11" y2="17" />
+      <line x1="14" x2="14" y1="11" y2="17" />
+    </svg>
+  ),
+};
+
+function SidebarBtn({
+  label,
+  icon,
+  onClick,
+  danger,
+}: {
+  label: string;
+  icon: keyof typeof SIDEBAR_ICONS;
+  onClick: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className={`sidebar-action-btn${danger ? ' sidebar-action-btn--danger' : ''}`}
+      onClick={onClick}
+    >
+      <span className="sidebar-action-btn__icon">{SIDEBAR_ICONS[icon]}</span>
+      {label}
+    </button>
   );
 }
 

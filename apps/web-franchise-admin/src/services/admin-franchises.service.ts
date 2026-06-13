@@ -35,6 +35,12 @@ export interface FranchiseDetail {
   phoneNumber: string;
   gstNumber: string | null;
   panNumber: string | null;
+  // Bank payout details (masked).
+  hasBankDetails: boolean;
+  bankName: string | null;
+  bankAccountHolderName: string | null;
+  bankAccountLast4: string | null;
+  bankIfscCode: string | null;
   status: string;
   verificationStatus: string;
   isEmailVerified: boolean;
@@ -387,6 +393,24 @@ export const adminFranchisesService = {
     return apiClient(`/admin/franchises/${id}/change-password`, {
       method: 'PATCH',
       body: JSON.stringify({ newPassword }),
+    });
+  },
+
+  // ── Bank Details ──────────────────────────────────────
+
+  updateBankDetails(
+    id: string,
+    dto: {
+      accountHolderName: string;
+      accountNumber: string;
+      ifscCode: string;
+      bankName: string;
+      upiVpa?: string;
+    },
+  ): Promise<ApiResponse> {
+    return apiClient(`/admin/franchises/${id}/bank-details`, {
+      method: 'PATCH',
+      body: JSON.stringify(dto),
     });
   },
 

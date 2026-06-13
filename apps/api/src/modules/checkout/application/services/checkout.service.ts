@@ -217,27 +217,11 @@ export class CheckoutService {
     let itemCount = 0;
     let unserviceableCount = 0;
 
-    // Phase 44 (2026-05-21) — re-resolve pricing tiers server-side at
-    // checkout time. Pre-Phase-44 checkout used raw variant.price /
-    // basePrice, so order totals diverged from the cart whenever a
-    // tier qualified. We always recompute (never trust the cart's
-    // snapshot) because quantity could have changed between cart-add
-    // and checkout — the snapshot would be stale.
-    const tierBatch = await this.catalogFacade.resolveBatchUnitPrices(
-      cart.items.map((it: any) => ({
-        productId: it.productId,
-        variantId: it.variantId ?? null,
-        quantity: it.quantity,
-        listUnitPrice: it.variant
-          ? Number(it.variant.price)
-          : Number(it.product.basePrice ?? 0),
-      })),
-    );
-
     for (let idx = 0; idx < cart.items.length; idx++) {
       const cartItem = cart.items[idx]!;
-      const pricing = tierBatch[idx]!;
-      const unitPrice = pricing.effectiveUnitPrice;
+      const unitPrice = cartItem.variant
+        ? Number(cartItem.variant.price)
+        : Number(cartItem.product.basePrice ?? 0);
       const lineTotal = Math.round(unitPrice * cartItem.quantity * 100) / 100;
       totalAmount += lineTotal;
       itemCount += cartItem.quantity;
@@ -428,13 +412,6 @@ export class CheckoutService {
         quantity: cartItem.quantity,
         unitPrice,
         lineTotal,
-        // Phase 44 (2026-05-21) — propagate pricing-tier snapshot
-        // through to order placement so OrderItem rows can capture
-        // the tier applied at billing time.
-        appliedPricingTierId: pricing.appliedTierId,
-        appliedDiscountPercent: pricing.appliedDiscountPercent,
-        appliedFixedUnitPrice: pricing.appliedFixedUnitPrice,
-        appliedListUnitPrice: pricing.listUnitPrice,
         serviceable: true,
         allocatedSellerId: allocatedNodeId,
         allocatedSellerName: allocation.primary.sellerName,
@@ -926,12 +903,6 @@ export class CheckoutService {
         unitPrice: item.unitPrice,
         quantity: item.quantity,
         totalPrice: item.lineTotal,
-        // Phase 44 (2026-05-21) — propagate the pricing-tier snapshot
-        // from the checkout-session item through to placeOrder.
-        appliedPricingTierId: item.appliedPricingTierId ?? null,
-        appliedDiscountPercent: item.appliedDiscountPercent ?? null,
-        appliedFixedUnitPrice: item.appliedFixedUnitPrice ?? null,
-        appliedListUnitPrice: item.appliedListUnitPrice ?? null,
       });
     }
 

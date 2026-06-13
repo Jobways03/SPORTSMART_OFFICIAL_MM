@@ -66,6 +66,8 @@ export class GetSellerProfileUseCase {
       gstin: true,
       gstStateCode: true,
       gstRegistrationType: true,
+      entityType: true,
+      registeredBusinessAddressJson: true,
       legalBusinessName: true,
       panLast4: true,
       isGstVerified: true,
@@ -90,12 +92,14 @@ export class GetSellerProfileUseCase {
     // wizard's three CTAs (bank details, first product, delivery
     // method) reflect real state. Each query is bounded to a
     // single-row predicate so the cost is essentially free.
-    const [hasBankDetails, hasFirstProduct, hasDeliveryMethod, logisticsLocked] =
+    const [bankRow, hasFirstProduct, hasDeliveryMethod, logisticsLocked] =
       await Promise.all([
         this.prisma.sellerBankDetails
-          .findUnique({ where: { sellerId }, select: { id: true } })
-          .then((r: { id: string } | null) => !!r)
-          .catch(() => false),
+          .findUnique({
+            where: { sellerId },
+            select: { accountNumberLast4: true, bankName: true },
+          })
+          .catch(() => null),
         this.prisma.product
           .findFirst({ where: { sellerId }, select: { id: true } })
           .then((r: { id: string } | null) => !!r)
@@ -110,6 +114,7 @@ export class GetSellerProfileUseCase {
           .then((r: { id: string } | null) => !!r)
           .catch(() => false),
       ]);
+    const hasBankDetails = !!bankRow;
 
     return {
       sellerId: seller.id,
@@ -121,6 +126,8 @@ export class GetSellerProfileUseCase {
       sellerContactNumber: seller.sellerContactNumber,
       storeAddress: seller.storeAddress,
       locality: seller.locality,
+      registeredBusinessAddressJson:
+        (seller as any).registeredBusinessAddressJson ?? null,
       city: seller.city,
       state: seller.state,
       country: seller.country,
@@ -139,6 +146,7 @@ export class GetSellerProfileUseCase {
       gstin: (seller as any).gstin ?? null,
       gstStateCode: (seller as any).gstStateCode ?? null,
       gstRegistrationType: (seller as any).gstRegistrationType ?? null,
+      entityType: (seller as any).entityType ?? null,
       legalBusinessName: (seller as any).legalBusinessName ?? null,
       // Phase 19 (2026-05-20) — full PAN deliberately omitted from
       // the response. Only the last 4 digits are returned for masked
@@ -155,6 +163,8 @@ export class GetSellerProfileUseCase {
       kycReviewedAt: (seller as any).kycReviewedAt ?? null,
       // First-listing wizard CTAs gate on these.
       hasBankDetails,
+      bankAccountLast4: bankRow?.accountNumberLast4 ?? null,
+      bankName: bankRow?.bankName ?? null,
       hasFirstProduct,
       hasDeliveryMethod,
       // True once registered with a logistics partner — the portal

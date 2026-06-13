@@ -46,6 +46,8 @@ import { AdminUpdateSellerVerificationDto } from '../dtos/admin-update-seller-ve
 import { AdminSendMessageDto } from '../dtos/admin-send-message.dto';
 import { AdminChangePasswordDto } from '../dtos/admin-change-password.dto';
 import { AdminUpdateSellerProfileDto } from '../dtos/admin-update-seller-profile.dto';
+import { AdminUpdateSellerBankUseCase } from '../../application/use-cases/admin-update-seller-bank.use-case';
+import { UpdateSellerBankDetailsDto } from '../../../seller/presentation/dtos/update-seller-bank-details.dto';
 
 @ApiTags('Admin Sellers')
 @Controller('admin/sellers')
@@ -66,6 +68,7 @@ export class AdminSellersController {
     private readonly changePasswordUseCase: AdminChangeSellerPasswordUseCase,
     private readonly deleteSellerUseCase: AdminDeleteSellerUseCase,
     private readonly fulfillmentHoldUseCase: AdminSellerFulfillmentHoldUseCase,
+    private readonly updateBankUseCase: AdminUpdateSellerBankUseCase,
   ) {}
 
   @Get()
@@ -437,6 +440,34 @@ export class AdminSellersController {
     return {
       success: true,
       message: 'Seller password changed',
+      data,
+    };
+  }
+
+  @Patch(':sellerId/bank-details')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('sellers.approve')
+  async updateBankDetails(
+    @Param('sellerId') sellerId: string,
+    @Body() dto: UpdateSellerBankDetailsDto,
+    @Req() req: Request,
+  ) {
+    const adminId = (req as any).adminId;
+    const data = await this.updateBankUseCase.execute({
+      adminId,
+      sellerId,
+      accountHolderName: dto.accountHolderName,
+      accountNumber: dto.accountNumber,
+      ifscCode: dto.ifscCode,
+      bankName: dto.bankName,
+      upiVpa: dto.upiVpa,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return {
+      success: true,
+      message: 'Seller bank details updated',
       data,
     };
   }

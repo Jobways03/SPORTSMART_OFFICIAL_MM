@@ -268,14 +268,6 @@ model CartItem {
   // items "snap back" into the active cart when the user re-adds them.
   savedForLater Boolean @default(false) @map("saved_for_later")
 
-  // Phase 44 (2026-05-21) — pricing-tier snapshot. NULL when no tier
-  // applied. `appliedListUnitPrice` records the would-be base price
-  // so refunds + dispute review can prove the discount delta.
-  appliedPricingTierId   String?  @map("applied_pricing_tier_id")
-  appliedDiscountPercent Decimal? @map("applied_discount_percent") @db.Decimal(5, 2)
-  appliedFixedUnitPrice  Decimal? @map("applied_fixed_unit_price") @db.Decimal(10, 2)
-  appliedListUnitPrice   Decimal? @map("applied_list_unit_price") @db.Decimal(10, 2)
-
   // Phase 61 (2026-05-22) — add-time price snapshot in paise (audit
   // Gap #22). Pre-Phase-61 the line price was always re-derived from
   // live product/variant, so a seller bumping price mid-shopping
@@ -297,9 +289,6 @@ model CartItem {
   // the DB level; CatalogPublicFacade.countActiveItemsForVariant
   // remains the application-level gate for soft-deletes.
   variant     ProductVariant?     @relation(fields: [variantId], references: [id], onDelete: Restrict)
-  // Phase 44 — SetNull so an admin-driven tier delete doesn't cascade
-  // through live carts.
-  appliedTier ProductPricingTier? @relation(fields: [appliedPricingTierId], references: [id], onDelete: SetNull)
 
   // Phase 61 (2026-05-22) — the original `@@unique([cartId,
   // productId, variantId])` did NOT protect no-variant lines because
@@ -1045,15 +1034,6 @@ model OrderItem {
   totalPriceInPaise BigInt   @default(0) @map("total_price_in_paise")
   createdAt         DateTime @default(now()) @map("created_at")
 
-  // Phase 44 (2026-05-21) — pricing-tier snapshot. unitPrice on this
-  // row is already the tier-adjusted (effective) price the customer
-  // paid; the new columns record what tier was applied so refunds,
-  // disputes, and commission re-computation can prove the discount.
-  appliedPricingTierId   String?  @map("applied_pricing_tier_id")
-  appliedDiscountPercent Decimal? @map("applied_discount_percent") @db.Decimal(5, 2)
-  appliedFixedUnitPrice  Decimal? @map("applied_fixed_unit_price") @db.Decimal(10, 2)
-  appliedListUnitPrice   Decimal? @map("applied_list_unit_price") @db.Decimal(10, 2)
-
   // Phase 67 (2026-05-22) — direct linkage from OrderItem to the
   // seller StockReservation row that consumed inventory for it
   // (audit Gap #10). Pre-Phase-67 a partial refund of an order
@@ -1074,8 +1054,6 @@ model OrderItem {
   subOrder         SubOrder            @relation(fields: [subOrderId], references: [id], onDelete: Cascade)
   commissionRecord CommissionRecord?
   returnItems      ReturnItem[]
-  // Phase 44 — SetNull so deleting a tier never destroys order data.
-  appliedTier      ProductPricingTier? @relation(fields: [appliedPricingTierId], references: [id], onDelete: SetNull)
 
   // Phase B (P0) — per-item discount allocations + post-discount
   // GST snapshot. taxSnapshot is one-to-one (a row exists for any

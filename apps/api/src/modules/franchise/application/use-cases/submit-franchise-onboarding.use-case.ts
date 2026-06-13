@@ -17,12 +17,19 @@ interface SubmitFranchiseOnboardingInput {
   franchiseId: string;
   legalBusinessName: string;
   gstRegistrationType: 'REGULAR' | 'COMPOSITION' | 'CASUAL';
+  entityType:
+    | 'PUBLIC_LIMITED'
+    | 'PRIVATE_LIMITED'
+    | 'SOLE_PROPRIETORSHIP'
+    | 'GENERAL_PARTNERSHIP'
+    | 'LLP';
   gstNumber: string;
   gstStateCode: string;
   panNumber: string;
   businessAddress: {
     line1: string;
     line2?: string;
+    locality?: string;
     city: string;
     state: string;
     pincode: string;
@@ -31,6 +38,7 @@ interface SubmitFranchiseOnboardingInput {
   warehouseAddress?: {
     line1: string;
     line2?: string;
+    locality?: string;
     city: string;
     state: string;
     pincode: string;
@@ -153,11 +161,13 @@ export class SubmitFranchiseOnboardingUseCase {
         franchiseId,
         {
           legalBusinessName: input.legalBusinessName,
+          entityType: input.entityType,
           gstNumber: input.gstNumber,
           gstStateCode: input.gstStateCode,
           panNumber: input.panNumber,
           panLast4,
           address: input.businessAddress.line1,
+          locality: input.businessAddress.locality ?? null,
           city: input.businessAddress.city,
           state: input.businessAddress.state,
           pincode: input.businessAddress.pincode,
@@ -171,6 +181,7 @@ export class SubmitFranchiseOnboardingUseCase {
           kycSubmittedAt: now,
           kycSubmittedPayloadJson: {
             legalBusinessName: input.legalBusinessName,
+            entityType: input.entityType,
             gstRegistrationType: input.gstRegistrationType,
             gstNumber: input.gstNumber,
             gstStateCode: input.gstStateCode,

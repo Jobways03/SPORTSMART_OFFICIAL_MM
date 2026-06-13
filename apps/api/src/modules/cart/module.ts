@@ -8,9 +8,9 @@ import { CartAbandonmentSweepCron } from './application/jobs/cart-abandonment-sw
 import { PrismaCartRepository } from './infrastructure/repositories/prisma-cart.repository';
 import { CART_REPOSITORY } from './domain/repositories/cart.repository.interface';
 import { UserAuthGuard } from '../../core/guards';
-// Phase 44 (2026-05-21) — Cart now resolves line prices through the
-// catalog facade's pricing-tier helpers. forwardRef breaks the
-// pre-existing Catalog → Cart import cycle.
+// Phase 64 (2026-05-22) — CatalogPublicFacade powers the cart-level
+// serviceability preview. forwardRef breaks the pre-existing
+// Catalog → Cart import cycle.
 import { CatalogModule } from '../catalog/module';
 // Phase 52 polish (2026-05-21) — InventoryModule exports
 // InventoryPublicFacade, which the new customer reservation

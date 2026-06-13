@@ -64,6 +64,23 @@ export interface IProductRepository {
    * narrow path for the already-active case. Idempotent.
    */
   approveModerationOnly(productId: string, moderatorId: string): Promise<void>;
+  // Catalog-only approval (review states → APPROVED, NOT live). Does NOT run the
+  // publish-readiness/tax gate and does NOT activate variants — those happen at
+  // make-live (reactivateInTransaction), which is a separate SUPER_ADMIN step
+  // after the HSN/tax config is set. Lets a seller admin sign off catalog content
+  // before the tax/finance team is involved.
+  catalogApproveInTransaction(
+    productId: string,
+    historyEntries: any[],
+    moderator?: { moderatorId: string; reviewedAt?: Date },
+  ): Promise<void>;
+  // Re-activate a previously-approved product (SUSPENDED/ARCHIVED/APPROVED →
+  // ACTIVE) through the same publish-readiness + attestation gate as approve.
+  reactivateInTransaction(
+    productId: string,
+    historyEntries: any[],
+    moderator?: { moderatorId: string; reviewedAt?: Date },
+  ): Promise<void>;
   rejectInTransaction(
     productId: string,
     reason: string,

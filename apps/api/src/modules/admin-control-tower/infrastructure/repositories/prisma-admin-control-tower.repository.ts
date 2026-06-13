@@ -741,8 +741,12 @@ export class PrismaAdminControlTowerRepository implements AdminControlTowerRepos
     // reservation-expiry sweep so a concurrent expiry doesn't
     // double-decrement reservedQty.
     if (mappingIds.length === 0) return [];
+    // Skip order-linked holds (orderId not null) — they belong to a placed
+    // order's lifecycle, not the mapping deactivation; releasing them frees
+    // stock the order still expects (oversell). Matches the seller-side
+    // releaseActiveReservationsForMapping.
     const reservations = await this.prisma.stockReservation.findMany({
-      where: { mappingId: { in: mappingIds }, status: 'RESERVED' },
+      where: { mappingId: { in: mappingIds }, status: 'RESERVED', orderId: null },
       select: {
         id: true,
         mappingId: true,
@@ -941,7 +945,9 @@ export class PrismaAdminControlTowerRepository implements AdminControlTowerRepos
   }
 
   async countTotalMappings(): Promise<number> {
-    return this.prisma.sellerProductMapping.count();
+    // Exclude soft-deleted rows — they never decrease, so the unqualified count
+    // drifts permanently upward and overstates live mappings.
+    return this.prisma.sellerProductMapping.count({ where: { deletedAt: null } });
   }
 
   async countTotalActiveMappings(): Promise<number> {

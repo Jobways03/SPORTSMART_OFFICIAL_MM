@@ -282,6 +282,22 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     loadProfile();
   }, []);
 
+  // Bank payout details (masked) for the Bank Account card.
+  const [bankInfo, setBankInfo] = useState<{
+    hasBankDetails: boolean;
+    details?: {
+      accountHolderName: string;
+      accountNumberLast4: string;
+      ifscCode: string;
+      bankName: string | null;
+    };
+  } | null>(null);
+  useEffect(() => {
+    apiClient('/franchise/bank-details/status')
+      .then((res) => setBankInfo((res.data as typeof bankInfo) ?? null))
+      .catch(() => {});
+  }, []);
+
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   // ── Regex / validators ────────────────────────────────────────────────
@@ -656,6 +672,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
           {isEditing ? (
             <PincodeFields
               idPrefix="store"
+              forceLocality
               showCountry
               disabled={isSaving || profile?.logisticsLocked}
               value={{
@@ -787,6 +804,35 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
               )}
             </div>
           </div>
+        </div>
+
+        {/* Bank Account */}
+        <div className="card">
+          <h2>Bank Account</h2>
+          {bankInfo?.hasBankDetails && bankInfo.details ? (
+            <div className="grid-2">
+              <div className="field">
+                <label>Bank Name</label>
+                <div className="value">{bankInfo.details.bankName || 'Not set'}</div>
+              </div>
+              <div className="field">
+                <label>Account Holder</label>
+                <div className="value">{bankInfo.details.accountHolderName}</div>
+              </div>
+              <div className="field">
+                <label>Account Number</label>
+                <div className="value">{`••••••${bankInfo.details.accountNumberLast4}`}</div>
+              </div>
+              <div className="field">
+                <label>IFSC Code</label>
+                <div className="value">{bankInfo.details.ifscCode}</div>
+              </div>
+            </div>
+          ) : (
+            <div className="value muted">
+              No bank account on file yet. Add your payout account during onboarding.
+            </div>
+          )}
         </div>
 
         {/* Warehouse */}

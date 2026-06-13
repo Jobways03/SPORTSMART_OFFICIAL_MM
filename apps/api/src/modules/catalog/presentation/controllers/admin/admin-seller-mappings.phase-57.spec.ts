@@ -24,6 +24,7 @@ const noopLogger = {
 
 type CtrlOverrides = {
   findById?: jest.Mock;
+  findByIdBasic?: jest.Mock;
   approve?: jest.Mock;
   reject?: jest.Mock;
   stop?: jest.Mock;
@@ -36,7 +37,12 @@ type CtrlOverrides = {
 };
 
 function buildController(over: CtrlOverrides = {}) {
-  const productRepo: any = {};
+  const productRepo: any = {
+    // approve/reapprove now re-check the mapping's product isn't archived/removed.
+    findByIdBasic:
+      over.findByIdBasic ??
+      jest.fn().mockResolvedValue({ id: 'p-1', status: 'ACTIVE', isDeleted: false }),
+  };
   const sellerMappingRepo: any = {
     findById: over.findById ?? jest.fn(),
     approve: over.approve ?? jest.fn(),

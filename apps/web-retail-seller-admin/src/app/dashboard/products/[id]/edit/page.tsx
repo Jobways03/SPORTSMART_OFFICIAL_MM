@@ -146,6 +146,19 @@ export default function EditProductPage() {
   const [statusAction, setStatusAction] = useState('');
   const [statusChanging, setStatusChanging] = useState(false);
 
+  // Admin role — only a SUPER_ADMIN may make a product live (status → ACTIVE),
+  // which is the tax/finance signoff step. The option is hidden for other admins
+  // (the backend also enforces it).
+  const [adminRole, setAdminRole] = useState('');
+  useEffect(() => {
+    try {
+      const adminData = sessionStorage.getItem('admin');
+      if (adminData) setAdminRole(JSON.parse(adminData).role || '');
+    } catch {
+      // ignore
+    }
+  }, []);
+
   // Variant options state
   const [productOptions, setProductOptions] = useState<OptionEntry[]>([]);
   const [predefinedOptions, setPredefinedOptions] = useState<PredefinedOption[]>([]);
@@ -153,6 +166,9 @@ export default function EditProductPage() {
 
   // Image state
   const [uploadingImage, setUploadingImage] = useState(false);
+  // Per-batch upload progress so the gallery can show "Uploading X of Y…" and a
+  // matching number of skeleton tiles while files upload + the reload runs.
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // ----- Toast helper -----
@@ -352,9 +368,17 @@ export default function EditProductPage() {
   };
 
   const handleStopMapping = async (mappingId: string) => {
+    // Stop requires a reason (backend min 3 chars). Prompt for it so the action
+    // actually succeeds instead of silently 400ing.
+    const reason = (window.prompt('Reason for stopping this seller mapping:') || '').trim();
+    if (!reason) return; // cancelled
+    if (reason.length < 3) {
+      showToast('error', 'Stop reason must be at least 3 characters.');
+      return;
+    }
     setMappingActionLoading(mappingId);
     try {
-      await adminProductsService.stopMapping(mappingId);
+      await adminProductsService.stopMapping(mappingId, reason);
       setSellerMappings(prev =>
         prev.map(m => m.id === mappingId ? { ...m, approvalStatus: 'STOPPED' } : m)
       );
@@ -366,14 +390,51 @@ export default function EditProductPage() {
     }
   };
 
-  function getApprovalBadgeStyle(status: string): React.CSSProperties {
-    switch (status) {
-      case 'APPROVED': return { background: '#dcfce7', color: '#166534', border: '1px solid #bbf7d0' };
-      case 'PENDING_APPROVAL': return { background: '#fef3c7', color: '#92400e', border: '1px solid #fde68a' };
-      case 'STOPPED': return { background: '#fef2f2', color: '#991b1b', border: '1px solid #fecaca' };
-      default: return { background: '#f3f4f6', color: '#6b7280', border: '1px solid #e5e7eb' };
+  const handleRejectMapping = async (mappingId: string) => {
+    // Reject is the valid takedown for a PENDING_APPROVAL mapping (/stop is
+    // APPROVED-only). Backend RejectMappingDto requires a reason (min 3 chars).
+    const reason = (window.prompt('Reason for rejecting this seller mapping:') || '').trim();
+    if (!reason) return; // cancelled
+    if (reason.length < 3) {
+      showToast('error', 'Reject reason must be at least 3 characters.');
+      return;
     }
-  }
+    setMappingActionLoading(mappingId);
+    try {
+      await adminProductsService.rejectMapping(mappingId, reason);
+      setSellerMappings(prev =>
+        prev.map(m => m.id === mappingId ? { ...m, approvalStatus: 'REJECTED' } : m)
+      );
+      showToast('success', 'Mapping rejected.');
+    } catch (err) {
+      showToast('error', err instanceof ApiError ? err.message : 'Failed to reject mapping.');
+    } finally {
+      setMappingActionLoading(null);
+    }
+  };
+
+  const handleReapproveMapping = async (mappingId: string) => {
+    // Reapprove lifts a STOPPED mapping back to APPROVED. Backend
+    // ReapproveMappingDto requires a reason (min 3 chars).
+    const reason = (window.prompt('Reason for re-approving this stopped mapping:') || '').trim();
+    if (!reason) return; // cancelled
+    if (reason.length < 3) {
+      showToast('error', 'Reapprove reason must be at least 3 characters.');
+      return;
+    }
+    setMappingActionLoading(mappingId);
+    try {
+      await adminProductsService.reapproveMapping(mappingId, reason);
+      setSellerMappings(prev =>
+        prev.map(m => m.id === mappingId ? { ...m, approvalStatus: 'APPROVED' } : m)
+      );
+      showToast('success', 'Mapping re-approved.');
+    } catch (err) {
+      showToast('error', err instanceof ApiError ? err.message : 'Failed to re-approve mapping.');
+    } finally {
+      setMappingActionLoading(null);
+    }
+  };
 
   function formatApprovalStatus(status: string): string {
     switch (status) {
@@ -438,6 +499,14 @@ export default function EditProductPage() {
       }
       // Stock is managed by sellers, not here
     }
+    // Taxonomy is referenced by id — a typed value that didn't match an existing
+    // category/brand can't be saved (the backend rejects free-text names).
+    if (!form.categoryId && form.categoryName?.trim()) {
+      errs.category = 'Select an existing category from the list';
+    }
+    if (!form.brandId && form.brandName?.trim()) {
+      errs.brand = 'Select an existing brand from the list';
+    }
     setErrors(errs);
     return Object.keys(errs).length === 0;
   }
@@ -449,10 +518,11 @@ export default function EditProductPage() {
       title: form.title.trim(),
     };
 
+    // Admins reference existing taxonomy by id only — the update DTO rejects
+    // free-text categoryName/brandName (forbidNonWhitelisted). Send ids only;
+    // a typed-but-unmatched value is blocked in validate().
     if (form.categoryId) payload.categoryId = form.categoryId;
-    else if (form.categoryName?.trim()) payload.categoryName = form.categoryName.trim();
     if (form.brandId) payload.brandId = form.brandId;
-    else if (form.brandName?.trim()) payload.brandName = form.brandName.trim();
     payload.shortDescription = form.shortDescription.trim();
     payload.description = form.description.trim();
 
@@ -692,6 +762,7 @@ export default function EditProductPage() {
     if (validFiles.length === 0) return;
 
     setUploadingImage(true);
+    setUploadProgress({ done: 0, total: validFiles.length });
     let uploaded = 0;
     let failed = 0;
 
@@ -702,6 +773,7 @@ export default function EditProductPage() {
       } catch {
         failed++;
       }
+      setUploadProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
     }
 
     if (failed > 0) {
@@ -712,6 +784,7 @@ export default function EditProductPage() {
 
     await loadProduct();
     setUploadingImage(false);
+    setUploadProgress(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
@@ -806,6 +879,20 @@ export default function EditProductPage() {
   const sortedVariants = [...product.variants];
   const isSubmitted = product.moderationStatus === 'SUBMITTED' || product.moderationStatus === 'IN_REVIEW';
 
+  // Seller-mapping summary. NOTE: each row is a per-variant mapping, so
+  // one seller can own several rows -- count DISTINCT sellers separately
+  // from the number of mappings.
+  const distinctSellerCount = new Set(
+    sellerMappings.map((m) => m.seller?.id).filter(Boolean),
+  ).size;
+  const pendingMappingCount = sellerMappings.filter(
+    (m) => m.approvalStatus === 'PENDING_APPROVAL',
+  ).length;
+  const approvedStockTotal = sellerMappings
+    .filter((m) => m.approvalStatus === 'APPROVED')
+    .reduce((s, m) => s + m.stockQty, 0);
+  const totalStockAll = sellerMappings.reduce((s, m) => s + m.stockQty, 0);
+
   // ----- Render -----
 
   return (
@@ -895,6 +982,233 @@ export default function EditProductPage() {
           </div>
         </div>
       )}
+
+      {/* Seller Mappings — primary admin surface, surfaced at the top */}
+      <div className="form-card">
+        <div className="sm-header">
+          <div className="sm-header-titles">
+            <span className="sm-title">Seller Mappings</span>
+            {sellerMappings.length > 0 && (
+              <span className="sm-count">
+                {distinctSellerCount} seller{distinctSellerCount !== 1 ? 's' : ''} ·{' '}
+                {sellerMappings.length} mapping{sellerMappings.length !== 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+          <button
+            type="button"
+            className="sm-refresh"
+            onClick={loadSellerMappings}
+            disabled={sellerMappingsLoading}
+          >
+            <svg
+              className={sellerMappingsLoading ? 'sm-spin' : ''}
+              viewBox="0 0 16 16"
+              width="14"
+              height="14"
+              aria-hidden="true"
+            >
+              <path
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.6"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M13.5 8a5.5 5.5 0 1 1-1.61-3.89M13.5 1.5v3h-3"
+              />
+            </svg>
+            {sellerMappingsLoading ? 'Refreshing…' : 'Refresh'}
+          </button>
+        </div>
+
+        {sellerMappingsLoading && sellerMappings.length === 0 ? (
+          <div className="sm-loading">Loading seller mappings…</div>
+        ) : sellerMappings.length === 0 ? (
+          <div className="sm-empty">
+            <div className="sm-empty-title">No sellers mapped yet</div>
+            <div>
+              Sellers who map this product to their inventory will appear here for
+              approval.
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="sm-stats">
+              <div className="sm-stat">
+                <span className="sm-stat-label">Sellers</span>
+                <span className="sm-stat-value">{distinctSellerCount}</span>
+              </div>
+              <div className="sm-stat">
+                <span className="sm-stat-label">Mappings</span>
+                <span className="sm-stat-value">{sellerMappings.length}</span>
+              </div>
+              <div className={`sm-stat ${pendingMappingCount === 0 ? 'zero' : 'accent-amber'}`}>
+                <span className="sm-stat-label">Pending</span>
+                <span className="sm-stat-value">{pendingMappingCount}</span>
+              </div>
+              <div className={`sm-stat ${approvedStockTotal === 0 ? 'zero' : 'accent-green'}`}>
+                <span className="sm-stat-label">Approved stock</span>
+                <span className="sm-stat-value">{approvedStockTotal.toLocaleString()}</span>
+              </div>
+              <div className="sm-stat">
+                <span className="sm-stat-label">Total stock</span>
+                <span className="sm-stat-value">{totalStockAll.toLocaleString()}</span>
+              </div>
+            </div>
+
+            <div className="sm-table-wrap">
+              <table className="sm-table">
+                <thead>
+                  <tr>
+                    <th>Seller</th>
+                    <th>Internal SKU</th>
+                    <th className="num">Stock</th>
+                    <th>Status</th>
+                    <th className="actions">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sellerMappings.map((m) => {
+                    const pill =
+                      m.approvalStatus === 'APPROVED'
+                        ? 'approved'
+                        : m.approvalStatus === 'STOPPED'
+                        ? 'stopped'
+                        : m.approvalStatus === 'PENDING_APPROVAL'
+                        ? 'pending'
+                        : 'neutral';
+                    const sku =
+                      m.sellerInternalSku ||
+                      m.variant?.sku ||
+                      product?.baseSku ||
+                      product?.productCode;
+                    // Gate to the transitions the backend accepts: /approve and
+                    // /reject are PENDING_APPROVAL-only, /stop is APPROVED-only,
+                    // /reapprove is STOPPED-only. Each row therefore shows the
+                    // exact action(s) valid for its current status.
+                    const canApprove = m.approvalStatus === 'PENDING_APPROVAL';
+                    const canReject = m.approvalStatus === 'PENDING_APPROVAL';
+                    const canStop = m.approvalStatus === 'APPROVED';
+                    const canReapprove = m.approvalStatus === 'STOPPED';
+                    return (
+                      <tr key={m.id}>
+                        <td>
+                          <div className="sm-seller-name">
+                            {m.seller?.sellerName || 'Unknown'}
+                          </div>
+                          {m.variant && (
+                            <div className="sm-seller-sub">
+                              {m.variant.title || m.variant.masterSku}
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          {sku ? (
+                            <span className="sm-sku">{sku}</span>
+                          ) : (
+                            <span className="sm-sku empty">—</span>
+                          )}
+                        </td>
+                        <td className="num">{m.stockQty.toLocaleString()}</td>
+                        <td>
+                          <span className={`sm-pill ${pill}`}>
+                            {formatApprovalStatus(m.approvalStatus)}
+                          </span>
+                        </td>
+                        <td className="actions">
+                          <div className="sm-actions">
+                            {canApprove && (
+                              <button
+                                type="button"
+                                className="sm-act sm-act-approve"
+                                onClick={() => handleApproveMapping(m.id)}
+                                disabled={mappingActionLoading === m.id}
+                              >
+                                <svg viewBox="0 0 16 16" aria-hidden="true">
+                                  <path
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    d="M3.5 8.5l3 3 6-7"
+                                  />
+                                </svg>
+                                Approve
+                              </button>
+                            )}
+                            {canReject && (
+                              <button
+                                type="button"
+                                className="sm-act sm-act-stop"
+                                onClick={() => handleRejectMapping(m.id)}
+                                disabled={mappingActionLoading === m.id}
+                              >
+                                <svg viewBox="0 0 16 16" aria-hidden="true">
+                                  <path
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    d="M4 4l8 8M12 4l-8 8"
+                                  />
+                                </svg>
+                                Reject
+                              </button>
+                            )}
+                            {canStop && (
+                              <button
+                                type="button"
+                                className="sm-act sm-act-stop"
+                                onClick={() => handleStopMapping(m.id)}
+                                disabled={mappingActionLoading === m.id}
+                              >
+                                <svg viewBox="0 0 16 16" aria-hidden="true">
+                                  <path
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    d="M4 4l8 8M12 4l-8 8"
+                                  />
+                                </svg>
+                                Stop
+                              </button>
+                            )}
+                            {canReapprove && (
+                              <button
+                                type="button"
+                                className="sm-act sm-act-approve"
+                                onClick={() => handleReapproveMapping(m.id)}
+                                disabled={mappingActionLoading === m.id}
+                              >
+                                <svg viewBox="0 0 16 16" aria-hidden="true">
+                                  <path
+                                    fill="none"
+                                    stroke="currentColor"
+                                    strokeWidth="2"
+                                    strokeLinecap="round"
+                                    strokeLinejoin="round"
+                                    d="M3.5 8.5l3 3 6-7"
+                                  />
+                                </svg>
+                                Reapprove
+                              </button>
+                            )}
+                            {!canApprove && !canReject && !canStop && !canReapprove && (
+                              <span className="sm-act-dim">—</span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
+      </div>
 
       {/* Section 1: Basic Info */}
       <div className="form-card">
@@ -1497,23 +1811,36 @@ export default function EditProductPage() {
 
         {isEditable && (
           <div
-            className="image-upload-area"
-            onClick={() => fileInputRef.current?.click()}
+            className={`image-upload-area${uploadingImage ? ' is-uploading' : ''}`}
+            onClick={() => {
+              if (!uploadingImage) fileInputRef.current?.click();
+            }}
+            aria-busy={uploadingImage}
           >
             <input
               ref={fileInputRef}
               type="file"
               accept="image/*"
               multiple
+              disabled={uploadingImage}
               onChange={handleImageUpload}
               style={{ display: 'none' }}
             />
-            <p>{uploadingImage ? 'Uploading...' : 'Click to upload images'}</p>
+            {uploadingImage ? (
+              <div className="upload-progress" role="status" aria-live="polite">
+                <span className="upload-spinner" aria-hidden="true" />
+                <p>
+                  Uploading {uploadProgress?.done ?? 0} of {uploadProgress?.total ?? 0}…
+                </p>
+              </div>
+            ) : (
+              <p>Click to upload images</p>
+            )}
             <p className="upload-hint">Select one or more images. Max 5MB each. JPG, PNG, or WebP.</p>
           </div>
         )}
 
-        {sortedImages.length > 0 ? (
+        {sortedImages.length > 0 || uploadingImage ? (
           <div className="image-grid">
             {sortedImages.map((img: any, idx: number) => (
               <div key={img.id}>
@@ -1563,6 +1890,12 @@ export default function EditProductPage() {
                 )}
               </div>
             ))}
+            {uploadingImage &&
+              Array.from({ length: uploadProgress?.total ?? 0 }).map((_, i) => (
+                <div key={`upload-skeleton-${i}`}>
+                  <div className="image-card image-skeleton" aria-hidden="true" />
+                </div>
+              ))}
           </div>
         ) : (
           <p style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>No images uploaded yet.</p>
@@ -1684,134 +2017,6 @@ export default function EditProductPage() {
         </div>
       </div>
 
-      {/* Seller Mappings */}
-      <div className="form-card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <div className="form-card-title" style={{ marginBottom: 0 }}>
-            SELLER MAPPINGS
-            {sellerMappings.length > 0 && (
-              <span style={{ fontWeight: 400, fontSize: 13, color: '#6b7280', marginLeft: 8 }}>
-                ({sellerMappings.length} seller{sellerMappings.length !== 1 ? 's' : ''})
-              </span>
-            )}
-          </div>
-          <button
-            type="button"
-            className="form-btn"
-            style={{ padding: '4px 14px', fontSize: 12, fontWeight: 500 }}
-            onClick={loadSellerMappings}
-            disabled={sellerMappingsLoading}
-          >
-            {sellerMappingsLoading ? 'Loading...' : 'Refresh'}
-          </button>
-        </div>
-
-        {sellerMappingsLoading && sellerMappings.length === 0 ? (
-          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', padding: '16px 0' }}>Loading seller mappings...</p>
-        ) : sellerMappings.length === 0 ? (
-          <p style={{ fontSize: 13, color: 'var(--color-text-secondary)', padding: '16px 0' }}>No sellers mapped to this product yet.</p>
-        ) : (
-          <>
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
-                <thead>
-                  <tr style={{ borderBottom: '2px solid var(--color-border, #e3e3e3)' }}>
-                    <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>Seller</th>
-                    <th style={{ textAlign: 'left', padding: '8px 10px', fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>Internal SKU</th>
-                    <th style={{ textAlign: 'right', padding: '8px 10px', fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>Stock</th>
-                    <th style={{ textAlign: 'center', padding: '8px 10px', fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>Approval Status</th>
-                    <th style={{ textAlign: 'center', padding: '8px 10px', fontWeight: 600, color: '#374151', whiteSpace: 'nowrap' }}>Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {sellerMappings.map((m) => (
-                    <tr key={m.id} style={{ borderBottom: '1px solid #f3f4f6' }}>
-                      <td style={{ padding: '8px 10px', fontWeight: 500 }}>
-                        {m.seller?.sellerName || 'Unknown'}
-                        {m.variant && (
-                          <div style={{ fontSize: 11, color: '#9ca3af', fontFamily: 'monospace' }}>
-                            {m.variant.title || m.variant.masterSku}
-                          </div>
-                        )}
-                      </td>
-                      <td style={{ padding: '8px 10px', color: (m.sellerInternalSku || m.variant?.sku || product?.baseSku || product?.productCode) ? '#374151' : '#9ca3af', fontFamily: (m.sellerInternalSku || m.variant?.sku || product?.baseSku || product?.productCode) ? 'monospace' : 'inherit', fontSize: 12 }}>
-                        {m.sellerInternalSku || m.variant?.sku || product?.baseSku || product?.productCode || '\u2014'}
-                      </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'right', fontWeight: 500 }}>{m.stockQty}</td>
-                      <td style={{ padding: '8px 10px', textAlign: 'center' }}>
-                        <span style={{
-                          display: 'inline-block',
-                          padding: '2px 10px',
-                          borderRadius: 12,
-                          fontSize: 11,
-                          fontWeight: 600,
-                          whiteSpace: 'nowrap',
-                          ...getApprovalBadgeStyle(m.approvalStatus),
-                        }}>
-                          {formatApprovalStatus(m.approvalStatus)}
-                        </span>
-                      </td>
-                      <td style={{ padding: '8px 10px', textAlign: 'center' }}>
-                        <div style={{ display: 'flex', gap: 6, justifyContent: 'center' }}>
-                          {(m.approvalStatus === 'PENDING_APPROVAL' || m.approvalStatus === 'STOPPED') && (
-                            <button
-                              type="button"
-                              onClick={() => handleApproveMapping(m.id)}
-                              disabled={mappingActionLoading === m.id}
-                              style={{
-                                padding: '4px 12px',
-                                fontSize: 11,
-                                fontWeight: 600,
-                                border: 'none',
-                                borderRadius: 6,
-                                cursor: 'pointer',
-                                background: '#16a34a',
-                                color: '#fff',
-                                opacity: mappingActionLoading === m.id ? 0.6 : 1,
-                              }}
-                            >
-                              Approve
-                            </button>
-                          )}
-                          {(m.approvalStatus === 'PENDING_APPROVAL' || m.approvalStatus === 'APPROVED') && (
-                            <button
-                              type="button"
-                              onClick={() => handleStopMapping(m.id)}
-                              disabled={mappingActionLoading === m.id}
-                              style={{
-                                padding: '4px 12px',
-                                fontSize: 11,
-                                fontWeight: 600,
-                                border: 'none',
-                                borderRadius: 6,
-                                cursor: 'pointer',
-                                background: '#dc2626',
-                                color: '#fff',
-                                opacity: mappingActionLoading === m.id ? 0.6 : 1,
-                              }}
-                            >
-                              Stop
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div style={{ marginTop: 12, padding: '10px 0 0', borderTop: '1px solid #f3f4f6', fontSize: 13, color: '#6b7280', display: 'flex', gap: 16 }}>
-              <span>Approved stock: <strong style={{ color: '#374151' }}>
-                {sellerMappings.filter(m => m.approvalStatus === 'APPROVED').reduce((s, m) => s + m.stockQty, 0).toLocaleString()}
-              </strong></span>
-              <span>Total stock (all): <strong style={{ color: '#374151' }}>
-                {sellerMappings.reduce((s, m) => s + m.stockQty, 0).toLocaleString()}
-              </strong></span>
-            </div>
-          </>
-        )}
-      </div>
-
       {/* Status Change (admin-only for ACTIVE/SUSPENDED/APPROVED) */}
       {(product.status === 'ACTIVE' || product.status === 'SUSPENDED' || product.status === 'APPROVED') && (
         <div className="form-card">
@@ -1825,8 +2030,12 @@ export default function EditProductPage() {
                 onChange={e => setStatusAction(e.target.value)}
               >
                 <option value="">Select new status</option>
-                {product.status !== 'ACTIVE' && <option value="ACTIVE">Active</option>}
-                {product.status !== 'SUSPENDED' && <option value="SUSPENDED">Suspended</option>}
+                {adminRole === 'SUPER_ADMIN' && product.status !== 'ACTIVE' && (
+                  <option value="ACTIVE">Active (make live)</option>
+                )}
+                {product.status !== 'SUSPENDED' && product.status !== 'APPROVED' && (
+                  <option value="SUSPENDED">Suspended</option>
+                )}
                 {(product.status as string) !== 'ARCHIVED' && <option value="ARCHIVED">Archived</option>}
               </select>
             </div>
@@ -1852,8 +2061,16 @@ export default function EditProductPage() {
             className="form-btn"
             onClick={() => handleSave()}
             disabled={saving}
+            aria-busy={saving}
           >
-            {saving ? 'Saving...' : 'Save Changes'}
+            {saving ? (
+              <>
+                <span className="btn-spinner" aria-hidden="true" />
+                Saving…
+              </>
+            ) : (
+              'Save Changes'
+            )}
           </button>
         </div>
       )}
@@ -2039,149 +2256,6 @@ function ProductContextBar({ product }: { product: any }) {
           <strong style={{ fontWeight: 600 }}>{label}:</strong> {note}
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Phase 37: admin tax-config attestation banner ──
-//
-// Surfaces "verified by admin Y on date Z" OR "not verified" with a
-// Verify button that POSTs the attestation endpoint. Calls `onChange`
-// after a successful flip so the parent re-fetches the product and
-// re-renders the banner in its new state.
-function TaxConfigAttestationBanner({
-  productId,
-  verified,
-  verifiedAt,
-  verifiedBy,
-  onChange,
-}: {
-  productId: string;
-  verified: boolean | undefined;
-  verifiedAt: string | null | undefined;
-  verifiedBy: string | null | undefined;
-  onChange: () => void;
-}) {
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const handleVerify = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      await adminProductsService.verifyProductTaxConfig(productId);
-      onChange();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to verify tax config.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  if (verified) {
-    return (
-      <div
-        style={{
-          background: '#dcfce7',
-          border: '1px solid #86efac',
-          borderRadius: 6,
-          padding: '10px 14px',
-          marginBottom: 12,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          gap: 12,
-          flexWrap: 'wrap',
-        }}
-      >
-        <div style={{ fontSize: 13, color: '#166534' }}>
-          <strong>✓ Tax config verified</strong>
-          {verifiedBy && (
-            <span style={{ color: '#15803d', marginLeft: 8 }}>
-              by {verifiedBy.slice(0, 8)}
-              {verifiedAt
-                ? ` on ${new Date(verifiedAt).toLocaleDateString('en-IN', {
-                    day: '2-digit',
-                    month: 'short',
-                    year: 'numeric',
-                  })}`
-                : ''}
-            </span>
-          )}
-          <div style={{ fontSize: 11, color: '#15803d', marginTop: 4 }}>
-            STRICT-mode invoicing will trust the HSN / GST rate / supply
-            taxability on this product. Editing any tax field below resets
-            this attestation.
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={handleVerify}
-          disabled={busy}
-          style={{
-            background: '#15803d',
-            color: '#fff',
-            border: 'none',
-            padding: '6px 14px',
-            borderRadius: 4,
-            cursor: busy ? 'not-allowed' : 'pointer',
-            opacity: busy ? 0.5 : 1,
-            fontSize: 12,
-            fontWeight: 600,
-          }}
-        >
-          {busy ? 'Re-verifying…' : 'Re-verify'}
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div
-      style={{
-        background: '#fef3c7',
-        border: '1px solid #fcd34d',
-        borderRadius: 6,
-        padding: '10px 14px',
-        marginBottom: 12,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 12,
-        flexWrap: 'wrap',
-      }}
-    >
-      <div style={{ fontSize: 13, color: '#92400e' }}>
-        <strong>⚠ Tax config not yet verified</strong>
-        <div style={{ fontSize: 11, color: '#a16207', marginTop: 4 }}>
-          Review HSN / GST rate / supply taxability, then click Verify to
-          attest. STRICT-mode invoicing requires this attestation. Any
-          subsequent edit to a tax field resets it back to unverified.
-        </div>
-        {error && (
-          <div style={{ fontSize: 11, color: '#dc2626', marginTop: 4 }}>
-            {error}
-          </div>
-        )}
-      </div>
-      <button
-        type="button"
-        onClick={handleVerify}
-        disabled={busy}
-        style={{
-          background: '#d97706',
-          color: '#fff',
-          border: 'none',
-          padding: '6px 14px',
-          borderRadius: 4,
-          cursor: busy ? 'not-allowed' : 'pointer',
-          opacity: busy ? 0.5 : 1,
-          fontSize: 12,
-          fontWeight: 600,
-        }}
-      >
-        {busy ? 'Verifying…' : 'Verify tax config'}
-      </button>
     </div>
   );
 }

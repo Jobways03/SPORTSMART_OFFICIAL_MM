@@ -182,67 +182,73 @@ export default function FranchisesPage() {
   return (
     <div className="franchises-page">
       <div className="franchises-header">
-        <h1>
-          Franchises
-          {!loading && <span className="franchises-header-count">({pagination.total})</span>}
-        </h1>
-      </div>
-
-      {/* Filters */}
-      <div className="franchises-filters">
-        <div className="franchises-search">
-          <span className="franchises-search-icon">&#128269;</span>
-          <input
-            type="text"
-            placeholder="Search by code, owner, business, email, phone..."
-            value={search}
-            onChange={e => handleSearchChange(e.target.value)}
-          />
+        <div>
+          <h1>
+            Franchises
+            {!loading && <span className="franchises-count-pill">{pagination.total}</span>}
+          </h1>
+          <p className="franchises-subtitle">
+            Manage franchise partners — verification, coverage and account actions.
+          </p>
         </div>
-
-        <select
-          className="filter-select"
-          value={statusFilter}
-          onChange={e => setStatusFilter(e.target.value)}
-        >
-          <option value="">All Status</option>
-          <option value="PENDING">Pending</option>
-          <option value="APPROVED">Approved</option>
-          <option value="ACTIVE">Active</option>
-          <option value="SUSPENDED">Suspended</option>
-          <option value="DEACTIVATED">Deactivated</option>
-        </select>
-
-        <select
-          className="filter-select"
-          value={verificationFilter}
-          onChange={e => setVerificationFilter(e.target.value)}
-        >
-          <option value="">All Verification</option>
-          <option value="NOT_VERIFIED">Not Verified</option>
-          <option value="UNDER_REVIEW">Under Review</option>
-          <option value="VERIFIED">Verified</option>
-          <option value="REJECTED">Rejected</option>
-        </select>
-
-        <input
-          className="filter-select"
-          type="text"
-          placeholder="State"
-          value={stateFilter}
-          onChange={e => setStateFilter(e.target.value)}
-          style={{ minWidth: 120, cursor: 'text' }}
-        />
-
-        {hasFilters && (
-          <button className="filter-clear-btn" onClick={clearFilters}>
-            Clear filters
-          </button>
-        )}
       </div>
 
       {/* Table */}
       <div className="franchises-table-wrap">
+        {/* Toolbar (search + filters) */}
+        <div className="franchises-toolbar">
+          <div className="franchises-search">
+            <span className="franchises-search-icon">&#128269;</span>
+            <input
+              type="text"
+              placeholder="Search by code, owner, business, email, phone..."
+              value={search}
+              onChange={e => handleSearchChange(e.target.value)}
+            />
+          </div>
+
+          <div className="franchises-toolbar-filters">
+            <select
+              className="filter-select"
+              value={statusFilter}
+              onChange={e => setStatusFilter(e.target.value)}
+            >
+              <option value="">All Status</option>
+              <option value="PENDING">Pending</option>
+              <option value="APPROVED">Approved</option>
+              <option value="ACTIVE">Active</option>
+              <option value="SUSPENDED">Suspended</option>
+              <option value="DEACTIVATED">Deactivated</option>
+            </select>
+
+            <select
+              className="filter-select"
+              value={verificationFilter}
+              onChange={e => setVerificationFilter(e.target.value)}
+            >
+              <option value="">All Verification</option>
+              <option value="NOT_VERIFIED">Not Verified</option>
+              <option value="UNDER_REVIEW">Under Review</option>
+              <option value="VERIFIED">Verified</option>
+              <option value="REJECTED">Rejected</option>
+            </select>
+
+            <input
+              className="filter-select"
+              type="text"
+              placeholder="State"
+              value={stateFilter}
+              onChange={e => setStateFilter(e.target.value)}
+              style={{ minWidth: 120, cursor: 'text' }}
+            />
+
+            {hasFilters && (
+              <button className="filter-clear-btn" onClick={clearFilters}>
+                Clear filters
+              </button>
+            )}
+          </div>
+        </div>
         {loading ? (
           <div className="franchises-loading">Loading franchises...</div>
         ) : error ? (
@@ -287,9 +293,20 @@ export default function FranchisesPage() {
                     onClick={() => router.push(`/dashboard/franchises/${franchise.id}`)}
                   >
                     <td>
-                      <div className="franchise-name-cell">
-                        <span className="franchise-name-code">{franchise.franchiseCode}</span>
-                        <span className="franchise-name-business">{franchise.businessName}</span>
+                      <div className="franchise-cell">
+                        <div
+                          className="franchise-avatar"
+                          style={{
+                            background: `hsl(${avatarHue(franchise.businessName || franchise.franchiseCode)}, 60%, 92%)`,
+                            color: `hsl(${avatarHue(franchise.businessName || franchise.franchiseCode)}, 45%, 35%)`,
+                          }}
+                        >
+                          {getInitials(franchise.businessName || franchise.franchiseCode)}
+                        </div>
+                        <div className="franchise-name-cell">
+                          <span className="franchise-name-code">{franchise.franchiseCode}</span>
+                          <span className="franchise-name-business">{franchise.businessName}</span>
+                        </div>
                       </div>
                     </td>
                     <td>
@@ -453,6 +470,21 @@ export default function FranchisesPage() {
       )}
     </div>
   );
+}
+
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function avatarHue(name: string): number {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) % 360;
+  }
+  return hash;
 }
 
 function generatePageNumbers(current: number, total: number): (number | string)[] {

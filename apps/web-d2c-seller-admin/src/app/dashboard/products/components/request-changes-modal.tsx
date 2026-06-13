@@ -1,23 +1,28 @@
 'use client';
 
 import { useState } from 'react';
-import { ProductListItem, adminProductsService } from '@/services/admin-products.service';
+import { adminProductsService } from '@/services/admin-products.service';
 import { ApiError } from '@/lib/api-client';
 import { validateText } from '@/lib/validators';
 import './modal.css';
 
+// Minimal structural shape — callers pass either a ProductListItem (list page)
+// or a ProductDetail (edit page); the modal only reads id/title/seller.
 interface Props {
-  product: ProductListItem;
+  product: { id: string; title: string; seller?: { sellerShopName?: string | null } | null };
   onClose: () => void;
   onSuccess: () => void;
 }
+
+const MIN_NOTE = 10;
 
 export default function RequestChangesModal({ product, onClose, onSuccess }: Props) {
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const canSubmit = note.trim().length > 0;
+  // Backend requires >= 10 chars; gate the button to avoid a round-trip 400.
+  const canSubmit = note.trim().length >= MIN_NOTE;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -68,7 +73,11 @@ export default function RequestChangesModal({ product, onClose, onSuccess }: Pro
               onChange={e => setNote(e.target.value)}
               maxLength={1000}
             />
-            <div className="char-count">{note.length}/1000</div>
+            <div className="char-count">
+              {note.trim().length < MIN_NOTE
+                ? `Minimum ${MIN_NOTE} characters (${note.trim().length}/${MIN_NOTE})`
+                : `${note.length}/1000`}
+            </div>
           </div>
         </div>
         <div className="modal-footer">

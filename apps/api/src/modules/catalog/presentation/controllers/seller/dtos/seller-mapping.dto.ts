@@ -50,6 +50,7 @@ export class MapProductDto {
 
   @IsInt()
   @Min(0)
+  @Max(1_000_000, { message: 'stockQty must not exceed 1,000,000' })
   stockQty!: number;
 
   @IsOptional()
@@ -104,6 +105,7 @@ export class UpdateMappingDto {
   @IsOptional()
   @IsInt()
   @Min(0)
+  @Max(1_000_000, { message: 'stockQty must not exceed 1,000,000' })
   stockQty?: number;
 
   @IsOptional()
@@ -189,6 +191,7 @@ export class BulkStockUpdateRowDto {
 
   @IsInt()
   @Min(0)
+  @Max(1_000_000, { message: 'stockQty must not exceed 1,000,000' })
   stockQty!: number;
 
   @IsOptional()

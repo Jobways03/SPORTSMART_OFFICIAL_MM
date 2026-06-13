@@ -569,45 +569,26 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
           canonicalListPricePaise = BigInt(Math.round(Number(product.basePrice ?? 0) * 100));
         }
 
-        // Phase 44 (2026-05-21) — server-side price validation must
-        // compare against the tier-adjusted price, not raw list. The
-        // checkout caller passes appliedListUnitPrice when a tier
-        // applied; we accept item.unitPrice as long as it equals
-        // canonical (list with no tier) OR matches the snapshot's
-        // listUnitPrice within tolerance (tier was applied; the cart
-        // already redirected through the resolver so item.unitPrice
-        // is effective price, not list).
+        // Server-side price validation — item.unitPrice must match the
+        // canonical list price (variant.price ?? product.basePrice)
+        // within tolerance, in BOTH directions: higher signals a
+        // price-spoof, lower signals a stale cart price.
         //
         // Phase 67 (audit Gap #12) — exact paise compare.
-        const expectedListPricePaise = item.appliedListUnitPrice !== null && item.appliedListUnitPrice !== undefined
-          ? BigInt(Math.round(item.appliedListUnitPrice * 100))
-          : canonicalListPricePaise;
-        const listDriftPaise = expectedListPricePaise > canonicalListPricePaise
-          ? expectedListPricePaise - canonicalListPricePaise
-          : canonicalListPricePaise - expectedListPricePaise;
-        if (listDriftPaise > PRICE_TOLERANCE_PAISE) {
-          // Phase 197 (Checkout audit #21) — log the exact was/now on the
-          // server for forensics, but return a GENERIC message. The
-          // precise server-canonical figure (and which line drifted) is
-          // an internal pricing detail; the customer just needs "refresh
-          // your cart". Keeps a price-probing client from reading the
-          // live canonical price back out of a crafted stale-cart submit.
+        //
+        // Phase 197 (Checkout audit #21) — log the exact was/now on the
+        // server for forensics, but return a GENERIC message. The
+        // precise server-canonical figure (and which line drifted) is
+        // an internal pricing detail; the customer just needs "refresh
+        // your cart". Keeps a price-probing client from reading the
+        // live canonical price back out of a crafted stale-cart submit.
+        const itemUnitPricePaise = BigInt(Math.round(item.unitPrice * 100));
+        const priceDriftPaise = itemUnitPricePaise > canonicalListPricePaise
+          ? itemUnitPricePaise - canonicalListPricePaise
+          : canonicalListPricePaise - itemUnitPricePaise;
+        if (priceDriftPaise > PRICE_TOLERANCE_PAISE) {
           this.logger.warn(
             `Price drift rejected for product=${item.productId} ` +
-              `variant=${item.variantId ?? '-'} customer=${input.customerId}: ` +
-              `expected=${expectedListPricePaise}p canonical=${canonicalListPricePaise}p`,
-          );
-          throw new BadRequestAppException(
-            'Some prices in your cart have changed. Please refresh your cart and try again.',
-          );
-        }
-        // If a tier was applied, item.unitPrice may legitimately be
-        // less than canonicalListPrice — only reject when it's higher
-        // than the list price (signals price-spoofing upward).
-        const itemUnitPricePaise = BigInt(Math.round(item.unitPrice * 100));
-        if (itemUnitPricePaise > canonicalListPricePaise + PRICE_TOLERANCE_PAISE) {
-          this.logger.warn(
-            `Upward price-spoof rejected for product=${item.productId} ` +
               `variant=${item.variantId ?? '-'} customer=${input.customerId}: ` +
               `submitted=${itemUnitPricePaise}p canonical=${canonicalListPricePaise}p`,
           );
@@ -794,14 +775,6 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
             // Phase B (P0.1) — paise mirrors of the decimal fields.
             unitPriceInPaise: BigInt(Math.round(Number(item.unitPrice) * 100)),
             totalPriceInPaise: BigInt(Math.round(Number(item.totalPrice) * 100)),
-            // Phase 44 (2026-05-21) — pricing-tier snapshot. NULL when
-            // no tier qualified — refund/dispute flow treats null as
-            // "paid full list price". Applied tier id references
-            // ProductPricingTier; SetNull on delete.
-            appliedPricingTierId: item.appliedPricingTierId ?? null,
-            appliedDiscountPercent: item.appliedDiscountPercent ?? null,
-            appliedFixedUnitPrice: item.appliedFixedUnitPrice ?? null,
-            appliedListUnitPrice: item.appliedListUnitPrice ?? null,
             // stockReservationId is populated by the service AFTER
             // catalogFacade.confirmReservation succeeds (audit Gap
             // #10). Null at create time.
@@ -922,10 +895,6 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
               quantity: true,
               savedForLater: true,
               unitPriceAtAddInPaise: true,
-              appliedPricingTierId: true,
-              appliedDiscountPercent: true,
-              appliedFixedUnitPrice: true,
-              appliedListUnitPrice: true,
               createdAt: true,
             },
           },
@@ -950,19 +919,6 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
                   unitPriceAtAddInPaise:
                     it.unitPriceAtAddInPaise !== null
                       ? it.unitPriceAtAddInPaise.toString()
-                      : null,
-                  appliedPricingTierId: it.appliedPricingTierId,
-                  appliedDiscountPercent:
-                    it.appliedDiscountPercent !== null
-                      ? Number(it.appliedDiscountPercent)
-                      : null,
-                  appliedFixedUnitPrice:
-                    it.appliedFixedUnitPrice !== null
-                      ? Number(it.appliedFixedUnitPrice)
-                      : null,
-                  appliedListUnitPrice:
-                    it.appliedListUnitPrice !== null
-                      ? Number(it.appliedListUnitPrice)
                       : null,
                   createdAt: it.createdAt.toISOString(),
                 })),

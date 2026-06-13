@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 interface ActionMenuProps {
   onView: () => void;
@@ -24,17 +25,44 @@ export default function ActionMenu({
   onDelete,
 }: ActionMenuProps) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; right: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // The list cards use overflow:hidden (to clip their rounded corners), which would
+  // also clip this menu on short/collapsed rows. Rendering it in a portal to <body>
+  // with fixed positioning escapes that clip so the full menu always shows.
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+    if (!open) {
+      setCoords(null);
+      return;
+    }
+    const place = () => {
+      const btn = triggerRef.current;
+      if (!btn) return;
+      const r = btn.getBoundingClientRect();
+      const h = dropdownRef.current?.offsetHeight ?? 0;
+      const openUp = h > 0 && window.innerHeight - r.bottom < h + 12 && r.top > h + 12;
+      setCoords({
+        top: openUp ? r.top - h - 6 : r.bottom + 6,
+        right: window.innerWidth - r.right,
+      });
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
+    place();
+    const onDocMouseDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || dropdownRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [open]);
 
   const handleAction = (fn: () => void) => {
     setOpen(false);
@@ -42,12 +70,13 @@ export default function ActionMenu({
   };
 
   return (
-    <div className="action-menu-wrap" ref={ref}>
+    <div className="action-menu-wrap">
       <button
+        ref={triggerRef}
         className="action-menu-btn"
         onClick={(e) => {
           e.stopPropagation();
-          setOpen(!open);
+          setOpen((o) => !o);
         }}
         aria-label="Actions"
         aria-expanded={open}
@@ -55,59 +84,66 @@ export default function ActionMenu({
         &#8942;
       </button>
 
-      {open && (
-        <div className="action-menu-dropdown" onClick={(e) => e.stopPropagation()}>
-          <button className="action-menu-item" onClick={() => handleAction(onView)}>
-            <span className="action-icon">&#128065;</span>
-            View Details
-          </button>
-          <button className="action-menu-item" onClick={() => handleAction(onEditStatus)}>
-            <span className="action-icon">&#9881;</span>
-            Update Status
-          </button>
-          <button className="action-menu-item" onClick={() => handleAction(onEditVerification)}>
-            <span className="action-icon">&#10003;</span>
-            Update Verification
-          </button>
-          <button className="action-menu-item" onClick={() => handleAction(onEditCommission)}>
-            <span className="action-icon">&#128176;</span>
-            Update Commission
-          </button>
+      {open &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            className="action-menu-dropdown"
+            style={{
+              position: 'fixed',
+              top: coords?.top ?? -9999,
+              right: coords?.right ?? 0,
+              // Above the fixed navbar (z-index 100) and sidebar (90).
+              zIndex: 1000,
+              visibility: coords ? 'visible' : 'hidden',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button className="action-menu-item" onClick={() => handleAction(onView)}>
+              View Details
+            </button>
+            <button className="action-menu-item" onClick={() => handleAction(onEditStatus)}>
+              Update Status
+            </button>
+            <button className="action-menu-item" onClick={() => handleAction(onEditVerification)}>
+              Update Verification
+            </button>
+            <button className="action-menu-item" onClick={() => handleAction(onEditCommission)}>
+              Update Commission
+            </button>
 
-          {onSendMessage && (
-            <button className="action-menu-item" onClick={() => handleAction(onSendMessage)}>
-              <span className="action-icon">&#9993;</span>
-              Send Message
-            </button>
-          )}
-          {onChangePassword && (
-            <button className="action-menu-item" onClick={() => handleAction(onChangePassword)}>
-              <span className="action-icon">&#128274;</span>
-              Change Password
-            </button>
-          )}
-          {onImpersonate && (
-            <button className="action-menu-item" onClick={() => handleAction(onImpersonate)}>
-              <span className="action-icon">&#128100;</span>
-              Impersonate
-            </button>
-          )}
-
-          {onDelete && (
-            <>
-              <div style={{ height: 1, background: '#e5e7eb', margin: '4px 0' }} />
-              <button
-                className="action-menu-item"
-                style={{ color: '#dc2626' }}
-                onClick={() => handleAction(onDelete)}
-              >
-                <span className="action-icon">&#128465;</span>
-                Delete Franchise
+            {onSendMessage && (
+              <button className="action-menu-item" onClick={() => handleAction(onSendMessage)}>
+                Send Message
               </button>
-            </>
-          )}
-        </div>
-      )}
+            )}
+            {onChangePassword && (
+              <button className="action-menu-item" onClick={() => handleAction(onChangePassword)}>
+                Change Password
+              </button>
+            )}
+            {onImpersonate && (
+              <button className="action-menu-item" onClick={() => handleAction(onImpersonate)}>
+                Impersonate
+              </button>
+            )}
+
+            {onDelete && (
+              <>
+                <div style={{ height: 1, background: '#e5e7eb', margin: '4px 0' }} />
+                <button
+                  className="action-menu-item"
+                  style={{ color: '#dc2626' }}
+                  onClick={() => handleAction(onDelete)}
+                >
+                  Delete Franchise
+                </button>
+              </>
+            )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

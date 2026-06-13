@@ -85,6 +85,23 @@ export class AdminProductSellerScopeGuard extends EntitySellerScopeGuardBase {
 }
 
 @Injectable()
+export class AdminMappingSellerScopeGuard extends EntitySellerScopeGuardBase {
+  protected async resolveTypes(req: any) {
+    const id: string | undefined = req.params?.mappingId;
+    if (!id) return null; // list / bulk / non-mapping route — handler self-scopes
+    const row = await this.prisma.sellerProductMapping.findUnique({
+      where: { id },
+      select: { seller: { select: { sellerType: true } } } as any,
+    });
+    if (!row) return 'not_found' as const;
+    // A mapping always has exactly one owning seller (single-seller, unlike a
+    // mixed-cart order), so scope by that seller's type exactly.
+    const t = (row as any)?.seller?.sellerType as SellerType | undefined;
+    return t ? [t] : [];
+  }
+}
+
+@Injectable()
 export class AdminOrderSellerScopeGuard extends EntitySellerScopeGuardBase {
   protected async resolveTypes(req: any) {
     // The admin-orders controller mixes order-level (`:id`) and sub-order-level

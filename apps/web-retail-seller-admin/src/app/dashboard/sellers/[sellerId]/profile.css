@@ -129,25 +129,41 @@
 .profile-card {
   background: var(--color-bg);
   border: 1px solid #e5e7eb;
-  border-radius: var(--radius);
-  padding: 24px;
-  margin-bottom: 20px;
+  border-radius: 14px;
+  padding: 24px 26px;
+  margin-bottom: 18px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
 }
 
 .profile-card-header {
   margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #f1f5f9;
 }
 
 .profile-card-header h2 {
-  font-size: 17px;
-  font-weight: 600;
+  font-size: 16px;
+  font-weight: 700;
   color: var(--color-text);
-  margin-bottom: 2px;
+  margin-bottom: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.profile-card-header h2::before {
+  content: '';
+  width: 4px;
+  height: 16px;
+  border-radius: 2px;
+  background: var(--color-primary);
+  flex-shrink: 0;
 }
 
 .profile-card-header p {
   font-size: 13px;
   color: var(--color-text-secondary);
+  margin-left: 13px;
 }
 
 /* ===== Form Fields ===== */
@@ -272,27 +288,37 @@
 .media-upload-card {
   background: var(--color-bg);
   border: 1px solid #e5e7eb;
-  border-radius: var(--radius);
-  padding: 24px;
-  text-align: center;
+  border-radius: 14px;
+  padding: 16px 20px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.media-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
 }
 
 .media-upload-card h3 {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--color-text);
-  margin-bottom: 16px;
+  margin-bottom: 0;
 }
 
 .media-preview-container {
   position: relative;
   display: inline-block;
-  margin-bottom: 16px;
+  flex-shrink: 0;
 }
 
 .media-preview-circle {
-  width: 120px;
-  height: 120px;
+  width: 60px;
+  height: 60px;
   border-radius: 50%;
   overflow: hidden;
   background: #f3f4f6;
@@ -303,9 +329,9 @@
 }
 
 .media-preview-rect {
-  width: 160px;
-  height: 90px;
-  border-radius: var(--radius);
+  width: 88px;
+  height: 56px;
+  border-radius: 10px;
   overflow: hidden;
   background: #f3f4f6;
   display: flex;
@@ -322,7 +348,7 @@
 }
 
 .media-placeholder-icon {
-  font-size: 36px;
+  font-size: 24px;
   color: #9ca3af;
 }
 
@@ -342,7 +368,7 @@
 .media-guidelines {
   font-size: 12px;
   color: var(--color-text-secondary);
-  margin-bottom: 12px;
+  margin-bottom: 0;
   line-height: 1.5;
 }
 
@@ -926,4 +952,84 @@
     font-size: 20px;
     letter-spacing: 6px;
   }
+}
+
+/* ── Seller-detail action buttons ─────────────────────────────── */
+.sa-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 20px;
+}
+
+.sa-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 15px;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  color: #374151;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 9px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+
+.sa-action:hover {
+  background: #f9fafb;
+  border-color: #cbd5e1;
+  box-shadow: 0 4px 10px rgba(16, 24, 40, 0.08);
+  transform: translateY(-1px);
+}
+
+.sa-action:active {
+  transform: translateY(0);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+}
+
+.sa-action:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.sa-action__icon {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+}
+
+.sa-action__icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Primary — the key action (Verify KYC) */
+.sa-action--primary {
+  color: #fff;
+  background: linear-gradient(135deg, #2563eb, #1d4ed8);
+  border-color: transparent;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.25);
+}
+
+.sa-action--primary:hover {
+  background: linear-gradient(135deg, #1d4ed8, #1e40af);
+  border-color: transparent;
+  box-shadow: 0 6px 16px rgba(37, 99, 235, 0.32);
+}
+
+/* Danger — Delete */
+.sa-action--danger {
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.sa-action--danger:hover {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  box-shadow: 0 4px 10px rgba(220, 38, 38, 0.12);
 }

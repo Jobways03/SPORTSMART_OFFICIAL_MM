@@ -196,6 +196,9 @@ const HSN_STUB = [
   { hsnCode: '6203',   description: "Men's or boys' suits, ensembles, jackets, trousers",       defaultGstRateBps: 1200, defaultUqcCode: 'NOS', categoryHint: 'apparel-above-1000' },
   { hsnCode: '6204',   description: "Women's or girls' suits, ensembles, jackets",              defaultGstRateBps: 1200, defaultUqcCode: 'NOS', categoryHint: 'apparel-above-1000' },
   { hsnCode: '6403',   description: 'Footwear with leather outer soles',                        defaultGstRateBps: 1800, defaultUqcCode: 'PRS', categoryHint: 'footwear' },
+  // 8-digit footwear codes — products carry the full ITC-HS code; the attestation
+  // gate matches the product HSN exactly, so the specific codes used must exist.
+  { hsnCode: '64031990', description: 'Footwear, leather outer soles & leather uppers — other (sports footwear)', defaultGstRateBps: 1800, defaultUqcCode: 'PRS', categoryHint: 'footwear' },
   { hsnCode: '6404',   description: 'Footwear with rubber/plastic outer soles',                 defaultGstRateBps: 1800, defaultUqcCode: 'PRS', categoryHint: 'footwear' },
   // Bags, backpacks, equipment cases
   { hsnCode: '4202',   description: 'Trunks, suit-cases, vanity-cases, bags',                   defaultGstRateBps: 1800, defaultUqcCode: 'NOS', categoryHint: 'bags' },

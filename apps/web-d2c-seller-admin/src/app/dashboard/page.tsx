@@ -168,6 +168,13 @@ export default function AdminDashboardPage() {
               }
               deltaTone={kpis.revenueToday > 0 ? 'positive' : 'muted'}
               emphasis
+              accent="#16a34a"
+              icon={
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
+                  <polyline points="16 7 22 7 22 13" />
+                </svg>
+              }
             />
             <KpiCard
               label="Orders"
@@ -179,16 +186,38 @@ export default function AdminDashboardPage() {
               }
               deltaTone={kpis.ordersToday > 0 ? 'positive' : 'muted'}
               emphasis
+              accent="#2563eb"
+              icon={
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z" />
+                  <path d="M3 6h18" />
+                  <path d="M16 10a4 4 0 0 1-8 0" />
+                </svg>
+              }
             />
             <KpiCard
               label="Avg order value"
               value={inrCompact(kpis.avgOrderValue)}
               emphasis
+              accent="#7c3aed"
+              icon={
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z" />
+                  <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
+                </svg>
+              }
             />
             <KpiCard
               label="Platform margin"
               value={inrCompact(kpis.totalPlatformMargin)}
               emphasis
+              accent="#d97706"
+              icon={
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21.21 15.89A10 10 0 1 1 8 2.83" />
+                  <path d="M22 12A10 10 0 0 0 12 2v10z" />
+                </svg>
+              }
             />
           </div>
 
@@ -313,6 +342,7 @@ export default function AdminDashboardPage() {
               body="Review applications, track performance, and moderate seller accounts."
               cta="View sellers"
               href="/dashboard/sellers"
+              accent="#2563eb"
               icon={
                 <svg viewBox="0 0 24 24" style={styles.qaIcon} aria-hidden="true">
                   <path
@@ -331,6 +361,7 @@ export default function AdminDashboardPage() {
               body="Approve, reject, or request changes on seller product submissions."
               cta="Review products"
               href="/dashboard/products"
+              accent="#7c3aed"
               icon={
                 <svg viewBox="0 0 24 24" style={styles.qaIcon} aria-hidden="true">
                   <path
@@ -349,6 +380,7 @@ export default function AdminDashboardPage() {
               body="Track, reassign, and resolve issues on marketplace orders."
               cta="View orders"
               href="/dashboard/orders"
+              accent="#d97706"
               icon={
                 <svg viewBox="0 0 24 24" style={styles.qaIcon} aria-hidden="true">
                   <path
@@ -367,6 +399,7 @@ export default function AdminDashboardPage() {
               body="Review seller commissions, settlements, and platform earnings."
               cta="Open commissions"
               href="/dashboard/commission"
+              accent="#16a34a"
               icon={
                 <svg viewBox="0 0 24 24" style={styles.qaIcon} aria-hidden="true">
                   <path
@@ -395,16 +428,35 @@ function KpiCard({
   delta,
   deltaTone = 'muted',
   emphasis,
+  accent = '#2563eb',
+  icon,
 }: {
   label: string;
   value: string;
   delta?: string;
   deltaTone?: 'positive' | 'negative' | 'muted';
   emphasis?: boolean;
+  accent?: string;
+  icon?: React.ReactNode;
 }) {
   return (
     <div style={styles.kpiCard}>
-      <div style={styles.kpiLabel}>{label}</div>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'flex-start',
+          justifyContent: 'space-between',
+          gap: 10,
+          marginBottom: 10,
+        }}
+      >
+        <div style={{ ...styles.kpiLabel, marginBottom: 0 }}>{label}</div>
+        {icon && (
+          <div style={{ ...styles.kpiIconChip, background: `${accent}1a`, color: accent }}>
+            {icon}
+          </div>
+        )}
+      </div>
       <div
         style={{
           ...styles.kpiValue,
@@ -650,12 +702,14 @@ function QuickAction({
   cta,
   href,
   icon,
+  accent = '#00604a',
 }: {
   title: string;
   body: string;
   cta: string;
   href: string;
   icon: React.ReactNode;
+  accent?: string;
 }) {
   const [hover, setHover] = useState(false);
   return (
@@ -668,10 +722,10 @@ function QuickAction({
         ...(hover ? styles.qaCardHover : {}),
       }}
     >
-      <div style={styles.qaIconWrap}>{icon}</div>
+      <div style={{ ...styles.qaIconWrap, background: `${accent}1a`, color: accent }}>{icon}</div>
       <div style={styles.qaTitle}>{title}</div>
       <div style={styles.qaBody}>{body}</div>
-      <span style={styles.qaCta}>
+      <span style={{ ...styles.qaCta, color: accent }}>
         {cta}
         <svg
           viewBox="0 0 20 20"
@@ -816,8 +870,9 @@ const styles: Record<string, React.CSSProperties> = {
     borderWidth: 1,
     borderStyle: 'solid',
     borderColor: '#e2e8f0',
-    borderRadius: 10,
+    borderRadius: 12,
     padding: '18px 20px',
+    boxShadow: '0 1px 2px rgba(16, 24, 40, 0.04)',
   },
   kpiLabel: {
     fontSize: 11,
@@ -843,6 +898,15 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: 8,
     fontVariantNumeric: 'tabular-nums',
   },
+  kpiIconChip: {
+    display: 'inline-flex',
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    flexShrink: 0,
+  },
 
   kpiInline: {
     display: 'flex',
@@ -856,11 +920,14 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 10,
     textDecoration: 'none',
     color: 'inherit',
-    transition: 'background-color 0.12s, border-color 0.12s',
+    boxShadow: '0 1px 2px rgba(16, 24, 40, 0.04)',
+    transition: 'background-color 0.12s, border-color 0.12s, box-shadow 0.12s, transform 0.12s',
   },
   kpiInlineHover: {
     background: '#f8fafc',
     borderColor: '#cbd5e1',
+    boxShadow: '0 4px 10px rgba(16, 24, 40, 0.07)',
+    transform: 'translateY(-1px)',
   },
   kpiInlineActionable: {
     background: 'rgba(245, 158, 11, 0.06)',
@@ -1088,14 +1155,17 @@ const styles: Record<string, React.CSSProperties> = {
     borderWidth: 1,
     borderStyle: 'solid',
     borderColor: '#e2e8f0',
-    borderRadius: 10,
+    borderRadius: 12,
     textDecoration: 'none',
     color: 'inherit',
-    transition: 'background-color 0.12s, border-color 0.12s, transform 0.12s',
+    boxShadow: '0 1px 2px rgba(16, 24, 40, 0.04)',
+    transition: 'background-color 0.14s, border-color 0.14s, transform 0.14s, box-shadow 0.14s',
   },
   qaCardHover: {
-    background: '#f8fafc',
+    background: '#ffffff',
     borderColor: '#cbd5e1',
+    boxShadow: '0 10px 24px rgba(16, 24, 40, 0.10)',
+    transform: 'translateY(-3px)',
   },
   qaIconWrap: {
     display: 'inline-flex',

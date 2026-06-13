@@ -45,6 +45,7 @@ export function PincodeFields({
   lookup,
   disabled = false,
   errors,
+  forceLocality = false,
 }: {
   value: PincodeValue;
   onChange: (patch: Partial<PincodeValue>) => void;
@@ -53,6 +54,9 @@ export function PincodeFields({
   lookup?: (pincode: string) => Promise<PincodeLookupResult | null>;
   disabled?: boolean;
   errors?: PincodeFieldErrors;
+  /** Always render the Locality field (even before a lookup / with no saved
+   *  value) — e.g. on the profile page so the option is always available. */
+  forceLocality?: boolean;
 }) {
   const {
     loading,
@@ -77,7 +81,7 @@ export function PincodeFields({
   const err = (m?: string) =>
     m ? <span className="pin__note pin__note--err">{m}</span> : null;
 
-  const showLocality = places.length > 0 || !!value.locality;
+  const showLocality = forceLocality || places.length > 0 || !!value.locality;
 
   return (
     <div className="pin">

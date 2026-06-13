@@ -85,8 +85,8 @@
 .onboarding__group label {
   font-size: 13px;
   font-weight: 600;
-  color: #374151;
-  margin: 14px 0 6px;
+  color: #344054;
+  margin: 16px 0 7px;
   display: block;
 }
 .onboarding__form > label:first-of-type {
@@ -99,25 +99,33 @@
 .onboarding__group input {
   width: 100%;
   box-sizing: border-box;
-  padding: 11px 13px;
+  padding: 11px 14px;
   font-size: 14px;
   color: #111827;
-  background: #fff;
-  border: 1px solid #d1d5db;
-  border-radius: 9px;
+  background: #f8fafc;
+  border: 1.5px solid #e3e8ef;
+  border-radius: 10px;
   outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
 }
 .onboarding__form input::placeholder,
+.onboarding__form textarea::placeholder,
 .onboarding__group input::placeholder {
-  color: #9ca3af;
+  color: #9aa4b2;
+}
+.onboarding__form input:hover,
+.onboarding__form select:hover,
+.onboarding__form textarea:hover,
+.onboarding__group input:hover {
+  border-color: #cdd5e0;
 }
 .onboarding__form input:focus,
 .onboarding__form select:focus,
 .onboarding__form textarea:focus,
 .onboarding__group input:focus {
   border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+  background: #ffffff;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
 }
 .onboarding__form textarea {
   resize: vertical;
@@ -126,16 +134,19 @@
 
 /* ── Address group ────────────────────────────────────────────────────── */
 .onboarding__group {
-  border: 1px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 18px 18px 20px;
-  margin: 18px 0 6px;
-  background: #fafafa;
+  border: 1px solid #e6e9ef;
+  border-radius: 14px;
+  padding: 14px 20px 22px;
+  margin: 22px 0 6px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
 }
 .onboarding__group legend {
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 700;
-  color: #111827;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #2563eb;
   padding: 0 8px;
 }
 .onboarding__group label {

@@ -9,11 +9,6 @@ import {
   AllocateAndReserveResult,
   AllocationEventSourceTag,
 } from '../services/seller-allocation.service';
-import {
-  PricingResolutionService,
-  ResolveArgs,
-  ResolveResult,
-} from '../services/pricing-resolution.service';
 
 export {
   AllocationResult,
@@ -21,7 +16,6 @@ export {
   AllocatedSeller,
   AllocateAndReserveResult,
 } from '../services/seller-allocation.service';
-export type { ResolveArgs, ResolveResult } from '../services/pricing-resolution.service';
 
 @Injectable()
 export class CatalogPublicFacade {
@@ -30,24 +24,7 @@ export class CatalogPublicFacade {
     @Inject(VARIANT_REPOSITORY) private readonly variantRepo: IVariantRepository,
     @Inject(STOREFRONT_REPOSITORY) private readonly storefrontRepo: IStorefrontRepository,
     private readonly allocationService: SellerAllocationService,
-    private readonly pricingResolution: PricingResolutionService,
   ) {}
-
-  /**
-   * Phase 44 (2026-05-21) — pricing-tier resolution. Exposed via the
-   * public facade so cart / checkout / orders modules can call it
-   * without importing catalog internals.
-   */
-  async resolveUnitPrice(args: ResolveArgs): Promise<ResolveResult> {
-    return this.pricingResolution.resolveUnitPrice(args);
-  }
-
-  async resolveBatchUnitPrices(
-    items: ReadonlyArray<ResolveArgs>,
-    at?: Date,
-  ): Promise<ResolveResult[]> {
-    return this.pricingResolution.resolveBatch(items, at);
-  }
 
   async getProductById(productId: string): Promise<unknown> {
     return this.productRepo.findByIdBasic(productId);

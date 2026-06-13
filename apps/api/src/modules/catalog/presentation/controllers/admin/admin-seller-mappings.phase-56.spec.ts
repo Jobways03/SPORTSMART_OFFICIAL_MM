@@ -48,6 +48,7 @@ const noopLogger = {
 
 function buildController(overrides: {
   findById?: jest.Mock;
+  findByIdBasic?: jest.Mock;
   approve?: jest.Mock;
   reject?: jest.Mock;
   stop?: jest.Mock;
@@ -57,7 +58,12 @@ function buildController(overrides: {
   eventPublish?: jest.Mock;
   cacheInvalidate?: jest.Mock;
 } = {}) {
-  const productRepo: any = {};
+  const productRepo: any = {
+    // approve/reapprove now re-check the mapping's product isn't archived/removed.
+    findByIdBasic:
+      overrides.findByIdBasic ??
+      jest.fn().mockResolvedValue({ id: 'p-1', status: 'ACTIVE', isDeleted: false }),
+  };
   const sellerMappingRepo: any = {
     findById: overrides.findById ?? jest.fn(),
     approve: overrides.approve ?? jest.fn(),

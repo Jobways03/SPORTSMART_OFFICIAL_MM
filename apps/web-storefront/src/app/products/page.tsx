@@ -19,7 +19,7 @@ function buildApiQuery(sp: SP): string {
   params.set('limit', '20');
   const page = first(sp.page);
   if (page) params.set('page', page);
-  for (const key of ['search', 'sport', 'categoryId', 'brandId', 'brand', 'collection', 'sortBy', 'minPrice', 'maxPrice'] as const) {
+  for (const key of ['search', 'sport', 'tag', 'categoryId', 'brandId', 'brand', 'collection', 'sortBy', 'minPrice', 'maxPrice'] as const) {
     const val = first(sp[key]);
     if (val) params.set(key, val);
   }
@@ -58,7 +58,7 @@ function isFilteredView(sp: SP): boolean {
   // (duplicate-content / crawl-budget waste). The SearchAction box still
   // routes here; Google's sitelinks searchbox doesn't need the target
   // indexed.
-  if (first(sp.search) || first(sp.sport)) return true;
+  if (first(sp.search) || first(sp.sport) || first(sp.tag)) return true;
   if (first(sp.sortBy) || first(sp.minPrice) || first(sp.maxPrice)) return true;
   if (first(sp.page) && first(sp.page) !== '1') return true;
   return Object.keys(sp).some((k) => /^filter\[/.test(k));

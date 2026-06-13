@@ -18,8 +18,6 @@ import {
   metafieldValuesToPayload,
   type MetafieldValueEntry,
 } from '../../components/CategoryMetafieldFormSection';
-// Phase 44 (2026-05-21) — seller-facing volume pricing tier CRUD.
-import { PricingTiersSection } from './_components/PricingTiersSection';
 
 // ----- Types -----
 
@@ -192,7 +190,10 @@ const router = useRouter();
   }, [form.title, form.categoryName, form.brandName, form.shortDescription, form.description, form.seoHandle, form.seoMetaTitle, form.seoMetaDescription, confirmDialog]);
 
   // UI state
-  const [saving, setSaving] = useState(false);
+  // Which footer action is in flight, so only the clicked button shows a spinner
+  // while the other simply disables — they no longer share one boolean (which made
+  // clicking either button flip BOTH to "Saving…").
+  const [savingAction, setSavingAction] = useState<'save' | 'submit' | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -208,6 +209,9 @@ const router = useRouter();
 
   // Image state
   const [uploadingImage, setUploadingImage] = useState(false);
+  // Per-batch upload progress so the gallery can show "Uploading X of Y…" and a
+  // matching number of skeleton tiles while files upload + the reload runs.
+  const [uploadProgress, setUploadProgress] = useState<{ done: number; total: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Phase 39 (2026-05-21) — category metafield value map. Hydrated
@@ -278,7 +282,7 @@ const router = useRouter();
       metafieldDefinitionId: string;
       metafieldDefinition?: { namespace: string; key: string; type: string };
       valueText?: string | null;
-      valueNumber?: number | null;
+      valueNumeric?: number | string | null;
       valueBoolean?: boolean | null;
       valueDate?: string | null;
       valueJson?: unknown;
@@ -291,7 +295,8 @@ const router = useRouter();
         case 'NUMBER_INTEGER':
         case 'NUMBER_DECIMAL':
         case 'RATING':
-          value = row.valueNumber ?? null;
+          // valueNumeric is a Prisma Decimal — arrives as a string in JSON.
+          value = row.valueNumeric != null ? Number(row.valueNumeric) : null;
           break;
         case 'BOOLEAN':
           value = row.valueBoolean ?? null;
@@ -445,6 +450,15 @@ const router = useRouter();
         errs.baseStock = 'Stock is required and must be 0 or more';
       }
     }
+    // Sellers cannot mint taxonomy — a typed value that didn't resolve to an
+    // existing category/brand id would be rejected by the backend with a 400,
+    // so block it here with actionable guidance instead.
+    if (!form.categoryId && form.categoryName?.trim()) {
+      errs.category = 'Select an existing category from the list';
+    }
+    if (!form.brandId && form.brandName?.trim()) {
+      errs.brand = 'Select an existing brand from the list';
+    }
     setErrors(errs);
     return Object.keys(errs).length === 0;
   }
@@ -456,10 +470,11 @@ const router = useRouter();
       title: form.title.trim(),
     };
 
+    // Send ids only — the seller DTO rejects free-text categoryName/brandName
+    // (Phase 30 anti-injection). A typed-but-unmatched value is blocked in
+    // validate(), so it never reaches here.
     if (form.categoryId) payload.categoryId = form.categoryId;
-    else if (form.categoryName?.trim()) payload.categoryName = form.categoryName.trim();
     if (form.brandId) payload.brandId = form.brandId;
-    else if (form.brandName?.trim()) payload.brandName = form.brandName.trim();
     payload.shortDescription = form.shortDescription.trim();
     payload.description = form.description.trim();
 
@@ -519,7 +534,7 @@ const router = useRouter();
       return;
     }
 
-    setSaving(true);
+    setSavingAction(submitForReview ? 'submit' : 'save');
     try {
       const token = sessionStorage.getItem('accessToken') || '';
       const payload = buildPayload();
@@ -535,8 +550,13 @@ const router = useRouter();
         try {
           await sellerProductService.submitForReview(token, productId);
           showToast('success', 'Product submitted for review. Your SKU mapping will go live after admin approval.');
-        } catch {
-          showToast('success', 'Product saved. Failed to submit for review.');
+        } catch (submitErr) {
+          // The product WAS saved, but submit-for-review failed (e.g. it needs
+          // at least one image, or a required field). Surface the real,
+          // actionable reason as an error — not a green "success" — so the
+          // seller knows exactly what to fix before resubmitting.
+          const reason = submitErr instanceof ApiError ? submitErr.message : 'Submit for review failed.';
+          showToast('error', `Saved, but not submitted: ${reason}`);
         }
       } else {
         showToast('success', 'Product updated successfully.');
@@ -558,7 +578,7 @@ const router = useRouter();
         showToast('error', 'An unexpected error occurred.');
       }
     } finally {
-      setSaving(false);
+      setSavingAction(null);
     }
   }
 
@@ -678,6 +698,7 @@ const router = useRouter();
     if (validFiles.length === 0) return;
 
     setUploadingImage(true);
+    setUploadProgress({ done: 0, total: validFiles.length });
     const token = sessionStorage.getItem('accessToken') || '';
     let uploaded = 0;
     let failed = 0;
@@ -689,6 +710,7 @@ const router = useRouter();
       } catch {
         failed++;
       }
+      setUploadProgress((p) => (p ? { ...p, done: p.done + 1 } : p));
     }
 
     if (failed > 0) {
@@ -699,6 +721,7 @@ const router = useRouter();
 
     await loadProduct();
     setUploadingImage(false);
+    setUploadProgress(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
 
@@ -965,8 +988,11 @@ const router = useRouter();
 
       {/* Section 1: Basic Info */}
       <div className="form-card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <div className="form-card-title" style={{ marginBottom: 0 }}>BASIC INFORMATION</div>
+        <div className="form-card-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+          <div>
+            <div className="form-card-title">Basic information</div>
+            <div className="form-card-subtitle">Name, category, brand, and product descriptions.</div>
+          </div>
           {isEditable && (
             <button type="button" onClick={generateWithAI} disabled={aiGenerating || !form.title.trim()}
               style={{ padding: '8px 16px', fontSize: 13, fontWeight: 600, background: aiGenerating ? '#e5e7eb' : 'linear-gradient(135deg, #8b5cf6, #6366f1)', color: aiGenerating ? '#6b7280' : '#fff', border: 'none', borderRadius: 8, cursor: aiGenerating ? 'default' : 'pointer', display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1022,7 +1048,7 @@ const router = useRouter();
                   setForm(prev => ({ ...prev, categoryId: '', categoryName: typed }));
                 }
               }}
-              placeholder="Type or select category"
+              placeholder="Select a category"
               disabled={!isEditable}
             />
             <datalist id="category-list">
@@ -1030,7 +1056,8 @@ const router = useRouter();
                 <option key={cat.id} value={cat.name} />
               ))}
             </datalist>
-            <span className="form-hint">Type a new category or select from existing</span>
+            <span className="form-hint">Select an existing category</span>
+            {errors.category && <span className="form-error">{errors.category}</span>}
           </div>
 
           <div className="form-group">
@@ -1049,7 +1076,7 @@ const router = useRouter();
                   setForm(prev => ({ ...prev, brandId: '', brandName: typed }));
                 }
               }}
-              placeholder="Type or select brand"
+              placeholder="Select a brand"
               disabled={!isEditable}
             />
             <datalist id="brand-list">
@@ -1057,7 +1084,8 @@ const router = useRouter();
                 <option key={b.id} value={b.name} />
               ))}
             </datalist>
-            <span className="form-hint">Type a new brand or select from existing</span>
+            <span className="form-hint">Select an existing brand</span>
+            {errors.brand && <span className="form-error">{errors.brand}</span>}
           </div>
 
           <div className="form-group full-width">
@@ -1096,7 +1124,10 @@ const router = useRouter();
 
       {/* Section 2: Product Type & Pricing */}
       <div className="form-card">
-        <div className="form-card-title">PRODUCT TYPE &amp; PRICING</div>
+        <div className="form-card-head">
+          <div className="form-card-title">Product type &amp; pricing</div>
+          <div className="form-card-subtitle">How this product is sold and priced.</div>
+        </div>
 
         <div className="form-checkbox-group">
           <input
@@ -1224,7 +1255,10 @@ const router = useRouter();
 
       {/* Variants Section */}
       <div className="form-card">
-        <div className="form-card-title">VARIANTS</div>
+        <div className="form-card-head">
+          <div className="form-card-title">Variants</div>
+          <div className="form-card-subtitle">Sizes, colours, and other options for this product.</div>
+        </div>
 
         {/* Options Editor */}
         <div style={{ marginBottom: 20 }}>
@@ -1479,26 +1513,42 @@ const router = useRouter();
 
       {/* Images Section (edit only) */}
       <div className="form-card">
-        <div className="form-card-title">IMAGES</div>
+        <div className="form-card-head">
+          <div className="form-card-title">Images</div>
+          <div className="form-card-subtitle">Photos buyers see on the product page.</div>
+        </div>
 
         {isEditable && (
           <div
-            className="image-upload-area"
-            onClick={() => fileInputRef.current?.click()}
+            className={`image-upload-area${uploadingImage ? ' is-uploading' : ''}`}
+            onClick={() => {
+              if (!uploadingImage) fileInputRef.current?.click();
+            }}
+            aria-busy={uploadingImage}
           >
             <input
               ref={fileInputRef}
               type="file"
               accept="image/*"
               multiple
+              disabled={uploadingImage}
               onChange={handleImageUpload}
             />
-            <p>{uploadingImage ? 'Uploading...' : 'Click to upload images'}</p>
+            {uploadingImage ? (
+              <div className="upload-progress" role="status" aria-live="polite">
+                <span className="upload-spinner" aria-hidden="true" />
+                <p>
+                  Uploading {uploadProgress?.done ?? 0} of {uploadProgress?.total ?? 0}…
+                </p>
+              </div>
+            ) : (
+              <p>Click to upload images</p>
+            )}
             <p className="upload-hint">Select one or more images. Max 5MB each. JPG, PNG, or WebP.</p>
           </div>
         )}
 
-        {sortedImages.length > 0 ? (
+        {sortedImages.length > 0 || uploadingImage ? (
           <div className="image-grid">
             {sortedImages.map((img, idx) => (
               <div key={img.id}>
@@ -1548,6 +1598,12 @@ const router = useRouter();
                 )}
               </div>
             ))}
+            {uploadingImage &&
+              Array.from({ length: uploadProgress?.total ?? 0 }).map((_, i) => (
+                <div key={`upload-skeleton-${i}`}>
+                  <div className="image-card image-skeleton" aria-hidden="true" />
+                </div>
+              ))}
           </div>
         ) : (
           <p style={{ fontSize: 13, color: 'var(--color-text-secondary)' }}>No images uploaded yet.</p>
@@ -1556,7 +1612,10 @@ const router = useRouter();
 
       {/* Section 3: Shipping */}
       <div className="form-card">
-        <div className="form-card-title">SHIPPING</div>
+        <div className="form-card-head">
+          <div className="form-card-title">Shipping</div>
+          <div className="form-card-subtitle">Package weight and dimensions used for delivery.</div>
+        </div>
         <div className="form-grid">
           <div className="form-group">
             <label className="form-label">Weight</label>
@@ -1643,19 +1702,12 @@ const router = useRouter();
       {/* Tax & GST classification is managed by a super-admin per product
           (HSN, GST rate, supply type, cess, UQC) — not editable by sellers. */}
 
-      {/* Phase 44 (2026-05-21) — volume pricing tiers. */}
-      <PricingTiersSection
-        productId={productId}
-        variants={(product?.variants ?? []).map((v: any) => ({
-          id: v.id,
-          title: v.title,
-          sku: v.sku,
-        }))}
-      />
-
       {/* Section 4: Tags */}
       <div className="form-card">
-        <div className="form-card-title">TAGS</div>
+        <div className="form-card-head">
+          <div className="form-card-title">Tags</div>
+          <div className="form-card-subtitle">Keywords that help buyers find this product.</div>
+        </div>
         {isEditable && (
           <div className="tags-input-group">
             <input
@@ -1692,7 +1744,10 @@ const router = useRouter();
 
       {/* Section 5: SEO */}
       <div className="form-card">
-        <div className="form-card-title">SEO (SEARCH ENGINE OPTIMIZATION)</div>
+        <div className="form-card-head">
+          <div className="form-card-title">Search engine optimization</div>
+          <div className="form-card-subtitle">How this product appears in search results.</div>
+        </div>
         <div className="form-grid">
           <div className="form-group full-width">
             <label className="form-label">Handle (URL slug)</label>
@@ -1739,7 +1794,10 @@ const router = useRouter();
 
       {/* Section 6: Policy */}
       <div className="form-card">
-        <div className="form-card-title">POLICIES</div>
+        <div className="form-card-head">
+          <div className="form-card-title">Policies</div>
+          <div className="form-card-subtitle">Returns, warranty, and other buyer-facing policies.</div>
+        </div>
         <div className="form-grid">
           <div className="form-group full-width">
             <label className="form-label">Return Policy</label>
@@ -1772,18 +1830,34 @@ const router = useRouter();
             type="button"
             className="form-btn"
             onClick={() => handleSave(false)}
-            disabled={saving || !hasChanges}
+            disabled={savingAction !== null || !hasChanges}
+            aria-busy={savingAction === 'save'}
           >
-            {saving ? 'Saving...' : 'Save Changes'}
+            {savingAction === 'save' ? (
+              <>
+                <span className="btn-spinner" aria-hidden="true" />
+                Saving…
+              </>
+            ) : (
+              'Save Changes'
+            )}
           </button>
           {canSubmitForReview && (
             <button
               type="button"
               className="form-btn primary"
               onClick={() => handleSave(true)}
-              disabled={saving}
+              disabled={savingAction !== null}
+              aria-busy={savingAction === 'submit'}
             >
-              {saving ? 'Saving...' : 'Save & Submit for Review'}
+              {savingAction === 'submit' ? (
+                <>
+                  <span className="btn-spinner" aria-hidden="true" />
+                  Saving…
+                </>
+              ) : (
+                'Save & Submit for Review'
+              )}
             </button>
           )}
         </div>
@@ -1817,9 +1891,11 @@ type StatusHistoryEntry = {
 };
 
 function StatusHistoryPanel({ entries }: { entries: StatusHistoryEntry[] }) {
+  // Newest first — the latest decision (e.g. a rejection note telling the
+  // seller what to fix) is the most relevant and should lead the timeline.
   const ordered = [...entries].sort(
     (a, b) =>
-      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
   );
 
   const palette = (status: string): string => {

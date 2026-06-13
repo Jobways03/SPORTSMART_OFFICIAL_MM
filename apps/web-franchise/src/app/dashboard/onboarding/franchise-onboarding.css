@@ -21,6 +21,24 @@
   box-shadow: 0 1px 3px rgba(16, 24, 40, 0.06);
 }
 
+/* Address group cards — match the seller onboarding fieldsets. */
+.fr-kyc .fr-group {
+  border: 1px solid #e6e9ef;
+  border-radius: 14px;
+  padding: 14px 20px 22px;
+  margin: 22px 0 6px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
+}
+.fr-kyc .fr-group legend {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: #2563eb;
+  padding: 0 8px;
+}
+
 .fr-kyc label {
   font-size: 13px;
   font-weight: 600;
@@ -32,27 +50,35 @@
 .fr-kyc textarea {
   width: 100%;
   box-sizing: border-box;
-  padding: 11px 13px;
+  padding: 11px 14px;
   font-size: 14px;
   color: #111827;
-  background: #fff;
-  border: 1px solid #d1d5db;
-  border-radius: 9px;
+  background: #f8fafc;
+  border: 1.5px solid #e3e8ef;
+  border-radius: 10px;
   outline: none;
-  transition: border-color 0.15s, box-shadow 0.15s;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
 }
-.fr-kyc input::placeholder {
-  color: #9ca3af;
+.fr-kyc input::placeholder,
+.fr-kyc textarea::placeholder {
+  color: #9aa4b2;
+}
+.fr-kyc input:hover,
+.fr-kyc select:hover,
+.fr-kyc textarea:hover {
+  border-color: #cdd5e0;
 }
 .fr-kyc input:focus,
 .fr-kyc select:focus,
 .fr-kyc textarea:focus {
   border-color: #2563eb;
-  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+  background: #ffffff;
+  box-shadow: 0 0 0 4px rgba(37, 99, 235, 0.12);
 }
-/* checkboxes must not stretch to 100% */
+/* checkboxes must not stretch to 100% or take the soft fill */
 .fr-kyc input[type='checkbox'] {
   width: auto;
+  background: #fff;
 }
 
 .fr-kyc .field-error {

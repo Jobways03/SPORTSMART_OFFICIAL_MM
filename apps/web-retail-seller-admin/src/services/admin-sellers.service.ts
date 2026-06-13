@@ -14,6 +14,12 @@ export interface SellerListItem {
   profileImageUrl: string | null;
   createdAt: string;
   lastLoginAt: string | null;
+  // KYC identity (for the Verify KYC review). Optional because the list
+  // endpoint doesn't return them — populated from the seller detail.
+  legalBusinessName?: string | null;
+  gstin?: string | null;
+  gstStateCode?: string | null;
+  panLast4?: string | null;
 }
 
 export interface SellerListResponse {
@@ -46,17 +52,34 @@ export interface SellerDetail {
   sellerShopLogoUrl: string | null;
   status: string;
   verificationStatus: string;
-  // Phase 254 — tax identity (from AdminGetSellerUseCase). panVerified is what
-  // the §194-O TDS engine keys off (unverified → §206AA 5% penalty; verified →
-  // configured rate).
-  legalBusinessName?: string | null;
-  gstin?: string | null;
-  gstStateCode?: string | null;
-  panNumber?: string | null;
-  panLast4?: string | null;
+  // KYC identity submitted via onboarding (shown in the Verify KYC review).
+  // Phase 254 — panVerified is what the §194-O TDS engine keys off (unverified →
+  // §206AA 5% penalty; verified → configured rate).
+  legalBusinessName: string | null;
+  gstin: string | null;
+  gstStateCode: string | null;
+  panNumber: string | null;
+  panLast4: string | null;
   panVerified?: boolean;
-  isGstVerified?: boolean;
+  isGstVerified: boolean;
   gstVerifiedAt?: string | null;
+  gstRegistrationType: string | null;
+  entityType: string | null;
+  registeredBusinessAddressJson: {
+    line1?: string;
+    line2?: string;
+    locality?: string;
+    city?: string;
+    state?: string;
+    pincode?: string;
+    country?: string;
+  } | null;
+  // Bank payout details (masked).
+  hasBankDetails: boolean;
+  bankName: string | null;
+  bankAccountHolderName: string | null;
+  bankAccountLast4: string | null;
+  bankIfscCode: string | null;
   isEmailVerified: boolean;
   profileCompletionPercentage: number;
   isProfileCompleted: boolean;
@@ -146,10 +169,44 @@ export const adminSellersService = {
     });
   },
 
+  // Proper KYC review actions. Unlike updateVerification (a raw status
+  // override that skips the KYC requirement), approve requires the seller to
+  // have submitted GSTIN+PAN via onboarding and sets ACTIVE+VERIFIED; reject
+  // sends them back with a reason they can see. Both gated on sellers.approve.
+  approveKyc(sellerId: string, notes?: string): Promise<ApiResponse> {
+    return apiClient(`/admin/sellers/${sellerId}/approve`, {
+      method: 'POST',
+      body: JSON.stringify(notes ? { notes } : {}),
+    });
+  },
+
+  rejectKyc(sellerId: string, reason: string): Promise<ApiResponse> {
+    return apiClient(`/admin/sellers/${sellerId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  },
+
   sendMessage(sellerId: string, subject: string, message: string, channel?: string): Promise<ApiResponse> {
     return apiClient(`/admin/sellers/${sellerId}/message`, {
       method: 'POST',
       body: JSON.stringify({ subject, message, channel }),
+    });
+  },
+
+  updateBankDetails(
+    sellerId: string,
+    dto: {
+      accountHolderName: string;
+      accountNumber: string;
+      ifscCode: string;
+      bankName: string;
+      upiVpa?: string;
+    },
+  ): Promise<ApiResponse> {
+    return apiClient(`/admin/sellers/${sellerId}/bank-details`, {
+      method: 'PATCH',
+      body: JSON.stringify(dto),
     });
   },
 

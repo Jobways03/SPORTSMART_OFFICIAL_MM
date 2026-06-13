@@ -158,14 +158,6 @@ export interface CreateOrderItemInput {
   unitPrice: number;
   quantity: number;
   totalPrice: number;
-  // Phase 44 (2026-05-21) — pricing-tier snapshot. unitPrice is the
-  // tier-adjusted (effective) price the customer paid; these fields
-  // record what tier was applied so refunds, disputes, and commission
-  // re-computation can prove the discount delta.
-  appliedPricingTierId?: string | null;
-  appliedDiscountPercent?: number | null;
-  appliedFixedUnitPrice?: number | null;
-  appliedListUnitPrice?: number | null;
   // Phase 67 (2026-05-22) — media public id snapshot (audit
   // Gap #23). Forward-compat: passed through to OrderItem if the
   // checkout session resolved it from the product images; null

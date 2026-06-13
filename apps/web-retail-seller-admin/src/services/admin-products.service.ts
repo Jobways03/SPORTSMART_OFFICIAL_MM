@@ -137,8 +137,18 @@ export const adminProductsService = {
     return apiClient(`/admin/products/${productId}`, { method: 'DELETE' });
   },
 
+  // Catalog approval (seller admin) — moves the product to APPROVED (catalog
+  // content signed off) but NOT live. A super admin then sets the HSN/tax config
+  // and calls makeLive.
   approveProduct(productId: string): Promise<ApiResponse> {
     return apiClient(`/admin/products/${productId}/approve`, { method: 'PATCH' });
+  },
+
+  // Make a catalog-approved product live (APPROVED → ACTIVE). SUPER_ADMIN only;
+  // runs the publish-readiness/tax gate server-side (requires taxConfigVerified
+  // for TAXABLE products).
+  makeLive(productId: string): Promise<ApiResponse> {
+    return apiClient(`/admin/products/${productId}/publish`, { method: 'PATCH' });
   },
 
   // Phase 37 — admin attestation of the product's tax config (HSN,
@@ -205,8 +215,32 @@ export const adminProductsService = {
     return apiClient(`/admin/seller-mappings/${mappingId}/approve`, { method: 'POST' });
   },
 
-  stopMapping(mappingId: string): Promise<ApiResponse> {
-    return apiClient(`/admin/seller-mappings/${mappingId}/stop`, { method: 'POST' });
+  stopMapping(mappingId: string, reason: string): Promise<ApiResponse> {
+    // Backend StopMappingDto requires a reason (min 3 chars) — without it the
+    // POST 400s, which made the Stop button silently fail.
+    return apiClient(`/admin/seller-mappings/${mappingId}/stop`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  // Reject a PENDING_APPROVAL mapping (the valid takedown for a not-yet-live
+  // mapping; /stop is APPROVED-only). Backend RejectMappingDto requires a
+  // reason (min 3 chars).
+  rejectMapping(mappingId: string, reason: string): Promise<ApiResponse> {
+    return apiClient(`/admin/seller-mappings/${mappingId}/reject`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  // Lift a STOPPED mapping back to APPROVED. Backend ReapproveMappingDto
+  // requires a reason (min 3 chars).
+  reapproveMapping(mappingId: string, reason: string): Promise<ApiResponse> {
+    return apiClient(`/admin/seller-mappings/${mappingId}/reapprove`, {
+      method: 'POST',
+      body: JSON.stringify({ reason }),
+    });
   },
 
   getPendingMappings(params: { page?: number; limit?: number } = {}): Promise<ApiResponse<any>> {

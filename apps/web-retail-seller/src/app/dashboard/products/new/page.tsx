@@ -288,6 +288,15 @@ export default function CreateProductPage() {
         errs.baseStock = 'Stock is required and must be 0 or more';
       }
     }
+    // Sellers cannot mint taxonomy — a typed value that didn't resolve to an
+    // existing category/brand id would be rejected by the backend with a 400,
+    // so block it here with actionable guidance instead.
+    if (!form.categoryId && form.categoryName?.trim()) {
+      errs.category = 'Select an existing category from the list';
+    }
+    if (!form.brandId && form.brandName?.trim()) {
+      errs.brand = 'Select an existing brand from the list';
+    }
     setErrors(errs);
     return Object.keys(errs).length === 0;
   }
@@ -300,10 +309,11 @@ export default function CreateProductPage() {
       hasVariants: form.hasVariants,
     };
 
+    // Send ids only — the seller DTO rejects free-text categoryName/brandName
+    // (Phase 30 anti-injection). A typed-but-unmatched value is blocked in
+    // validate(), so it never reaches here.
     if (form.categoryId) payload.categoryId = form.categoryId;
-    else if (form.categoryName?.trim()) payload.categoryName = form.categoryName.trim();
     if (form.brandId) payload.brandId = form.brandId;
-    else if (form.brandName?.trim()) payload.brandName = form.brandName.trim();
     if (form.shortDescription.trim()) payload.shortDescription = form.shortDescription.trim();
     if (form.description.trim()) payload.description = form.description.trim();
 
@@ -368,15 +378,20 @@ export default function CreateProductPage() {
         try {
           await sellerProductService.submitForReview(token, res.data.id);
           showToast('success', 'Product submitted for review. Your SKU mapping will go live after admin approval.');
-        } catch {
-          showToast('success', 'Product created as draft. Failed to submit for review.');
+          setTimeout(() => router.push('/dashboard/products'), 800);
+        } catch (submitErr) {
+          // The product WAS created as a draft, but submit-for-review failed
+          // (e.g. a variant product with no variants yet). Be honest — show the
+          // real reason instead of a green "success", and route the seller to
+          // the draft's edit page where they can fix it and resubmit.
+          const reason = submitErr instanceof ApiError ? submitErr.message : 'Submit for review failed.';
+          showToast('error', `Saved as draft, but not submitted: ${reason}`);
+          setTimeout(() => router.push(`/dashboard/products/${res.data!.id}/edit`), 1500);
         }
       } else {
         showToast('success', 'Product saved as draft.');
+        setTimeout(() => router.push('/dashboard/products'), 800);
       }
-
-      // Navigate after a short delay so toast is visible
-      setTimeout(() => router.push('/dashboard/products'), 800);
     } catch (err) {
       if (err instanceof ApiError) {
         showToast('error', err.message || 'Failed to create product.');
@@ -430,8 +445,11 @@ export default function CreateProductPage() {
 
       {/* Section 1: Basic Info */}
       <div className="form-card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <div className="form-card-title" style={{ marginBottom: 0 }}>BASIC INFORMATION</div>
+        <div className="form-card-head" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+          <div>
+            <div className="form-card-title">Basic information</div>
+            <div className="form-card-subtitle">Name, category, brand, and product descriptions.</div>
+          </div>
           <button
             type="button"
             onClick={generateWithAI}
@@ -484,14 +502,15 @@ export default function CreateProductPage() {
                   setForm(prev => ({ ...prev, categoryId: '', categoryName: typed }));
                 }
               }}
-              placeholder="Type or select category"
+              placeholder="Select a category"
             />
             <datalist id="category-list">
               {categories.map(cat => (
                 <option key={cat.id} value={cat.name} />
               ))}
             </datalist>
-            <span className="form-hint">Type a new category or select from existing</span>
+            <span className="form-hint">Select an existing category</span>
+            {errors.category && <span className="form-error">{errors.category}</span>}
           </div>
 
           <div className="form-group">
@@ -510,14 +529,15 @@ export default function CreateProductPage() {
                   setForm(prev => ({ ...prev, brandId: '', brandName: typed }));
                 }
               }}
-              placeholder="Type or select brand"
+              placeholder="Select a brand"
             />
             <datalist id="brand-list">
               {brands.map(b => (
                 <option key={b.id} value={b.name} />
               ))}
             </datalist>
-            <span className="form-hint">Type a new brand or select from existing</span>
+            <span className="form-hint">Select an existing brand</span>
+            {errors.brand && <span className="form-error">{errors.brand}</span>}
           </div>
 
           <div className="form-group full-width">
@@ -555,7 +575,10 @@ export default function CreateProductPage() {
 
       {/* Section 2: Product Type & Pricing */}
       <div className="form-card">
-        <div className="form-card-title">PRODUCT TYPE &amp; PRICING</div>
+        <div className="form-card-head">
+          <div className="form-card-title">Product type &amp; pricing</div>
+          <div className="form-card-subtitle">How this product is sold and priced.</div>
+        </div>
 
         <div className="form-checkbox-group">
           <input
@@ -672,7 +695,10 @@ export default function CreateProductPage() {
 
       {/* Section 3: Shipping */}
       <div className="form-card">
-        <div className="form-card-title">SHIPPING</div>
+        <div className="form-card-head">
+          <div className="form-card-title">Shipping</div>
+          <div className="form-card-subtitle">Package weight and dimensions used for delivery.</div>
+        </div>
         <div className="form-grid">
           <div className="form-group">
             <label className="form-label">Weight</label>
@@ -755,7 +781,10 @@ export default function CreateProductPage() {
 
       {/* Section 4: Tags */}
       <div className="form-card">
-        <div className="form-card-title">TAGS</div>
+        <div className="form-card-head">
+          <div className="form-card-title">Tags</div>
+          <div className="form-card-subtitle">Keywords that help buyers find this product.</div>
+        </div>
         <div className="tags-input-group">
           <input
             type="text"
@@ -786,7 +815,10 @@ export default function CreateProductPage() {
 
       {/* Section 5: SEO */}
       <div className="form-card">
-        <div className="form-card-title">SEO (SEARCH ENGINE OPTIMIZATION)</div>
+        <div className="form-card-head">
+          <div className="form-card-title">Search engine optimization</div>
+          <div className="form-card-subtitle">How this product appears in search results.</div>
+        </div>
         <div className="form-grid">
           <div className="form-group full-width">
             <label className="form-label">Handle (URL slug)</label>
@@ -831,7 +863,10 @@ export default function CreateProductPage() {
 
       {/* Section 6: Policy */}
       <div className="form-card">
-        <div className="form-card-title">POLICIES</div>
+        <div className="form-card-head">
+          <div className="form-card-title">Policies</div>
+          <div className="form-card-subtitle">Returns, warranty, and other buyer-facing policies.</div>
+        </div>
         <div className="form-grid">
           <div className="form-group full-width">
             <label className="form-label">Return Policy</label>

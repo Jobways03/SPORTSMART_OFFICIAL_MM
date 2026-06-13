@@ -36,11 +36,11 @@ export class UpdateFranchiseBankDetailsDto {
   })
   ifscCode!: string;
 
-  @IsOptional()
+  @IsNotEmpty({ message: 'Bank name is required' })
   @IsString()
   @MaxLength(150)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  bankName?: string;
+  bankName!: string;
 
   @IsOptional()
   @IsString()
