@@ -11,6 +11,7 @@ import {
   sellerDisputesService,
   DisputeKind,
 } from '@/services/disputes.service';
+import { validateUploadFile } from '@/lib/validators';
 
 // Match the backend enum. "Requested / Approved" are upstream states
 // the customer or admin drives; seller-side actions start at RECEIVED.
@@ -118,6 +119,15 @@ export default function SellerReturnDetailPage() {
       setActionMsg('Pick an image file first');
       return;
     }
+    // QC evidence is photos of the returned product — image types only,
+    // 5MB cap, matching the backend upload guard.
+    const fileErr = validateUploadFile(evidenceFile, {
+      types: ['image/jpeg', 'image/png', 'image/webp'],
+    });
+    if (fileErr) {
+      setActionMsg(fileErr);
+      return;
+    }
     setBusy('upload');
     setActionMsg('');
     try {
@@ -145,6 +155,22 @@ export default function SellerReturnDetailPage() {
     if (respondDecision === 'CONTESTED' && !respondNotes.trim()) {
       setActionMsg('Please add notes when contesting the claim');
       return;
+    }
+    // Evidence URL is optional, but if supplied it must be a real
+    // http(s) link — the backend stores it verbatim and renders it.
+    const evidenceUrl = respondEvidenceUrl.trim();
+    if (evidenceUrl) {
+      let okUrl = false;
+      try {
+        const parsed = new URL(evidenceUrl);
+        okUrl = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+      } catch {
+        okUrl = false;
+      }
+      if (!okUrl) {
+        setActionMsg('Enter a valid http(s) evidence URL or leave it blank.');
+        return;
+      }
     }
     setBusy('respond');
     setActionMsg('');
@@ -371,27 +397,68 @@ export default function SellerReturnDetailPage() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
-            {(['ACCEPTED', 'CONTESTED'] as const).map((d) => (
-              <button
-                key={d}
-                type="button"
-                onClick={() => setRespondDecision(d)}
-                disabled={busy !== null}
-                style={{
-                  padding: '6px 14px',
-                  background: respondDecision === d ? '#78350f' : '#fff',
-                  color: respondDecision === d ? '#fff' : '#78350f',
-                  border: '1px solid #b45309',
-                  borderRadius: 6,
-                  fontSize: 13,
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                }}
-              >
-                {d === 'ACCEPTED' ? 'Accept claim' : 'Contest with evidence'}
-              </button>
-            ))}
+          {/* Segmented toggle — these two pick HOW you respond (they don't
+              submit). The chosen segment is filled + ticked; the brown
+              "Submit …" button below is what actually sends the response. */}
+          <div style={{ marginBottom: 10 }}>
+            <div
+              style={{
+                fontSize: 11,
+                fontWeight: 700,
+                textTransform: 'uppercase',
+                letterSpacing: 0.4,
+                color: '#92400e',
+                marginBottom: 6,
+              }}
+            >
+              Your response
+            </div>
+            <div
+              role="radiogroup"
+              aria-label="Your response to this claim"
+              style={{
+                display: 'inline-flex',
+                border: '1px solid #b45309',
+                borderRadius: 8,
+                overflow: 'hidden',
+                background: '#fff',
+              }}
+            >
+              {(['ACCEPTED', 'CONTESTED'] as const).map((d, i) => {
+                const selected = respondDecision === d;
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    role="radio"
+                    aria-checked={selected}
+                    onClick={() => setRespondDecision(d)}
+                    disabled={busy !== null}
+                    style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      padding: '8px 16px',
+                      background: selected ? '#78350f' : 'transparent',
+                      color: selected ? '#fff' : '#78350f',
+                      border: 'none',
+                      borderLeft: i === 1 ? '1px solid #b45309' : 'none',
+                      fontSize: 13,
+                      fontWeight: selected ? 700 : 500,
+                      cursor: busy !== null ? 'default' : 'pointer',
+                    }}
+                  >
+                    {selected && <span aria-hidden>&#10003;</span>}
+                    {d === 'ACCEPTED' ? 'Accept claim' : 'Contest with evidence'}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 12, color: '#92400e', marginTop: 6 }}>
+              {respondDecision === 'CONTESTED'
+                ? 'You’re disputing this claim. Explain why below, add any evidence, then press “Submit contested”.'
+                : 'You’re accepting fault — the customer is refunded and the amount is debited from your settlement. Press “Submit accepted” to confirm.'}
+            </div>
           </div>
 
           <textarea

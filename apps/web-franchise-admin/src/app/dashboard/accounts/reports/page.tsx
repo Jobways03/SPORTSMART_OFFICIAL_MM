@@ -7,6 +7,7 @@ import {
   MarginReportResponse,
   PayoutsReportResponse,
 } from '@/services/admin-accounts.service';
+import { validateDateRange } from '@/lib/validators';
 
 const money = (v: unknown) => `₹${Number(v || 0).toLocaleString('en-IN')}`;
 const isoDay = (d: Date) => d.toISOString().slice(0, 10);
@@ -19,8 +20,15 @@ export default function FranchiseReportsPage() {
   const [margins, setMargins] = useState<MarginReportResponse | null>(null);
   const [payouts, setPayouts] = useState<PayoutsReportResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
 
   const run = useCallback(async () => {
+    const rangeError = validateDateRange(fromDate, toDate);
+    if (rangeError) {
+      setError(rangeError);
+      return;
+    }
+    setError('');
     setLoading(true);
     try {
       const [m, p] = await Promise.all([
@@ -96,6 +104,22 @@ export default function FranchiseReportsPage() {
           {loading ? 'Loading...' : 'Run'}
         </button>
       </div>
+
+      {error && (
+        <div
+          style={{
+            background: '#fee2e2',
+            border: '1px solid #fca5a5',
+            color: '#991b1b',
+            padding: '10px 14px',
+            borderRadius: 8,
+            fontSize: 13,
+            marginBottom: 16,
+          }}
+        >
+          {error}
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
         <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: 20 }}>

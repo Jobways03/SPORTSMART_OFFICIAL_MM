@@ -65,6 +65,7 @@ import { MarketplaceCommissionGstrService } from './application/services/marketp
 import { CheckoutTaxPreviewService } from './application/services/checkout-tax-preview.service';
 import { CartTaxPreviewService } from './application/services/cart-tax-preview.service';
 import { TaxDocumentPdfService } from './application/services/tax-document-pdf.service';
+import { HtmlToPdfService } from './infrastructure/pdf/html-to-pdf.service';
 import { TaxDocumentDownloadService } from './application/services/tax-document-download.service';
 import { TaxDocumentRetentionService } from './application/services/tax-document-retention.service';
 import { EInvoiceService } from './application/services/einvoice.service';
@@ -312,6 +313,7 @@ const taxPdfStorageProvider = {
     PlatformGstProfileService,
     CheckoutTaxPreviewService,
     CartTaxPreviewService,
+    HtmlToPdfService,
     TaxDocumentPdfService,
     TaxDocumentDownloadService,
     TaxDocumentRetentionService,

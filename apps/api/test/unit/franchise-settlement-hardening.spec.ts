@@ -33,6 +33,9 @@ function buildCreateService(entries: any[]) {
         created = { data: args.data };
         return { id: 'settle-1', ...args.data };
       }),
+      // Phase 251 — createSettlementCycle now stamps the dynamic-charge total +
+      // flag after creating each settlement.
+      update: jest.fn().mockResolvedValue({}),
     },
     franchiseFinanceLedger: {
       updateMany: jest.fn().mockResolvedValue({ count: entries.length }),
@@ -48,6 +51,9 @@ function buildCreateService(entries: any[]) {
     discountLiabilityLedger: { aggregate: jest.fn().mockResolvedValue({ _sum: { amountInPaise: null } }) },
     // Phase 250 (Franchise tax) — commission-GST place-of-supply lookup.
     platformGstProfile: { findFirst: jest.fn().mockResolvedValue(null) },
+    // Phase 251 — dynamic settlement charge rules snapshot + frozen breakup.
+    settlementChargeRule: { findMany: jest.fn().mockResolvedValue([]) },
+    franchiseSettlementChargeLine: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
   };
   const prisma: any = { $transaction: (cb: any) => cb(tx) };
   const financeRepo: any = {};

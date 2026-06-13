@@ -8,6 +8,7 @@ import {
   TicketCategory,
   TicketPriority,
 } from '@/services/support.service';
+import { validateText } from '@/lib/validators';
 
 const PRIORITIES: TicketPriority[] = ['LOW', 'NORMAL', 'HIGH', 'URGENT'];
 
@@ -31,8 +32,10 @@ export default function NewSellerTicketPage() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!subject.trim()) return setError('Subject is required');
-    if (!body.trim()) return setError('Please describe the issue');
+    const subjectErr = validateText(subject, { min: 5, max: 200, label: 'Subject' });
+    if (subjectErr) return setError(subjectErr);
+    const bodyErr = validateText(body, { min: 15, max: 5000, label: 'Description' });
+    if (bodyErr) return setError(bodyErr);
     setSubmitting(true);
     try {
       const res = await sellerSupportService.createTicket({

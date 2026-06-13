@@ -10,6 +10,11 @@ import {
 } from '@/services/staff.service';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
+import {
+  validateEmail,
+  validatePassword,
+  validateIndianMobile,
+} from '@/lib/validators';
 
 const ASSIGNABLE_ROLES: FranchiseStaffRole[] = [
   'MANAGER',
@@ -401,10 +406,18 @@ function AddStaffModal({
 
   const submit = async () => {
 if (!form.name.trim()) return void notify('Name is required');
-    if (!form.email.trim() || !form.email.includes('@'))
-      return void notify('Valid email is required');
-    if (!form.password || form.password.length < 8)
-      return void notify('Password must be at least 8 characters');
+    const emailError = validateEmail(form.email);
+    if (emailError) return void notify(emailError);
+    // Phone is optional, but if provided it must be a valid Indian mobile.
+    if (form.phone?.trim()) {
+      const phoneError = validateIndianMobile(form.phone.trim());
+      if (phoneError) return void notify(phoneError);
+    }
+    // Enforce the same strong-password rule the franchise's own account uses
+    // (8+ chars with upper, lower, digit and special) instead of the prior
+    // length-only check.
+    const passwordError = validatePassword(form.password);
+    if (passwordError) return void notify(passwordError);
 
     setIsSaving(true);
     try {
@@ -477,7 +490,7 @@ if (!form.name.trim()) return void notify('Name is required');
           </select>
         </div>
         <FieldInput
-          label="Password (min 8 chars)"
+          label="Password (8+ chars, upper, lower, digit, special)"
           type="password"
           value={form.password}
           onChange={(v) => setForm({ ...form, password: v })}
@@ -535,6 +548,11 @@ function EditStaffModal({
 
   const submit = async () => {
 if (!form.name?.trim()) return void notify('Name is required');
+    // Phone is optional, but if provided it must be a valid Indian mobile.
+    if (form.phone?.trim()) {
+      const phoneError = validateIndianMobile(form.phone.trim());
+      if (phoneError) return void notify(phoneError);
+    }
 
     setIsSaving(true);
     try {

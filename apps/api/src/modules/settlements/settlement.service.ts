@@ -27,6 +27,9 @@ import {
   CommissionInvoiceUnavailableError,
 } from '../tax/application/services/commission-invoice.service';
 import { computeCommissionGst } from '../tax/domain/commission-gst-calculator';
+// Phase 252 — commission-GST rate is admin-configurable (tax_config).
+import { TaxConfigService } from '../tax/application/services/tax-config.service';
+import { settlementNetFromRow } from './domain/settlement-net';
 
 // Phase 142 — the per-seller aggregation shape shared by createCycle (writes)
 // and previewCycle (dry-run). `records` only needs `id` for the consumer (the
@@ -64,6 +67,8 @@ export class SettlementService {
     // the marketplace GSTR-1 can emit one §4 B2B row per invoice (CBIC
     // contract) instead of a per-(seller, period) rollup.
     private readonly commissionInvoice: CommissionInvoiceService,
+    // Phase 252 — commission-GST rate read from tax_config at cycle creation.
+    private readonly taxConfig: TaxConfigService,
   ) {}
 
   /**
@@ -242,6 +247,7 @@ export class SettlementService {
         arr.push(d);
         debitsBySeller.set(d.sellerId, arr);
       }
+
       // Σ claw-back netted across all sellers — used to reduce the cycle's
       // headline totalAmount so it stays equal to Σ net per-seller payouts.
       let cycleClawbackPaise = 0n;
@@ -253,12 +259,18 @@ export class SettlementService {
         // moment it exists. Frozen with the marketplace + seller state
         // codes so a later PlatformGstProfile / Seller.gstStateCode
         // change doesn't rewrite the historical split.
+        // Phase 252 — rate + base from tax_config (getSettlementTaxConfig is
+        // cached, so reading it per seller is cheap). Default: 18% on commission.
+        const gstCfg = (await this.taxConfig.getSettlementTaxConfig()).gst;
+        const gstBaseInPaise =
+          gstCfg.baseType === 'COMMISSION'
+            ? BigInt(data.totalPlatformMargin.mul(100).toFixed(0))
+            : BigInt(data.totalPlatformAmount.mul(100).toFixed(0));
         const commissionGst = computeCommissionGst({
-          commissionAmountInPaise: BigInt(
-            data.totalPlatformMargin.mul(100).toFixed(0),
-          ),
+          commissionAmountInPaise: gstBaseInPaise,
           marketplaceStateCode,
           sellerStateCode: data.sellerStateCode,
+          rateBpsOverride: gstCfg.rateBps,
         });
 
         // ── Phase 150: net this seller's PENDING claw-backs into the payout.
@@ -323,6 +335,12 @@ export class SettlementService {
             payoutDueBy: cyclePayoutDueBy,
           }),
         });
+
+        // Phase 252 — the generic dynamic charge-rule engine is retired. The
+        // three statutory taxes (commission-GST / §52 TCS / §194-O TDS) are the
+        // only deductions; commission-GST is stamped above at creation, TCS/TDS
+        // at approval (config-driven rate + base — see tax_config). So no
+        // per-cycle charge-rule computation happens here anymore.
 
         // Link commission records to the settlement. Filter on
         // `settlementId: null` so a concurrent createCycle racing the
@@ -596,21 +614,36 @@ export class SettlementService {
       );
     }
 
-    const released = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
       const cycle = await tx.settlementCycle.findUnique({
         where: { id: cycleId },
-        include: { sellerSettlements: { select: { id: true } } },
+        include: { sellerSettlements: { select: { id: true, status: true } } },
       });
       if (!cycle) throw new NotFoundAppException('Settlement cycle not found');
-      if (cycle.status !== 'DRAFT' && cycle.status !== 'PREVIEWED') {
+      // Phase 253 — reject is allowed for DRAFT/PREVIEWED and now also APPROVED
+      // cycles, as long as NO settlement has been paid (money already moved
+      // can't be un-rejected here — that needs the reversal/refund flow).
+      if (!['DRAFT', 'PREVIEWED', 'APPROVED'].includes(cycle.status)) {
         throw new BadRequestAppException(
-          `Cannot cancel a cycle in ${cycle.status} state — only DRAFT/PREVIEWED cycles can be cancelled. Use the reversal flow for an approved/paid cycle.`,
+          `Cannot reject a cycle in ${cycle.status} state — only DRAFT, PREVIEWED, or APPROVED (unpaid) cycles can be rejected.`,
         );
       }
+      const paidCount = cycle.sellerSettlements.filter(
+        (s) => s.status === 'PAID' || s.status === 'PARTIALLY_PAID',
+      ).length;
+      if (paidCount > 0) {
+        throw new BadRequestAppException(
+          `Cannot reject — ${paidCount} settlement(s) in this cycle are already paid. Reverse the payout first.`,
+        );
+      }
+      const wasApproved = cycle.status === 'APPROVED';
 
       const settlementIds = cycle.sellerSettlements.map((s) => s.id);
       let releasedCount = 0;
       if (settlementIds.length > 0) {
+        // Commission records stay PENDING through approval (only the settlement
+        // + cycle flip to APPROVED), so releasing them is just clearing the
+        // settlementId — they fall back into the PENDING pool for a fresh cycle.
         const released = await tx.commissionRecord.updateMany({
           where: { settlementId: { in: settlementIds } },
           data: this.moneyDualWrite.applyPaise('commissionRecord', {
@@ -624,13 +657,47 @@ export class SettlementService {
         });
       }
 
+      // Undo the approve-time discount-ledger flip (APPLIED → SETTLED) so the
+      // seller-funded discounts return to the pool for the next cycle.
+      if (wasApproved) {
+        await tx.discountLiabilityLedger.updateMany({
+          where: { settlementCycleId: cycleId, status: 'SETTLED' },
+          data: { status: 'APPLIED', settlementCycleId: null },
+        });
+      }
+
       await tx.settlementCycle.update({
         where: { id: cycleId },
         data: { status: 'CANCELLED' },
       });
 
-      return releasedCount;
+      return { releasedCount, wasApproved };
     });
+    const released = result.releasedCount;
+
+    // Phase 253 — reverse the statutory ledgers stamped at approval (best-effort,
+    // post-commit, mirroring how approveCycle runs its tax hooks). NOTE: the §52
+    // TCS (monthly) and §194-O TDS (quarterly) ledgers aggregate a whole filing
+    // period; reversing here assumes this cycle is the only one in that period
+    // (the redo/test flow). Multiple cycles per period would need a finer
+    // recompute — surfaced rather than silently mis-reversed.
+    if (result.wasApproved) {
+      const actorId = actor.adminId ?? 'system';
+      await this.tcsHook
+        .reverseCycleOnCancel(cycleId, actorId, safeReason)
+        .catch((e) =>
+          this.logger.error(
+            `TCS reverse on cycle reject failed for ${cycleId}: ${(e as Error).message}`,
+          ),
+        );
+      await this.tdsHook
+        .reverseCycleOnCancel(cycleId, actorId, safeReason)
+        .catch((e) =>
+          this.logger.error(
+            `TDS reverse on cycle reject failed for ${cycleId}: ${(e as Error).message}`,
+          ),
+        );
+    }
 
     this.audit
       .writeAuditLog({
@@ -754,6 +821,9 @@ export class SettlementService {
             _count: { select: { commissionRecords: true } },
             // Phase 145 — payout actor name for the row's "paid by X" display.
             paidByAdmin: { select: { name: true } },
+            // Phase 251 — frozen dynamic charge breakup (rule-wise) so the
+            // detail page can show what each active rule deducted at creation.
+            chargeLines: { orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }] },
           },
         },
         // Phase 144 — resolve the approving admin's name for the detail page.
@@ -881,7 +951,17 @@ export class SettlementService {
       };
     }
 
-    return { ...cycle, discountDeductionsBySeller, liveTotals };
+    // Phase 251 — attach the single-source-of-truth net per seller settlement
+    // (paise string) so every UI reads ONE number instead of re-deriving it.
+    const sellerSettlements = (cycle.sellerSettlements ?? []).map((s: any) => ({
+      ...s,
+      netPayableInPaise: settlementNetFromRow(
+        s,
+        BigInt(Math.round(Number(s.totalSettlementAmount) * 100)),
+      ).toString(),
+    }));
+
+    return { ...cycle, sellerSettlements, discountDeductionsBySeller, liveTotals };
   }
 
   /* ── T3: Approve cycle ── */
@@ -1129,20 +1209,18 @@ export class SettlementService {
 
     const trimmedUtr = utrReference.trim();
 
-    // Record the NET amount actually wired to the seller = settlement gross
-    // − TCS − TDS − commission GST. Pre-fix this column stayed 0, so the admin
-    // side had no record of what was actually paid (only the gross settlement,
-    // which is why "₹1,439.20 admin vs ₹1,202.55 seller" looked inconsistent).
-    // The tax fields are populated at cycle approval, so they're present here.
+    // Record the NET amount actually wired to the seller.
+    // Phase 251 — cycles created with dynamic charge rules (chargeRulesApplied)
+    // deduct the rule-wise charge total; older cycles keep the legacy
+    // gross − TCS − TDS − commission GST formula so historical payouts don't
+    // shift. The deduction columns are populated at cycle approval / creation,
+    // so they're present here.
     const grossPaise = BigInt(
       Math.round(Number(settlement.totalSettlementAmount) * 100),
     );
-    const netPaidPaise =
-      grossPaise -
-      BigInt(settlement.tcsDeductedInPaise ?? 0) -
-      BigInt(settlement.tdsDeductedInPaise ?? 0) -
-      BigInt(settlement.totalCommissionGstInPaise ?? 0);
-    const paidAmountInPaise = netPaidPaise > 0n ? netPaidPaise : 0n;
+    // Phase 251 — single source of truth (settlement-net.ts). Already clamped ≥0.
+    const netPaidPaise = settlementNetFromRow(settlement, grossPaise);
+    const paidAmountInPaise = netPaidPaise;
 
     try {
       await this.prisma.$transaction(async (tx) => {
@@ -1248,14 +1326,13 @@ export class SettlementService {
       );
     }
 
-    // Phase 145 — actual ₹ wired = gross settlement − TCS − TDS − commission-GST
-    // (all paise). Recording it (alongside the gross) means an auditor reading
-    // the log sees what actually left the bank, not just the pre-tax figure.
-    const netAmountInPaise =
-      BigInt(settlement.totalSettlementAmountInPaise ?? 0) -
-      BigInt(settlement.tcsDeductedInPaise ?? 0) -
-      BigInt(settlement.tdsDeductedInPaise ?? 0) -
-      BigInt(settlement.totalCommissionGstInPaise ?? 0);
+    // Phase 145 — actual ₹ wired, recorded alongside the gross so an auditor
+    // reading the log sees what actually left the bank, not just the pre-tax
+    // figure. Phase 251 — same single source of truth as the payout above.
+    const netAmountInPaise = settlementNetFromRow(
+      settlement,
+      BigInt(settlement.totalSettlementAmountInPaise ?? 0),
+    );
 
     // Audit the payout — settlement payouts are real money movements and
     // need to be traceable to a specific admin action with the UTR.
@@ -1382,6 +1459,10 @@ export class SettlementService {
         tcsDeductedInPaise: true,
         tdsDeductedInPaise: true,
         totalCommissionGstInPaise: true,
+        // Phase 251 — rule-applied cycles net out the dynamic charge total
+        // instead of the legacy statutory deductions.
+        dynamicChargeTotalInPaise: true,
+        chargeRulesApplied: true,
         paidAt: true,
         utrReference: true,
       },
@@ -1412,16 +1493,15 @@ export class SettlementService {
       pendingSettlement: Number(pendingAgg._sum.totalSettlementAmount || 0),
       lastPayout: lastPayout
         ? {
-            // NET actually wired = settlement − TCS − TDS − commission GST.
-            // (Mirrors the per-row net the seller UI computes; the gross
-            // settlement amount remains visible in the settlement history
-            // row + its breakdown.)
+            // NET actually wired — single source of truth (settlement-net.ts),
+            // same formula as the payout + every UI surface.
             amount:
-              (Math.round(Number(lastPayout.totalSettlementAmount) * 100) -
-                Number(lastPayout.tcsDeductedInPaise ?? 0) -
-                Number(lastPayout.tdsDeductedInPaise ?? 0) -
-                Number(lastPayout.totalCommissionGstInPaise ?? 0)) /
-              100,
+              Number(
+                settlementNetFromRow(
+                  lastPayout,
+                  BigInt(Math.round(Number(lastPayout.totalSettlementAmount) * 100)),
+                ),
+              ) / 100,
             paidAt: lastPayout.paidAt,
             utrReference: lastPayout.utrReference,
           }
@@ -1558,13 +1638,25 @@ export class SettlementService {
           cycle: {
             select: { periodStart: true, periodEnd: true, status: true },
           },
+          // Phase 251 — frozen rule-wise charge breakup so the seller's
+          // settlement-history payout breakdown itemizes the dynamic charges
+          // (and the net) exactly as they were applied at cycle creation.
+          chargeLines: { orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }] },
         },
       }),
       this.prisma.sellerSettlement.count({ where: { sellerId } }),
     ]);
 
     return {
-      settlements,
+      // Phase 251 — attach the single-source-of-truth net (paise string) so the
+      // seller portal reads ONE number instead of re-deriving the formula.
+      settlements: settlements.map((s: any) => ({
+        ...s,
+        netPayableInPaise: settlementNetFromRow(
+          s,
+          BigInt(Math.round(Number(s.totalSettlementAmount) * 100)),
+        ).toString(),
+      })),
       pagination: {
         page,
         limit,
@@ -2132,6 +2224,11 @@ export class SettlementService {
         'SGST On Commission': rupees(s.sgstOnCommissionInPaise),
         'IGST On Commission': rupees(s.igstOnCommissionInPaise),
         'Total Commission GST': rupees(s.totalCommissionGstInPaise),
+        // Phase 251 — dynamic charge-rule total deducted at payout (0 for
+        // legacy cycles that still use the TCS/TDS/GST columns above).
+        'Dynamic Charges Deducted': s.chargeRulesApplied
+          ? rupees(s.dynamicChargeTotalInPaise)
+          : '0.00',
         'Payment Status': s.status,
         'Paid Date': s.paidAt ? formatDDMMYYYY(s.paidAt) : '',
         'UTR Reference': s.utrReference ?? '',

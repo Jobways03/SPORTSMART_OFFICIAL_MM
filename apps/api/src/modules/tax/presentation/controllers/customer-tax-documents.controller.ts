@@ -13,16 +13,21 @@ import {
   Param,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import type { Response } from 'express';
 import { UserAuthGuard } from '../../../../core/guards';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   TaxDocumentDownloadService,
   TaxDocumentDownloadDeniedError,
 } from '../../application/services/tax-document-download.service';
-import { PdfDocumentNotFoundError } from '../../application/services/tax-document-pdf.service';
+import {
+  PdfDocumentNotFoundError,
+  TaxDocumentPdfService,
+} from '../../application/services/tax-document-pdf.service';
 
 @ApiTags('Customer / Tax Documents')
 @Controller('customer/tax-documents')
@@ -31,7 +36,68 @@ export class CustomerTaxDocumentsController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly download: TaxDocumentDownloadService,
+    private readonly pdfService: TaxDocumentPdfService,
   ) {}
+
+  /**
+   * Download ALL of an order's tax invoices as ONE PDF (each invoice on its
+   * own page). For multi-seller orders this bundles the per-seller invoices
+   * into a single file — they remain legally distinct invoices inside.
+   *
+   * Ownership is enforced here: the master order must belong to the
+   * authenticated customer. Streams `application/pdf` as an attachment.
+   *
+   * Declared BEFORE `:id/download` so the literal `combined` segment is matched
+   * directly and never captured as an `:id`.
+   */
+  @Get('combined')
+  async combined(
+    @Req() req: any,
+    @Res() res: Response,
+    @Query('orderId') orderId?: string,
+  ): Promise<void> {
+    if (!orderId) {
+      throw new HttpException(
+        { success: false, message: 'orderId is required', code: 'BAD_REQUEST' },
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    // Scope: the order must belong to this customer.
+    const owned = await this.prisma.masterOrder.findFirst({
+      where: { id: orderId, customerId: req.userId },
+      select: { id: true },
+    });
+    if (!owned) {
+      throw new HttpException(
+        { success: false, message: 'Order not found', code: 'NOT_FOUND' },
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    let result: { buffer: Buffer; count: number; orderNumber: string } | null;
+    try {
+      result = await this.pdfService.buildOrderInvoicesPdf(orderId);
+    } catch (err) {
+      throw mapDownloadError(err);
+    }
+    if (!result) {
+      throw new HttpException(
+        {
+          success: false,
+          message: 'No invoice has been generated for this order yet.',
+          code: 'DOCUMENT_NOT_READY',
+        },
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const filename = `${result.orderNumber}-tax-invoices.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', String(result.buffer.length));
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(result.buffer);
+  }
 
   /**
    * Paginated list of the authenticated customer's tax documents.

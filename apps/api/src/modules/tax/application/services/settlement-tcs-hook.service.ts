@@ -35,6 +35,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { SellerSettlement } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { TcsService } from './tcs.service';
+import { TaxConfigService } from './tax-config.service';
+import { resolveTaxBaseInPaise } from '../../domain/settlement-tax-config';
 
 export interface ApplyToCycleResult {
   cycleId: string;
@@ -55,6 +57,8 @@ export class SettlementTcsHookService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly tcs: TcsService,
+    // Phase 252 — TCS base ('what it's levied on') is configurable; default GST.
+    private readonly taxConfig: TaxConfigService,
   ) {}
 
   /**
@@ -118,7 +122,6 @@ export class SettlementTcsHookService {
         // the period's settlements it reconciles to the monthly ledger.
         const perSettlementTcsInPaise = await this.computeSettlementTcs(
           s.id,
-          s.sellerId,
           ledger.tcsRateBps,
         );
 
@@ -172,53 +175,77 @@ export class SettlementTcsHookService {
   }
 
   /**
-   * TCS attributable to a SINGLE settlement = rate × the taxable value of the
-   * tax invoices for the orders in that settlement (invoices + debit notes add,
-   * credit notes subtract). This is the amount deducted from THIS payout —
-   * distinct from the monthly GSTR-8 ledger total (deposited to the government
-   * once for the whole period). Uses the same document basis as the monthly
-   * ledger so per-settlement amounts reconcile to it.
+   * Phase 253 — reverse the §52 TCS ledgers stamped on a cycle's settlements
+   * when an APPROVED (unpaid) cycle is rejected, so a fresh cycle recomputes
+   * cleanly. The ledger is a monthly GSTR-8 aggregate; reversing it assumes this
+   * cycle is the only one in the filing month (the redo flow). Best-effort.
+   */
+  async reverseCycleOnCancel(
+    cycleId: string,
+    reversedBy: string,
+    reason: string,
+  ): Promise<number> {
+    const settlements = await this.prisma.sellerSettlement.findMany({
+      where: { cycleId, tcsLedgerId: { not: null } },
+      select: { tcsLedgerId: true },
+    });
+    const ledgerIds = [
+      ...new Set(
+        settlements
+          .map((s) => s.tcsLedgerId)
+          .filter((x): x is string => !!x),
+      ),
+    ];
+    let reversed = 0;
+    for (const ledgerId of ledgerIds) {
+      try {
+        const r = await this.tcs.reverse({
+          ledgerId,
+          reversedBy,
+          reason: `Cycle ${cycleId} rejected: ${reason}`,
+        });
+        if (!r.wasAlreadyReversed) reversed++;
+      } catch (e) {
+        this.logger.warn(
+          `TCS ledger ${ledgerId} reverse failed: ${(e as Error).message}`,
+        );
+      }
+    }
+    return reversed;
+  }
+
+  /**
+   * TCS attributable to a SINGLE settlement = rate × the configured base for
+   * that settlement. This is the amount deducted from THIS payout — distinct
+   * from the monthly GSTR-8 ledger total (deposited to the government once for
+   * the whole period).
    */
   private async computeSettlementTcs(
     settlementId: string,
-    sellerId: string,
     rateBps: number,
   ): Promise<bigint> {
-    const recs = await this.prisma.commissionRecord.findMany({
-      where: { settlementId },
-      select: { masterOrderId: true },
-      distinct: ['masterOrderId'],
-    });
-    const masterOrderIds = recs
-      .map((r) => r.masterOrderId)
-      .filter((id): id is string => !!id);
-    if (masterOrderIds.length === 0) return 0n;
-
-    const docs = await this.prisma.taxDocument.findMany({
-      where: {
-        sellerId,
-        masterOrderId: { in: masterOrderIds },
-        documentType: {
-          in: [
-            'TAX_INVOICE',
-            'INVOICE_CUM_BILL_OF_SUPPLY',
-            'DEBIT_NOTE',
-            'CREDIT_NOTE',
-          ],
-        },
-        status: { notIn: ['VOIDED_DRAFT', 'SUPERSEDED'] },
+    // Phase 252 — TCS slice on the CONFIGURED base, computed from the
+    // settlement's own columns so it reconciles with the monthly ledger (which
+    // aggregates the same columns). Default base = GST (the commission-GST
+    // amount), i.e. "TCS on GST".
+    const cfg = (await this.taxConfig.getSettlementTaxConfig()).tcs;
+    const s = await this.prisma.sellerSettlement.findUnique({
+      where: { id: settlementId },
+      select: {
+        totalPlatformMarginInPaise: true,
+        totalPlatformAmountInPaise: true,
+        totalCommissionGstInPaise: true,
       },
-      select: { documentType: true, taxableAmountInPaise: true },
     });
-
-    let taxable = 0n;
-    for (const d of docs) {
-      if (d.documentType === 'CREDIT_NOTE') taxable -= d.taxableAmountInPaise;
-      else taxable += d.taxableAmountInPaise;
-    }
-    if (taxable <= 0n) return 0n;
+    if (!s) return 0n;
+    const base = resolveTaxBaseInPaise(cfg.baseType, {
+      commissionInPaise: s.totalPlatformMarginInPaise,
+      priceOfGoodsSoldInPaise: s.totalPlatformAmountInPaise,
+      gstInPaise: s.totalCommissionGstInPaise,
+    });
+    if (base <= 0n) return 0n;
     // rate is in basis points (100 = 1%); round half-up.
-    return (taxable * BigInt(rateBps) + 5000n) / 10000n;
+    return (base * BigInt(rateBps) + 5000n) / 10000n;
   }
 
   /**

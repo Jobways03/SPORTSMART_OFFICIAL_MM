@@ -10,6 +10,7 @@ import {
   KIND_LABEL,
   STATUS_COLOR,
 } from '@/services/admin-reconciliation.service';
+import { validateDateRange } from '@/lib/validators';
 
 const KIND_OPTIONS: ReconciliationKind[] = [
   'PAYMENT', 'COD', 'SETTLEMENT', 'REFUND', 'WALLET',
@@ -226,6 +227,12 @@ function StartRunForm({
     e.preventDefault();
     if (kindLocked) {
       setErr(`A ${KIND_LABEL[kind]} run is already in progress. Wait for it to finish.`);
+      return;
+    }
+    // Field-level guard: both dates present + parseable + start <= end.
+    const rangeErr = validateDateRange(periodStart, periodEnd, { allowEqual: true });
+    if (rangeErr) {
+      setErr(rangeErr);
       return;
     }
     setBusy(true);

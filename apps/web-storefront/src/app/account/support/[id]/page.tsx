@@ -21,6 +21,7 @@ import {
   STATUS_LABEL,
   PRIORITY_LABEL,
 } from '@/services/support.service';
+import { validateText } from '@/lib/validators';
 
 const STATUS_COLORS: Record<TicketStatus, string> = {
   OPEN: '#0ea5e9',
@@ -146,7 +147,11 @@ export default function TicketDetailPage() {
   const isClosed = ticket.status === 'CLOSED';
 
   async function send() {
-    if (!reply.trim()) return;
+    const replyError = validateText(reply, { label: 'Reply', min: 1, max: 5000 });
+    if (replyError) {
+      setError(replyError);
+      return;
+    }
     setSending(true);
     sendingRef.current = true;
     try {

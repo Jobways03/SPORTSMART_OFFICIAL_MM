@@ -49,6 +49,10 @@ export class RefreshSessionController {
         persona: 'customer',
         accessToken,
         refreshToken: newRefreshToken,
+        // Phase 259 — cookie maxAge must match the rotated access token's TTL,
+        // else the access cookie expires after the 1h default while the JWT
+        // lives 1d (page refresh would log the customer out).
+        accessTtlSeconds: (result as { expiresIn?: number })?.expiresIn,
         domain: this.env.getString('AUTH_COOKIE_DOMAIN', '') || null,
         secure:
           this.env.isProduction() ||

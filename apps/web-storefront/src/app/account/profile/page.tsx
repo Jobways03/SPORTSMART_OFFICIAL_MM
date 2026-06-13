@@ -6,6 +6,13 @@ import Link from 'next/link';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { profileService, CustomerProfile } from '@/services/profile.service';
 import { ApiError } from '@/lib/api-client';
+import {
+  validatePassword,
+  validateFirstName,
+  validateLastName,
+  validateEmail,
+  validateIndianMobile,
+} from '@/lib/validators';
 import { useModal } from '@sportsmart/ui';
 import { useAuthGuard } from '@/lib/useAuthGuard';
 
@@ -140,13 +147,20 @@ export default function ProfilePage() {
     setProfileError(null);
     setProfileSuccess(null);
 
-    if (!firstName.trim() || !lastName.trim()) {
-      setProfileError('First name and last name are required.');
+    const firstNameError = validateFirstName(firstName);
+    if (firstNameError) {
+      setProfileError(firstNameError);
+      return;
+    }
+    const lastNameError = validateLastName(lastName);
+    if (lastNameError) {
+      setProfileError(lastNameError);
       return;
     }
 
-    if (!email.trim()) {
-      setProfileError('Email is required.');
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setProfileError(emailError);
       return;
     }
 
@@ -154,8 +168,13 @@ export default function ProfilePage() {
     if (phone.trim()) {
       const formatted = formatPhoneWithCountryCode(phone);
       const digits = formatted.replace(/\D/g, '');
-      if (digits.length < 10) {
-        setProfileError('Phone number must be at least 10 digits.');
+      // Reduce to the 10-digit local number (drop the 91 country code) so the
+      // canonical mobile rule (starts 6-9, exactly 10 digits) applies.
+      const localDigits =
+        digits.startsWith('91') && digits.length === 12 ? digits.slice(2) : digits;
+      const phoneError = validateIndianMobile(localDigits);
+      if (phoneError) {
+        setProfileError(phoneError);
         return;
       }
       normalizedPhone = formatted;
@@ -198,8 +217,11 @@ export default function ProfilePage() {
       setPasswordError('New password and confirmation do not match.');
       return;
     }
-    if (newPassword.length < 8) {
-      setPasswordError('New password must be at least 8 characters.');
+    // Phase 252 — enforce the SAME strength as register/reset (8+ with upper,
+    // lower, digit and special) instead of a bare length check.
+    const pwStrengthError = validatePassword(newPassword);
+    if (pwStrengthError) {
+      setPasswordError(pwStrengthError);
       return;
     }
 

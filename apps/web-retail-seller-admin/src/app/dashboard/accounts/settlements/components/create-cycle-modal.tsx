@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { adminAccountsService } from '@/services/admin-accounts.service';
 import { ApiError } from '@/lib/api-client';
+import { validateDateRange } from '@/lib/validators';
 import '../../../sellers/components/modal.css';
 
 interface Props {
@@ -23,7 +24,8 @@ export default function CreateCycleModal({ onClose, onSuccess }: Props) {
       setError('Please provide both period start and period end dates.');
       return false;
     }
-    if (new Date(periodStart) > new Date(periodEnd)) {
+    const rangeError = validateDateRange(periodStart, periodEnd, { allowEqual: true });
+    if (rangeError) {
       setError('Period start must be before or equal to period end.');
       return false;
     }

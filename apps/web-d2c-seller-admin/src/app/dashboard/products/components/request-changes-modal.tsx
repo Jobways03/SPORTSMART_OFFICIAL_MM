@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { ProductListItem, adminProductsService } from '@/services/admin-products.service';
 import { ApiError } from '@/lib/api-client';
+import { validateText } from '@/lib/validators';
 import './modal.css';
 
 interface Props {
@@ -20,6 +21,15 @@ export default function RequestChangesModal({ product, onClose, onSuccess }: Pro
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
+    const noteError = validateText(note, {
+      min: 5,
+      max: 1000,
+      label: 'Note',
+    });
+    if (noteError) {
+      setError(noteError);
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {

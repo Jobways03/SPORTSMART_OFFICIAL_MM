@@ -254,6 +254,11 @@ const { id } = useParams<{ id: string }>();
   // Pack modal state
   const [showPackModal, setShowPackModal] = useState(false);
   const [packNote, setPackNote] = useState('');
+  // True while we poll for the Delhivery AWB right after "Mark as Packed".
+  // The backend books the courier asynchronously (post-commit), so the AWB +
+  // SHIPPED status land a few seconds later — we poll and live-update the page
+  // so the seller never has to refresh by hand.
+  const [bookingCourier, setBookingCourier] = useState(false);
 
   // Ship modal state
   const [showShipModal, setShowShipModal] = useState(false);
@@ -334,6 +339,35 @@ const { id } = useParams<{ id: string }>();
     fetchOrder();
     fetchShipmentEvidence();
   }, [fetchOrder, fetchShipmentEvidence]);
+
+  // After "Mark as Packed", a DELHIVERY order is booked with the courier
+  // asynchronously (the auto-book handler runs post-commit), so the AWB +
+  // SHIPPED status arrive a few seconds AFTER the pack call returns. Poll the
+  // order a handful of times and live-update the page the moment the AWB lands
+  // — so the seller sees "Shipped" + the tracking number + the Download-label
+  // button appear on their own, with no manual refresh. Gives up quietly after
+  // ~20s (booking can lag); a later manual refresh still picks it up.
+  const pollForAwb = useCallback(async () => {
+    for (let attempt = 0; attempt < 10; attempt++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      try {
+        const res = await apiClient<any>(`/seller/orders/${id}`);
+        const so = res?.data;
+        if (so) {
+          setOrder(so);
+          if (
+            so.trackingNumber ||
+            ['SHIPPED', 'FULFILLED', 'DELIVERED'].includes(so.fulfillmentStatus)
+          ) {
+            fetchShipmentEvidence();
+            return; // AWB attached → stop polling
+          }
+        }
+      } catch {
+        // transient — keep polling
+      }
+    }
+  }, [id, fetchShipmentEvidence]);
 
   const handleEvidenceUpload = async () => {
     if (evidenceFiles.length === 0) {
@@ -430,19 +464,29 @@ const { id } = useParams<{ id: string }>();
     }
   };
 
-  const handlePackConfirm = async () => {setActionLoading('pack');
+  const handlePackConfirm = async () => {
+    setActionLoading('pack');
     try {
       await apiClient(`/seller/orders/${id}/status`, {
         method: 'PATCH',
         body: JSON.stringify({ status: 'PACKED' }),
       });
-      fetchOrder();
       setShowPackModal(false);
       setPackNote('');
+      fetchOrder(); // immediate → flips to PACKED
     } catch (err) {
       void notify(err instanceof ApiError ? err.message : 'Network error. Please try again.');
-    } finally {
       setActionLoading(null);
+      return;
+    }
+    setActionLoading(null);
+    // For DELHIVERY the courier is booked automatically right after PACKED, but
+    // a few seconds later. Poll in the BACKGROUND (non-blocking) and live-update
+    // the page so the seller sees the booked shipment without refreshing. For
+    // self-delivery there's no auto-book, so skip the poll.
+    if ((order?.deliveryMethod as string | undefined) === 'DELHIVERY') {
+      setBookingCourier(true);
+      void pollForAwb().finally(() => setBookingCourier(false));
     }
   };
 
@@ -698,6 +742,42 @@ const { id } = useParams<{ id: string }>();
         fulfillmentStatus={order.fulfillmentStatus}
       />
 
+      {/* Live "booking the courier" indicator — shown while we poll for the
+          Delhivery AWB after Mark-as-Packed, so the seller knows the shipment
+          is being created and the page will update itself. */}
+      {bookingCourier && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 10,
+            padding: '12px 16px',
+            marginBottom: 16,
+            background: '#eff6ff',
+            border: '1px solid #bfdbfe',
+            borderRadius: 10,
+            color: '#1e40af',
+            fontSize: 13,
+            fontWeight: 600,
+          }}
+        >
+          <span
+            style={{
+              width: 16,
+              height: 16,
+              border: '2px solid #93c5fd',
+              borderTopColor: '#2563eb',
+              borderRadius: '50%',
+              display: 'inline-block',
+              animation: 'sm-spin 0.7s linear infinite',
+            }}
+          />
+          Booking the shipment with Delhivery… the tracking number &amp; label
+          will appear here automatically.
+          <style>{`@keyframes sm-spin { to { transform: rotate(360deg); } }`}</style>
+        </div>
+      )}
+
       {/* -- two-column layout -- */}
       <div style={{ display: 'flex', gap: 24, alignItems: 'flex-start', flexWrap: 'wrap' }}>
         {/* -- LEFT COLUMN -- */}
@@ -835,28 +915,6 @@ const { id } = useParams<{ id: string }>();
                       ? `MARK AS PACKED (${shipmentEvidence.length}/${SHIPMENT_EVIDENCE_REQUIRED} photos)`
                       : 'MARK AS PACKED'}
                 </button>
-              )}
-
-              {/* Delhivery auto-ships on PACK — the system books the courier
-                  and attaches the AWB automatically, so the seller sees a
-                  status note instead of the manual tracking-entry form. */}
-              {isDelhivery && showsShipmentEvidenceBlock && (
-                <div
-                  style={{
-                    display: 'flex', flexDirection: 'column', gap: 2,
-                    padding: '10px 14px', background: '#eff6ff',
-                    border: '1px solid #bfdbfe', borderRadius: 8,
-                  }}
-                >
-                  <span style={{ fontSize: 13, fontWeight: 700, color: '#1e40af' }}>
-                    &#128230; Auto-shipping via Delhivery
-                  </span>
-                  <span style={{ fontSize: 12, color: '#3b82f6' }}>
-                    The courier is being booked — the AWB &amp; tracking link will
-                    appear here in a moment. No manual tracking entry needed; just
-                    refresh if it doesn&apos;t update.
-                  </span>
-                </div>
               )}
 
               {/* Fulfillment status progression - SHIP (manual, non-Delhivery).
@@ -2276,7 +2334,12 @@ function StatusTimeline({
     {
       label: 'Delivered',
       done: delivered,
-      current: accepted && fulfillmentStatus === 'SHIPPED',
+      // Delivery is courier-driven and lands days later — it is NOT a seller
+      // action. Previously this node lit up blue ("current") the instant the
+      // order reached SHIPPED, which made sellers read it as "already
+      // delivered". Keep it grey/pending until the courier actually reports
+      // DELIVERED/FULFILLED (i.e. only ever "done", never "current").
+      current: false,
     },
   ];
 
@@ -2533,7 +2596,13 @@ function DeliverySection({
           order.fulfillmentStatus === 'SHIPPED') && (
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
             <RequestPickupButton subOrderId={order.id} onChanged={onChanged} />
-            <DownloadLabelButton subOrderId={order.id} />
+            {/* Label is built from the booked AWB, attached a few seconds AFTER
+                "Mark as Packed" by the auto-book handler. Only show the button
+                once the AWB exists so it never dead-clicks into a "not ready"
+                toast (pickup, above, has no such dependency). */}
+            {!!order.trackingNumber && (
+              <DownloadLabelButton subOrderId={order.id} />
+            )}
           </div>
         )}
     </div>
@@ -2623,7 +2692,7 @@ function DownloadLabelButton({ subOrderId }: { subOrderId: string }) {
       const url = res?.data?.labelUrl;
       if (!url) {
         setErr(
-          'Label not generated by Delhivery yet — available once the shipment is manifested / picked up.',
+          'The courier AWB is still being booked (a few seconds after “Mark as Packed”). Refresh in a moment and the label will be ready.',
         );
         return;
       }

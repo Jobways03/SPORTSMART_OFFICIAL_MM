@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { adminFranchisesService } from '@/services/admin-franchises.service';
 import { ApiError } from '@/lib/api-client';
+import { validateAmount, validateText } from '@/lib/validators';
 import '../../sellers/components/modal.css';
 
 interface Props {
@@ -22,7 +23,20 @@ export default function CreatePenaltyModal({ franchiseId, businessName, onClose,
   const amountValid = !isNaN(parsedAmount) && parsedAmount > 0 && amount.trim() !== '';
 
   const handleSubmit = async () => {
-    if (!amountValid || !reason.trim()) return;
+    const amountError = validateAmount(amount, { min: 0, max: 10_000_000, label: 'Penalty amount' });
+    if (amountError) {
+      setError(amountError);
+      return;
+    }
+    if (parsedAmount <= 0) {
+      setError('Penalty amount must be greater than 0');
+      return;
+    }
+    const reasonError = validateText(reason, { min: 1, max: 500, label: 'Reason' });
+    if (reasonError) {
+      setError(reasonError);
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {

@@ -13,6 +13,7 @@ import {
 } from '@/services/returns.service';
 import { useModal } from '@sportsmart/ui';
 import { useAuthGuard } from '@/lib/useAuthGuard';
+import { validateUploadFile } from '@/lib/validators';
 
 interface OrderLookup {
   id: string;
@@ -171,8 +172,13 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
     try {
       const uploadedUrls: string[] = [];
       for (const file of toUpload) {
-        if (file.size > 5 * 1024 * 1024) {
-          void notify(`"${file.name}" is larger than 5MB — skipped.`);
+        // Photo evidence only — restrict to image types, max 5MB each.
+        const fileError = validateUploadFile(file, {
+          maxBytes: 5 * 1024 * 1024,
+          types: ['image/jpeg', 'image/png', 'image/webp'],
+        });
+        if (fileError) {
+          void notify(`"${file.name}": ${fileError} — skipped.`);
           continue;
         }
         const fd = new FormData();
@@ -420,14 +426,29 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
               {eligibility.eligibleSubOrders.map((so) => {
                 const eligibleCount = so.items.filter((i) => i.eligible).length;
                 const disabled = so.windowExpired || eligibleCount === 0;
+                // Both shipments of a multi-seller order carry the same order
+                // number, so the product name is what actually distinguishes
+                // them for the customer (we never expose the seller).
+                const titles = so.items.map((i) => i.productTitle).filter(Boolean);
+                const titleLabel =
+                  titles.length === 0
+                    ? `Shipment ${so.orderNumber}`
+                    : titles.length === 1
+                      ? titles[0]
+                      : `${titles[0]} + ${titles.length - 1} more`;
                 return (
                   <button
                     key={so.subOrderId}
                     onClick={() => !disabled && selectSubOrder(so.subOrderId)}
                     disabled={disabled}
                     style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 16,
+                      width: '100%',
                       textAlign: 'left',
-                      border: '1px solid #e5e7eb',
+                      border: disabled ? '1px solid #e5e7eb' : '1px solid #bfdbfe',
                       borderRadius: 10,
                       padding: 16,
                       background: disabled ? '#f9fafb' : '#fff',
@@ -435,34 +456,38 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                       opacity: disabled ? 0.6 : 1,
                     }}
                   >
-                    <div
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 600 }}>{titleLabel}</div>
+                      <div style={{ fontSize: 12, color: '#6b7280', marginTop: 4 }}>
+                        {so.items.length} item{so.items.length !== 1 ? 's' : ''} &middot;{' '}
+                        {eligibleCount} eligible &middot; Delivered {formatDate(so.deliveredAt)}
+                      </div>
+                      {so.returnWindowEndsAt && !so.windowExpired && (
+                        <div style={{ fontSize: 11, color: '#2563eb', marginTop: 4 }}>
+                          Return window ends: {formatDate(so.returnWindowEndsAt)}
+                        </div>
+                      )}
+                      {so.windowExpired && (
+                        <div style={{ fontSize: 11, color: '#dc2626', marginTop: 4 }}>
+                          Return window expired
+                        </div>
+                      )}
+                    </div>
+                    {/* Explicit affordance — the whole card is the selector. */}
+                    <span
                       style={{
-                        display: 'flex',
-                        justifyContent: 'space-between',
-                        marginBottom: 8,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        flexShrink: 0,
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: disabled ? '#9ca3af' : '#2563eb',
+                        whiteSpace: 'nowrap',
                       }}
                     >
-                      <span style={{ fontSize: 14, fontWeight: 600 }}>
-                        Shipment {so.orderNumber}
-                      </span>
-                      <span style={{ fontSize: 12, color: '#6b7280' }}>
-                        Delivered: {formatDate(so.deliveredAt)}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 12, color: '#6b7280' }}>
-                      {so.items.length} item{so.items.length !== 1 ? 's' : ''} &middot;{' '}
-                      {eligibleCount} eligible
-                    </div>
-                    {so.returnWindowEndsAt && !so.windowExpired && (
-                      <div style={{ fontSize: 11, color: '#2563eb', marginTop: 4 }}>
-                        Return window ends: {formatDate(so.returnWindowEndsAt)}
-                      </div>
-                    )}
-                    {so.windowExpired && (
-                      <div style={{ fontSize: 11, color: '#dc2626', marginTop: 4 }}>
-                        Return window expired
-                      </div>
-                    )}
+                      {disabled ? 'Unavailable' : 'Select →'}
+                    </span>
                   </button>
                 );
               })}

@@ -83,6 +83,8 @@ function buildService(discountRows: any[]) {
     franchiseSettlement: {
       count: jest.fn().mockResolvedValue(0),
       create: settlementCreate,
+      // Phase 251 — dynamic-charge total + flag stamped after each create.
+      update: jest.fn().mockResolvedValue({}),
     },
     franchiseFinanceLedger: {
       // claim: PENDING → ACCRUED (one row claimed)
@@ -98,6 +100,9 @@ function buildService(discountRows: any[]) {
     platformGstProfile: {
       findFirst: jest.fn().mockResolvedValue(null),
     },
+    // Phase 251 — dynamic settlement charge rules snapshot + frozen breakup.
+    settlementChargeRule: { findMany: jest.fn().mockResolvedValue([]) },
+    franchiseSettlementChargeLine: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
   };
 
   const prisma: any = {

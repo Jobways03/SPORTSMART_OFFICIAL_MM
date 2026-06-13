@@ -11,6 +11,7 @@ import {
   ReconciliationReport,
 } from '@/services/admin-accounts.service';
 import { ApiError } from '@/lib/api-client';
+import { validateDateRange } from '@/lib/validators';
 import '../accounts.css';
 
 type TabKey = 'revenue' | 'margins' | 'payouts' | 'reconciliation';
@@ -156,6 +157,13 @@ export default function ReportsPage() {
   }, [activeTab]);
 
   const applyFilters = () => {
+    const rangeError = validateDateRange(fromDate, toDate, { allowEqual: true });
+    if (rangeError) {
+      if (activeTab === 'revenue') setRevenueError(rangeError);
+      else if (activeTab === 'margins') setMarginsError(rangeError);
+      else if (activeTab === 'payouts') setPayoutsError(rangeError);
+      return;
+    }
     if (activeTab === 'revenue') loadRevenue();
     else if (activeTab === 'margins') loadMargins();
     else if (activeTab === 'payouts') loadPayouts();

@@ -8,6 +8,23 @@
 // Selection is via env (`TAX_PDF_STORAGE_PROVIDER`) — choice is
 // boot-time, not service-layer.
 
+/**
+ * Filesystem root for the DEV stub provider. A FIXED path OUTSIDE the repo
+ * working tree, so generated invoices never pile up inside the codebase (which
+ * would bloat the repo and clutter the editor at high order volume). It's a
+ * fixed absolute dir — NOT `os.tmpdir()` — so the writer (StubTaxPdfStorage-
+ * Provider) and the reader (TaxPdfFileController) resolve the SAME directory
+ * even when launched from processes with different TMPDIR values.
+ *
+ * PRODUCTION does not write to local disk at all: it stores invoices in
+ * Cloudflare R2 object storage (R2TaxPdfStorageProvider, selected with
+ * TAX_PDF_STORAGE_PROVIDER=r2) — the industry-standard pattern, scalable and
+ * off-server. Override the dev location with TAX_PDF_STUB_DIR.
+ */
+export function defaultStubTaxPdfDir(): string {
+  return process.env.TAX_PDF_STUB_DIR || '/tmp/sportsmart-tax-pdfs';
+}
+
 export interface PdfUploadInput {
   /**
    * Logical key — `${fy}/${supplierGstin|PLATFORM}/${documentType}/${documentNumber}.${ext}`.

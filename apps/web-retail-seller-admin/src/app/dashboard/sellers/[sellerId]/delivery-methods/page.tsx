@@ -7,6 +7,7 @@ import {
   adminDeliveryMethodsService,
   type SellerDeliveryMethodSettings,
 } from '@/services/admin-delivery-methods.service';
+import { validatePincode } from '@/lib/validators';
 
 /**
  * Per-seller delivery-method entitlements page in the seller admin.
@@ -70,6 +71,15 @@ export default function SellerDeliveryMethodsPage() {
           .map((p) => p.trim())
           .filter(Boolean)
       : null;
+    // Every service-area pincode must be a valid 6-digit Indian pincode.
+    if (pincodes) {
+      const invalid = pincodes.find((p) => validatePincode(p) !== null);
+      if (invalid) {
+        setActionError(`"${invalid}" is not a valid 6-digit pincode`);
+        return;
+      }
+    }
+    setActionError(null);
     save({ selfDeliveryPincodes: pincodes });
   };
 

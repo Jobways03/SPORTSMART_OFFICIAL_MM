@@ -10,6 +10,7 @@ import {
   STATUS_LABEL,
   STATUS_COLOR,
 } from '../../../../lib/support';
+import { validateText } from '../../../../lib/validators';
 
 export default function AffiliateTicketDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -36,7 +37,12 @@ export default function AffiliateTicketDetailPage() {
 
   const sendReply = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!reply.trim() || sending) return;
+    if (sending) return;
+    const replyError = validateText(reply, { label: 'Reply', min: 1, max: 5000 });
+    if (replyError) {
+      setError(replyError);
+      return;
+    }
     setSending(true);
     try {
       const d = await supportApi.reply(id, reply.trim());

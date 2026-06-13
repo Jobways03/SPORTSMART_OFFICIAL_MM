@@ -637,6 +637,40 @@ export class FileService {
     return '';
   }
 
+  /**
+   * Async sibling of viewUrlFor that can presign **R2** objects. PRIVATE files
+   * on R2 (e.g. SHIPMENT_EVIDENCE) have `providerUrl = null` and are reachable
+   * only via a presigned GET URL — which the AWS presigner produces
+   * asynchronously, so the sync `viewUrlFor` cannot build it and returns ''
+   * for `provider === 'r2'`. That left every R2-backed evidence gallery
+   * (seller / admin / franchise / customer POD) rendering filename text with no
+   * thumbnail. Use this in list-enrichment loops via `Promise.all`. Mirrors the
+   * provider branches of `getSecureUrl`, but takes the already-loaded file row
+   * (no id lookup, no caller assert — ownership is enforced by the caller).
+   */
+  async viewUrlForAsync(file: {
+    providerUrl: string | null;
+    provider: string;
+    providerFileId: string | null;
+    storageKey: string;
+    mimeType: string;
+  }): Promise<string> {
+    if (file.providerUrl) return file.providerUrl;
+    if (file.provider === 'r2') {
+      try {
+        // 1h window — long enough to view a gallery without expiring mid-page,
+        // and the list endpoint re-mints fresh URLs on every load.
+        return await this.r2.createAccessUrl({
+          key: file.storageKey,
+          expiresInSeconds: 3600,
+        });
+      } catch {
+        return '';
+      }
+    }
+    return this.viewUrlFor(file);
+  }
+
   // ── Admin moderation surface (Sprint 2 Story 1.2) ───────────────
   // Distinct from listByResource: admins moderate across the whole
   // platform, not just one resource. Encapsulated here so the

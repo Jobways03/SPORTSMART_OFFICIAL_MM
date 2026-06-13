@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { adminMfaService } from '@/services/admin-auth.service';
 import { ApiError } from '@/lib/api-client';
+import { validateOtp } from '@/lib/validators';
 
 type Phase =
   | { kind: 'loading' }
@@ -68,8 +69,9 @@ export default function AdminMfaSettingsPage() {
     e.preventDefault();
     if (phase.kind !== 'enrolling' || submitting) return;
     const trimmed = code.replace(/\s+/g, '');
-    if (!/^[0-9]{6}$/.test(trimmed)) {
-      setError('Enter the 6-digit code from your authenticator app.');
+    const otpErr = validateOtp(trimmed);
+    if (otpErr) {
+      setError(otpErr);
       return;
     }
     setSubmitting(true);

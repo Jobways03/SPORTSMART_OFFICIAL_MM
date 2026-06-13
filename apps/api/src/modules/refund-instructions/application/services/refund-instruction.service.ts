@@ -172,11 +172,17 @@ export class RefundInstructionService {
     amountInPaise: bigint;
     baseIdempotencyKey: string;
     customerPreferredMethod?: RefundMethod;
+    /**
+     * Phase 258 — route the entire refund to the wallet (store credit) as a
+     * single leg, used for pre-acceptance cancels/rejections.
+     */
+    forceFullWallet?: boolean;
   }): Promise<RefundInstruction[]> {
     const legs = await this.splitCalculator.calculateSplit({
       masterOrderId: args.masterOrderId,
       totalRefundAmountInPaise: args.amountInPaise,
       customerPreferredMethod: args.customerPreferredMethod,
+      forceFullWallet: args.forceFullWallet,
     });
     if (legs.length === 0) {
       this.logger.warn(

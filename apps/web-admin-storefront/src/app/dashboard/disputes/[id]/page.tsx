@@ -14,6 +14,7 @@ import {
 } from '@/services/admin-disputes.service';
 import CaseTimeline from '@/components/CaseTimeline';
 import { usePermissions } from '@/lib/permissions';
+import { validateAmount } from '@/lib/validators';
 
 export default function DisputeDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -207,10 +208,15 @@ export default function DisputeDetailPage() {
     // Amount required when remedy is anything other than NO_REFUND.
     let amountInPaise: number | undefined;
     if (customerRemedy !== 'NO_REFUND') {
+      // Field-level guard: required, positive, <= ₹10,000,000, 2dp.
+      const amtErr = validateAmount(amountRupees, {
+        min: 0.01,
+        max: 10_000_000,
+        decimals: 2,
+        label: 'Refund amount (₹)',
+      });
+      if (amtErr) return setError(amtErr);
       const rupees = parseFloat(amountRupees);
-      if (!Number.isFinite(rupees) || rupees <= 0) {
-        return setError('Refund amount (₹) is required for refund / goodwill outcomes');
-      }
       amountInPaise = Math.round(rupees * 100);
     }
 

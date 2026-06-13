@@ -19,6 +19,12 @@ import {
 import { computeCommissionGst } from '../../../tax/domain/commission-gst-calculator';
 import { SettlementTds194OHookService } from '../../../tax/application/services/settlement-tds-194o-hook.service';
 import { SettlementTcsHookService } from '../../../tax/application/services/settlement-tcs-hook.service';
+// Phase 251 — reuse the seller dynamic-charge calculator (pure, no DI). The
+// franchise applies the SAME admin-configured rules, computed against its own
+// bases (all channels): Price of Goods Sold = online + POS sales, Commission =
+// total platform earning.
+// Phase 251 — single source of truth for the settlement net payable.
+import { settlementNetFromRow } from '../../../settlements/domain/settlement-net';
 
 @Injectable()
 export class FranchiseSettlementService {
@@ -378,6 +384,10 @@ export class FranchiseSettlementService {
           },
         });
 
+        // Phase 252 — generic dynamic charge-rule engine retired. The franchise
+        // payout is netted by the statutory taxes only (commission-GST stamped
+        // above at creation; §52 TCS / §194-O TDS at approval, config-driven).
+
         // Phase 247-FB — surface the franchise-funded discount cost as a
         // response-only field (BigInt → string, the codebase serialises paise
         // as strings). It is NOT a persisted column (already netted into
@@ -553,12 +563,9 @@ export class FranchiseSettlementService {
     const grossPaise = BigInt(
       new Prisma.Decimal(settlement.netPayableToFranchise).mul(100).toFixed(0),
     );
-    const netPaidPaise =
-      grossPaise -
-      BigInt(settlement.totalCommissionGstInPaise ?? 0) -
-      BigInt(settlement.tcsDeductedInPaise ?? 0) -
-      BigInt(settlement.tdsDeductedInPaise ?? 0);
-    const paidAmountInPaise = netPaidPaise > 0n ? netPaidPaise : 0n;
+    // Phase 251 — single source of truth (settlement-net.ts), shared with the
+    // seller side. Already clamped ≥0.
+    const paidAmountInPaise = settlementNetFromRow(settlement, grossPaise);
     const updated = await this.prisma.$transaction(async (tx) => {
       const flip = await tx.franchiseSettlement.updateMany({
         where: { id: settlementId, status: 'APPROVED' },

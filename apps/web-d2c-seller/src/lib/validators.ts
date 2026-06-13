@@ -109,3 +109,101 @@ export function getPasswordStrength(value: string) {
     hasSpecial: HAS_SPECIAL.test(value),
   };
 }
+
+// ---------------------------------------------------------------------------
+// Canonical field-level validators (cross-app parity). Each returns an
+// error-message string or null when valid. Signatures + regexes are shared
+// verbatim across the seller / admin / storefront apps so every surface
+// rejects the same shapes the backend DTOs do.
+// ---------------------------------------------------------------------------
+
+const PINCODE_REGEX = /^[1-9][0-9]{5}$/;
+const INDIAN_MOBILE_REGEX = /^[6-9]\d{9}$/;
+
+/** Strict 6-digit Indian PIN code (no leading zero). */
+export function validatePincode(value: string): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return 'Enter a valid 6-digit pincode';
+  if (!PINCODE_REGEX.test(trimmed)) return 'Enter a valid 6-digit pincode';
+  return null;
+}
+
+/** Strict 10-digit Indian mobile starting 6-9. Strips a leading 91. */
+export function validateIndianMobile(value: string): string | null {
+  let digits = (value ?? '').trim().replace(/\D/g, '');
+  if (digits.startsWith('91') && digits.length === 12) digits = digits.slice(2);
+  if (!INDIAN_MOBILE_REGEX.test(digits)) {
+    return 'Enter a valid 10-digit mobile number (starts 6-9)';
+  }
+  return null;
+}
+
+interface ValidateTextOptions {
+  min?: number;
+  max?: number;
+  label?: string;
+  required?: boolean;
+}
+
+/** Required/empty + length-bounds check for free text fields. */
+export function validateText(
+  value: string,
+  { min = 1, max = 500, label = 'This field', required = true }: ValidateTextOptions = {},
+): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) {
+    if (required) return `${label} is required`;
+    return null;
+  }
+  if (trimmed.length < min) return `${label} must be at least ${min} characters`;
+  if (trimmed.length > max) return `${label} must not exceed ${max} characters`;
+  return null;
+}
+
+interface ValidateAmountOptions {
+  min?: number;
+  max?: number;
+  decimals?: number;
+  label?: string;
+}
+
+/** Money amount: finite, within bounds, at most `decimals` decimal places. */
+export function validateAmount(
+  value: string | number,
+  { min = 0, max = 10_000_000, decimals = 2, label = 'Amount' }: ValidateAmountOptions = {},
+): string | null {
+  const raw = typeof value === 'number' ? String(value) : (value ?? '').trim();
+  if (!raw) return `${label} is required`;
+  const num = Number(raw);
+  if (!Number.isFinite(num)) return `${label} must be a valid number`;
+  if (num < min) return `${label} must be at least ${min}`;
+  if (num > max) return `${label} must not exceed ${max}`;
+  const decimalPart = raw.includes('.') ? raw.split('.')[1] : '';
+  if (decimalPart.length > decimals) {
+    return `${label} can have at most ${decimals} decimal place${decimals === 1 ? '' : 's'}`;
+  }
+  return null;
+}
+
+interface ValidateUploadFileOptions {
+  maxBytes?: number;
+  types?: string[];
+}
+
+/** Upload guard: present, allowed MIME type, size within `maxBytes`. */
+export function validateUploadFile(
+  file: File | null | undefined,
+  {
+    maxBytes = 5 * 1024 * 1024,
+    types = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'],
+  }: ValidateUploadFileOptions = {},
+): string | null {
+  if (!file) return 'Please select a file';
+  if (!types.includes(file.type)) {
+    return 'File type is not allowed';
+  }
+  if (file.size > maxBytes) {
+    return `File must be smaller than ${Math.round(maxBytes / (1024 * 1024))}MB`;
+  }
+  return null;
+}

@@ -3,23 +3,14 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Minus, Plus, Trash2, ShoppingBag, Lock, ArrowRight, Tag, X } from 'lucide-react';
+import { Minus, Plus, Trash2, ShoppingBag, Lock, ArrowRight } from 'lucide-react';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { apiClient } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
 
-// Coupon preview is persisted to sessionStorage so checkout can
-// auto-apply it without a second round-trip from the customer. Keep
-// the key namespaced so other apps in the same origin don't collide.
-const PREVIEW_COUPON_STORAGE_KEY = 'sm.previewedCoupon';
-
-interface PreviewedCoupon {
-  code: string;
-  title: string | null;
-  valueType: string;
-  value: number;
-  discountAmount: number;
-}
+// Phase 258 — coupons are applied ONLY at checkout now (single source of
+// truth). The cart no longer previews/handles coupons, so the sessionStorage
+// handoff + PreviewedCoupon type were removed.
 
 interface CartItem {
   id: string;
@@ -93,13 +84,6 @@ export default function CartPage() {
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState<string | null>(null);
 
-  // Coupon preview state. The cart page is purely advisory — server
-  // re-validates at placeOrder, so we just give the customer a hint of
-  // savings here and hand the code off to checkout via sessionStorage.
-  const [couponInput, setCouponInput] = useState('');
-  const [couponApplying, setCouponApplying] = useState(false);
-  const [couponError, setCouponError] = useState('');
-  const [previewedCoupon, setPreviewedCoupon] = useState<PreviewedCoupon | null>(null);
 
   // Phase 36 — cart-side tax preview. Uses the customer's default
   // address (if any) to derive CGST/SGST/IGST split before they enter
@@ -107,24 +91,6 @@ export default function CartPage() {
   // back to the legacy "Included in price" string.
   const [cartTax, setCartTax] = useState<CartTaxPreview | null>(null);
 
-  // Hydrate any previously-previewed coupon (e.g. customer came back
-  // from /products after applying a code on cart already). We re-fetch
-  // it later only on subtotal change.
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const raw = window.sessionStorage.getItem(PREVIEW_COUPON_STORAGE_KEY);
-    if (!raw) return;
-    try {
-      const parsed = JSON.parse(raw) as PreviewedCoupon;
-      if (parsed?.code) {
-        setPreviewedCoupon(parsed);
-        setCouponInput(parsed.code);
-      }
-    } catch {
-      // Corrupt storage value — silently drop it. Cart still works.
-      window.sessionStorage.removeItem(PREVIEW_COUPON_STORAGE_KEY);
-    }
-  }, []);
 
   const fetchCart = () => {
     apiClient<CartData>('/customer/cart')
@@ -174,73 +140,6 @@ export default function CartPage() {
     }
   };
 
-  // Apply a coupon code as a preview. Calls the same endpoint checkout
-  // uses (`/customer/coupons/validate`) so the discountAmount the
-  // customer sees here matches what they'll pay. The discount itself is
-  // re-validated server-side at placeOrder — this is purely a preview.
-  const applyCouponPreview = async () => {
-    const code = couponInput.trim().toUpperCase();
-    setCouponError('');
-    if (!code) {
-      setCouponError('Enter a coupon code');
-      return;
-    }
-    if (!cart || cart.totalAmount <= 0) {
-      setCouponError('Add items to your cart first');
-      return;
-    }
-    setCouponApplying(true);
-    try {
-      const res = await apiClient<PreviewedCoupon>('/customer/coupons/validate', {
-        method: 'POST',
-        body: JSON.stringify({
-          code,
-          subtotal: Number(cart.totalAmount),
-          items: cart.items.map((i) => ({
-            productId: i.productId,
-            quantity: i.quantity,
-            unitPrice: Number(i.unitPrice),
-          })),
-        }),
-      });
-      const data = res.data;
-      if (!data) {
-        setCouponError(res.message || 'Invalid coupon');
-        return;
-      }
-      setPreviewedCoupon(data);
-      if (typeof window !== 'undefined') {
-        window.sessionStorage.setItem(PREVIEW_COUPON_STORAGE_KEY, JSON.stringify(data));
-      }
-    } catch (err: any) {
-      // The endpoint emits HTTP 429 for rate-limit and 400 for invalid
-      // code; both surface here. Prefer the server's message so the
-      // customer sees the specific rule that blocked their code.
-      const status = err?.status ?? err?.response?.status;
-      if (status === 429) {
-        const retryAfter = err?.body?.retryAfterSeconds;
-        setCouponError(
-          retryAfter
-            ? `Too many coupon attempts. Try again in ${retryAfter}s`
-            : 'Too many coupon attempts. Please try again later.',
-        );
-      } else {
-        setCouponError(err?.body?.message || err?.message || 'Invalid coupon');
-      }
-    } finally {
-      setCouponApplying(false);
-    }
-  };
-
-  const removeCouponPreview = () => {
-    setPreviewedCoupon(null);
-    setCouponInput('');
-    setCouponError('');
-    if (typeof window !== 'undefined') {
-      window.sessionStorage.removeItem(PREVIEW_COUPON_STORAGE_KEY);
-    }
-  };
-
   // Phase 36 — fetch a server-computed tax preview using the customer's
   // default address. Re-runs whenever the cart subtotal or item count
   // changes (mirroring the coupon re-preview effect). Failures are
@@ -282,62 +181,6 @@ export default function CartPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cart?.totalAmount, cart?.itemCount]);
 
-  // Re-validate the preview when the cart subtotal changes (qty change,
-  // item add/remove). If the discount no longer applies (e.g. min-order
-  // threshold), drop the preview silently so the summary stays accurate.
-  //
-  // Phase 4.12 (2026-05-16) — race-safe rewrite.
-  // Two protections layered:
-  //   1. AbortController — cancels the in-flight HTTP request when a
-  //      newer cart change supersedes it. The browser's fetch
-  //      implementation drops the cancelled response before it can
-  //      land in setState.
-  //   2. `cancelled` boolean — defensive belt-and-suspenders for any
-  //      response that did make it past the abort signal.
-  // Together they guarantee the LAST cart change always determines
-  // the final discount preview state, regardless of network reorder.
-  useEffect(() => {
-    if (!previewedCoupon || !cart || cart.totalAmount <= 0) return;
-    let cancelled = false;
-    const controller =
-      typeof AbortController !== 'undefined' ? new AbortController() : null;
-
-    apiClient<PreviewedCoupon>('/customer/coupons/validate', {
-      method: 'POST',
-      body: JSON.stringify({
-        code: previewedCoupon.code,
-        subtotal: Number(cart.totalAmount),
-        currentCouponCode: previewedCoupon.code,
-        items: cart.items.map((i) => ({
-          productId: i.productId,
-          quantity: i.quantity,
-          unitPrice: Number(i.unitPrice),
-        })),
-      }),
-      signal: controller?.signal,
-    })
-      .then((res) => {
-        if (cancelled) return;
-        const data = res.data;
-        if (data) {
-          setPreviewedCoupon(data);
-          if (typeof window !== 'undefined') {
-            window.sessionStorage.setItem(PREVIEW_COUPON_STORAGE_KEY, JSON.stringify(data));
-          }
-        } else {
-          removeCouponPreview();
-        }
-      })
-      .catch(() => {
-        if (cancelled) return;
-        removeCouponPreview();
-      });
-    return () => {
-      cancelled = true;
-      controller?.abort();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cart?.totalAmount, cart?.itemCount]);
 
   if (loading) {
     return (
@@ -404,38 +247,24 @@ export default function CartPage() {
               {(() => {
                 const groups = new Map<string, typeof cart.items>();
                 for (const item of cart!.items) {
-                  const key = item.sellerShopName ?? 'SPORTSMART';
+                  // Phase 261 — the customer must NOT see which marketplace
+                  // seller fulfils each item. Group everything under the
+                  // SPORTSMART brand (one "Sold by SPORTSMART" card) instead of
+                  // per-seller, matching the order page's "Fulfilled by SPORTSMART".
+                  const key = 'SPORTSMART';
                   const existing = groups.get(key);
                   if (existing) existing.push(item);
                   else groups.set(key, [item]);
                 }
                 const entries = Array.from(groups.entries());
                 return entries.map(([sellerName, items]) => {
-                  const groupSubtotal = items.reduce((s, i) => s + i.lineTotal, 0);
-                  const groupQty = items.reduce((s, i) => s + i.quantity, 0);
+                  // Phase 261 — no "Sold by" header at all (per product
+                  // decision); the cart shows just the items in one card.
                   return (
                     <section
                       key={sellerName}
                       className="border border-ink-200 rounded-2xl overflow-hidden bg-white"
                     >
-                      <header className="flex items-center justify-between px-4 sm:px-6 py-3 bg-ink-50 border-b border-ink-200">
-                        <div>
-                          <div className="text-caption uppercase tracking-wider text-ink-600">
-                            Sold by
-                          </div>
-                          <div className="text-body font-semibold text-ink-900">
-                            {sellerName}
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-caption text-ink-600">
-                            {groupQty} {groupQty === 1 ? 'item' : 'items'}
-                          </div>
-                          <div className="text-body font-semibold text-ink-900 tabular">
-                            {formatINR(groupSubtotal)}
-                          </div>
-                        </div>
-                      </header>
                       <ul className="divide-y divide-ink-200">
                         {items.map((item) => {
                           const isUpdating = updating === item.id;
@@ -533,16 +362,6 @@ export default function CartPage() {
                       {formatINR(cart!.totalAmount)}
                     </dd>
                   </div>
-                  {previewedCoupon && previewedCoupon.discountAmount > 0 && (
-                    <div className="flex justify-between">
-                      <dt className="text-success">
-                        Coupon · {previewedCoupon.code}
-                      </dt>
-                      <dd className="text-success tabular font-medium">
-                        − {formatINR(previewedCoupon.discountAmount)}
-                      </dd>
-                    </div>
-                  )}
                   <div className="flex justify-between">
                     <dt className="text-ink-600">Delivery</dt>
                     <dd className="text-success font-medium uppercase tracking-wider text-caption">
@@ -604,91 +423,14 @@ export default function CartPage() {
                   )}
                 </dl>
 
-                {/* Coupon preview block — purely advisory. Server
-                    re-validates at placeOrder so a stale preview can't
-                    grant a discount the rules don't allow. */}
-                <div className="mt-4 pt-4 border-t border-ink-200">
-                  {previewedCoupon ? (
-                    <div className="flex items-center justify-between gap-3 p-3 rounded-lg bg-success/5 border border-success/30">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 text-caption uppercase tracking-wider text-success font-semibold">
-                          <Tag className="size-3.5" /> Applied
-                        </div>
-                        <div className="mt-0.5 text-body font-medium text-ink-900 tabular">
-                          {previewedCoupon.code}
-                        </div>
-                        {previewedCoupon.title && (
-                          <div className="text-caption text-ink-600 line-clamp-1">
-                            {previewedCoupon.title}
-                          </div>
-                        )}
-                      </div>
-                      <button
-                        type="button"
-                        onClick={removeCouponPreview}
-                        className="shrink-0 inline-flex items-center gap-1 text-caption text-ink-600 hover:text-danger"
-                        aria-label="Remove coupon"
-                      >
-                        <X className="size-3.5" /> Remove
-                      </button>
-                    </div>
-                  ) : (
-                    <div>
-                      <label
-                        htmlFor="cart-coupon-input"
-                        className="text-caption uppercase tracking-wider text-ink-600"
-                      >
-                        Have a coupon?
-                      </label>
-                      <div className="mt-1.5 flex gap-2">
-                        <input
-                          id="cart-coupon-input"
-                          type="text"
-                          autoComplete="off"
-                          spellCheck={false}
-                          value={couponInput}
-                          onChange={(e) => {
-                            setCouponInput(e.target.value.toUpperCase());
-                            if (couponError) setCouponError('');
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && !couponApplying) {
-                              e.preventDefault();
-                              applyCouponPreview();
-                            }
-                          }}
-                          placeholder="ENTER CODE"
-                          aria-invalid={!!couponError}
-                          className={`flex-1 h-10 px-3 border bg-white text-body font-medium tabular focus:outline-none focus:border-ink-900 rounded-md ${
-                            couponError ? 'border-danger' : 'border-ink-300'
-                          }`}
-                        />
-                        <button
-                          type="button"
-                          onClick={applyCouponPreview}
-                          disabled={couponApplying || !couponInput.trim()}
-                          className="h-10 px-4 bg-ink-900 text-white font-semibold text-caption uppercase tracking-wider rounded-md hover:bg-ink-800 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {couponApplying ? 'Applying…' : 'Apply'}
-                        </button>
-                      </div>
-                      {couponError && (
-                        <p className="mt-1.5 text-caption text-danger">{couponError}</p>
-                      )}
-                    </div>
-                  )}
-                </div>
-
+                {/* Phase 258 — coupons are applied at checkout only. The cart
+                    no longer previews them; the customer sees the discount on
+                    the checkout page. */}
                 <hr className="my-4 border-ink-200" />
                 <div className="flex justify-between items-baseline">
                   <span className="text-body-lg font-semibold text-ink-900">Total</span>
                   <span className="font-display text-3xl text-ink-900 tabular">
-                    {formatINR(
-                      Math.max(
-                        0,
-                        cart!.totalAmount - (previewedCoupon?.discountAmount ?? 0),
-                      ),
-                    )}
+                    {formatINR(cart!.totalAmount)}
                   </span>
                 </div>
 

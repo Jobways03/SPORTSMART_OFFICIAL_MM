@@ -156,7 +156,10 @@ export class PaymentsPublicFacade {
     // lock, notifications, AffiliateCommission row creation).
     const { flipped, order: latest } = await this.ordersFacade.flipPaymentStatusIfFrom(
       params.masterOrderId,
-      ['PENDING', 'FAILED'],
+      // Phase 257 — 'FAILED' is not an OrderPaymentStatus member; the valid
+      // pre-paid states are PENDING + CREATED. (This is the webhook capture
+      // path; same Prisma-enum bug as the synchronous verify.)
+      ['PENDING', 'CREATED'],
       'PAID',
     );
 

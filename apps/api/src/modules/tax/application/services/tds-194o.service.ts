@@ -48,6 +48,7 @@ import {
   computeTds194O,
   filingPeriodOf,
 } from '../../domain/tds-194o-calculator';
+import { TaxConfigService } from './tax-config.service';
 
 export class TdsLedgerNotFoundError extends Error {
   constructor(public readonly ledgerId: string) {
@@ -100,7 +101,11 @@ export interface ComputeResult {
 export class Tds194OService {
   private readonly logger = new Logger(Tds194OService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    // Phase 252 — §194-O rate + base are admin-configurable (tax_config).
+    private readonly taxConfig: TaxConfigService,
+  ) {}
 
   /** Surface the filing-period helper to callers. */
   static filingPeriodOf(date: Date): string {
@@ -176,6 +181,11 @@ export class Tds194OService {
     // forward consumed below.
     const { startUtc, endUtc } = quarterRangeUtc(args.filingPeriod);
 
+    // Phase 252 — §194-O base + rate are admin-configurable (tax_config). The
+    // base ('what TDS is on') is COMMISSION or PRICE_OF_GOODS_SOLD; the rate is
+    // the standard with-PAN rate (no-PAN sellers still fall to §206AA 5%).
+    const tdsCfg = (await this.taxConfig.getSettlementTaxConfig()).tds;
+
     const settlements = await this.prisma.sellerSettlement.findMany({
       where: {
         sellerId: args.sellerId,
@@ -186,6 +196,8 @@ export class Tds194OService {
       select: {
         id: true,
         totalPlatformAmountInPaise: true,
+        // Commission base (when configured) — the platform's margin.
+        totalPlatformMarginInPaise: true,
         adjustments: {
           select: {
             amountInPaise: true,
@@ -197,11 +209,16 @@ export class Tds194OService {
     let grossSaleInPaise = 0n;
     let refundReversalInPaise = 0n;
     for (const s of settlements) {
-      grossSaleInPaise += s.totalPlatformAmountInPaise;
+      // Phase 252 — sum the CONFIGURED base column so the quarterly Form-26Q
+      // aggregate matches the per-settlement slice (settlement-tds hook) and
+      // the payout — one reconciled number.
+      grossSaleInPaise +=
+        tdsCfg.baseType === 'COMMISSION'
+          ? s.totalPlatformMarginInPaise
+          : s.totalPlatformAmountInPaise;
       // Negative adjustments = refunds / clawbacks; sum the magnitudes
       // as refund reversal. Positive adjustments don't reduce gross
-      // — they're already inside `totalPlatformAmountInPaise` via the
-      // settlement aggregation.
+      // — they're already inside the base column via the settlement aggregation.
       for (const adj of s.adjustments) {
         if (adj.amountInPaise < 0n) {
           refundReversalInPaise += -adj.amountInPaise;
@@ -223,10 +240,13 @@ export class Tds194OService {
         priorCarryForwardInPaise: priorCarryForward,
       });
 
+    const hasVerifiedPan = !!seller.panNumber && seller.panVerified === true;
     const breakdown = computeTds194O({
       grossSaleInPaise: netSaleInPaise,
-      hasVerifiedPan:
-        !!seller.panNumber && seller.panVerified === true,
+      hasVerifiedPan,
+      // Configured rate applies to PAN-furnished sellers; no-PAN sellers still
+      // get §206AA 5% (the calculator's default when no override is passed).
+      rateBpsOverride: hasVerifiedPan ? tdsCfg.rateBps : undefined,
     });
 
     // Zero gross + zero carry-forward = nothing to record. Skip.
@@ -321,20 +341,34 @@ export class Tds194OService {
       );
     }
 
+    // Phase 252 — §194-O base + rate are admin-configurable (tax_config).
+    const tdsCfg = (await this.taxConfig.getSettlementTaxConfig()).tds;
+
     const { startUtc, endUtc } = quarterRangeUtc(args.filingPeriod);
     const settlements = await this.prisma.franchiseSettlement.findMany({
       where: {
         franchiseId: args.franchiseId,
         cycle: { periodEnd: { gte: startUtc, lt: endUtc } },
       },
-      select: { totalOnlineAmount: true, reversalAmount: true },
+      // Commission base = the platform's online commission; PGS base = online
+      // sale value. reversalAmount nets refunds out of either.
+      select: {
+        totalOnlineAmount: true,
+        totalOnlineCommission: true,
+        reversalAmount: true,
+      },
     });
 
     let grossSaleInPaise = 0n;
     let refundReversalInPaise = 0n;
     for (const s of settlements) {
-      // Decimal rupees → paise (BigInt) without IEEE-754 drift.
-      grossSaleInPaise += BigInt(s.totalOnlineAmount.mul(100).toFixed(0));
+      // Decimal rupees → paise (BigInt) without IEEE-754 drift, on the
+      // configured base column.
+      const baseDecimal =
+        tdsCfg.baseType === 'COMMISSION'
+          ? s.totalOnlineCommission
+          : s.totalOnlineAmount;
+      grossSaleInPaise += BigInt(baseDecimal.mul(100).toFixed(0));
       refundReversalInPaise += BigInt(s.reversalAmount.mul(100).toFixed(0));
     }
 
@@ -358,6 +392,7 @@ export class Tds194OService {
     const breakdown = computeTds194O({
       grossSaleInPaise: netSaleInPaise,
       hasVerifiedPan,
+      rateBpsOverride: hasVerifiedPan ? tdsCfg.rateBps : undefined,
     });
 
     if (

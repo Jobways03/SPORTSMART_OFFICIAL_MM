@@ -25,6 +25,16 @@ export interface CalculateSplitInput {
    * customer cannot refund wallet money to a card.
    */
   customerPreferredMethod?: RefundMethod;
+  /**
+   * Phase 258 — when true, the ENTIRE refund is routed to the wallet as a
+   * single leg, regardless of how the order was originally paid (gateway,
+   * wallet, or split). Used for cancels/rejections that happen BEFORE seller
+   * acceptance: the paid amount is returned as instant store credit instead of
+   * reversing to the card. Distinct from customerPreferredMethod (which only
+   * steers the single-source case and is ignored for the gateway leg of a
+   * genuine split).
+   */
+  forceFullWallet?: boolean;
 }
 
 /**
@@ -64,6 +74,21 @@ export class RefundSplitCalculatorService {
 
     if (totalRefundAmountInPaise <= 0n) {
       return [];
+    }
+
+    // Phase 258 — pre-acceptance cancels/rejections return the full paid
+    // amount to the wallet as instant store credit (one leg), bypassing the
+    // gateway-vs-wallet split entirely. The caller decides when this applies
+    // (order/sub-order not yet seller-accepted).
+    if (input.forceFullWallet) {
+      return [
+        {
+          method: 'WALLET',
+          amountInPaise: totalRefundAmountInPaise,
+          reason: 'Refunded to wallet (cancelled before seller acceptance)',
+          legSuffix: 'wallet',
+        },
+      ];
     }
 
     // Goodwill / no-order refunds — single leg to wallet (or customer

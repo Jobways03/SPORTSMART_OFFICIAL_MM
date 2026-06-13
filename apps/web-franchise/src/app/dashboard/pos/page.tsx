@@ -19,6 +19,7 @@ import {
   CatalogMapping,
 } from '@/services/catalog.service';
 import { ApiError } from '@/lib/api-client';
+import { validateAmount, validateIndianMobile } from '@/lib/validators';
 import {
   mountBarcodeScanner,
   openCashDrawer,
@@ -371,6 +372,17 @@ if (cart.length === 0) {
       }
       if (line.unitPrice <= 0) {
         void notify(`Unit price must be greater than 0 for ${line.title}`);
+        return;
+      }
+    }
+
+    // Customer phone is optional, but if entered it must be a valid Indian
+    // mobile so the receipt SMS / follow-up actually reaches the customer.
+    const trimmedPhone = customerPhone.trim();
+    if (trimmedPhone) {
+      const phoneError = validateIndianMobile(trimmedPhone);
+      if (phoneError) {
+        void notify(phoneError);
         return;
       }
     }
@@ -1937,21 +1949,34 @@ function CashReconciliationForm({
       : actualRupees - expectedRupees;
 
   const submit = async () => {
-    if (actualRupees == null || isNaN(actualRupees) || actualRupees < 0) {
-      void notify('Enter the actual cash counted (₹)');
+    // Actual cash is required money INTO the reconciliation: non-negative,
+    // finite, at most 2 decimal places, within a sane ledger ceiling.
+    const actualCashError = validateAmount(actualCash, {
+      label: 'Actual cash counted',
+    });
+    if (actualCashError) {
+      void notify(actualCashError);
       return;
     }
+    // Bank deposit is optional — blank means 0 — but if entered it must be a
+    // valid non-negative money amount.
+    if (bankDeposit.trim() !== '') {
+      const bankError = validateAmount(bankDeposit, {
+        label: 'Bank deposit',
+      });
+      if (bankError) {
+        void notify(bankError);
+        return;
+      }
+    }
+    const actualRupeesValue = Number(actualCash);
     const bankRupees =
       bankDeposit.trim() === '' ? 0 : Number(bankDeposit);
-    if (isNaN(bankRupees) || bankRupees < 0) {
-      void notify('Bank deposit must be a non-negative amount');
-      return;
-    }
     setIsSaving(true);
     try {
       const res = await franchisePosService.submitReconciliation({
         businessDate,
-        actualCashInPaise: Math.round(actualRupees * 100),
+        actualCashInPaise: Math.round(actualRupeesValue * 100),
         bankDepositInPaise: Math.round(bankRupees * 100),
         bankDepositReference: bankReference.trim() || undefined,
         notes: notes.trim() || undefined,

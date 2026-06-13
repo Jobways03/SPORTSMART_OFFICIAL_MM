@@ -5,6 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import {
   adminReturnsService,
   ReturnDetail,
+  ReturnShipmentEvidence,
   ReturnStatus,
 } from '@/services/admin-returns.service';
 import { ApiError } from '@/lib/api-client';
@@ -58,6 +59,13 @@ export default function ReturnDetailPage() {
 
   const [activeModal, setActiveModal] = useState<ModalKey>(null);
 
+  // Seller's pre-ship evidence (proof-of-dispatch photos uploaded at packing
+  // time, attached to the sub-order). Loaded once the return is in hand so the
+  // admin can compare the as-shipped baseline against the customer's claim.
+  const [shipmentEvidence, setShipmentEvidence] = useState<
+    ReturnShipmentEvidence[]
+  >([]);
+
   const fetchReturn = useCallback(async () => {
     setLoading(true);
     setError('');
@@ -82,6 +90,19 @@ export default function ReturnDetailPage() {
   useEffect(() => {
     fetchReturn();
   }, [fetchReturn]);
+
+  // Pull the seller's pre-ship photos once we know the return's sub-order.
+  // Independent of the main fetch so a missing/empty list never breaks the page.
+  useEffect(() => {
+    const subOrderId = ret?.subOrderId;
+    if (!subOrderId) return;
+    adminReturnsService
+      .getShipmentEvidence(subOrderId)
+      .then((res) => {
+        setShipmentEvidence(Array.isArray(res.data) ? res.data : []);
+      })
+      .catch(() => setShipmentEvidence([]));
+  }, [ret?.subOrderId]);
 
   const onActionSuccess = () => {
     setActiveModal(null);
@@ -857,6 +878,69 @@ export default function ReturnDetailPage() {
             </div>
           </div>
 
+          {/* Seller's pre-ship evidence — proof-of-dispatch photos the seller
+              uploaded at packing time (attached to the SUB-ORDER, not the
+              return). The "as shipped" baseline: compare against the customer's
+              claim photos above to judge a contested claim before approving. */}
+          {shipmentEvidence.length > 0 && (
+            <div className="return-section">
+              <div className="return-section-header">
+                <h2>Seller&apos;s Pre-ship Evidence ({shipmentEvidence.length})</h2>
+              </div>
+              <div className="return-section-body">
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: 'var(--color-text-secondary)',
+                    marginBottom: 12,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Photos the seller uploaded <strong>before shipping</strong> (the
+                  &ldquo;as shipped&rdquo; baseline). Compare them against the
+                  customer&apos;s evidence above — anything visible here that
+                  isn&apos;t in the customer&apos;s photo (or vice-versa) is a
+                  strong signal when deciding a contested return.
+                </div>
+                <div className="return-evidence-grid">
+                  {shipmentEvidence.map((att, i) => {
+                    // SHIPMENT_EVIDENCE is PRIVATE → providerUrl is null; the
+                    // admin endpoint enriches each row with a short-lived
+                    // `viewUrl` we render here.
+                    const url = att.viewUrl ?? att.file?.providerUrl ?? '';
+                    return (
+                      <a
+                        key={att.id}
+                        href={url || '#'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="return-evidence-item"
+                      >
+                        {url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={url} alt={`Pre-ship evidence ${i + 1}`} />
+                        ) : (
+                          <div
+                            style={{
+                              padding: 12,
+                              fontSize: 11,
+                              color: 'var(--color-text-secondary)',
+                            }}
+                          >
+                            {att.file?.fileName ?? 'Photo'}
+                          </div>
+                        )}
+                        <div className="return-evidence-caption">
+                          Seller · before shipping
+                        </div>
+                      </a>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Timeline */}
           <div className="return-section">
             <div className="return-section-header">
@@ -1030,6 +1114,7 @@ export default function ReturnDetailPage() {
           returnNumber={ret.returnNumber}
           items={ret.items}
           creditNoteEligibilityPreview={ret.creditNoteEligibilityPreview}
+          refundPreview={ret.refundPreview}
           onClose={() => setActiveModal(null)}
           onSuccess={onActionSuccess}
         />

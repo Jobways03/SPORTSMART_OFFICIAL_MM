@@ -7,6 +7,7 @@ import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
+import { validateText, validatePincode } from '@/lib/validators';
 import {
   customerTaxProfileService,
   CustomerTaxProfile,
@@ -141,6 +142,9 @@ export default function TaxProfilesPage() {
 
     // Create-only client-side guards. Edit doesn't touch GSTIN.
     if (!editingId) {
+      // Phase 200 (audit #18) — keep the server-aligned loose regex here; the
+      // canonical validateGSTIN hard-codes 'Z' at position 14 and would reject
+      // a few valid GSTINs the server accepts. Do not weaken this check.
       const normalized = form.gstin.trim().toUpperCase();
       if (normalized.length !== 15 || !GSTIN_LOOSE_REGEX.test(normalized)) {
         setFormError(
@@ -149,6 +153,45 @@ export default function TaxProfilesPage() {
         );
         return;
       }
+    }
+
+    // Field-level format/length guards for the billing identity fields.
+    const legalNameError = validateText(form.legalName, {
+      label: 'Legal business name',
+      max: 200,
+    });
+    if (legalNameError) {
+      setFormError(legalNameError);
+      return;
+    }
+    const line1Error = validateText(form.line1, { label: 'Address line 1', max: 200 });
+    if (line1Error) {
+      setFormError(line1Error);
+      return;
+    }
+    const line2Error = validateText(form.line2, {
+      label: 'Address line 2',
+      max: 200,
+      required: false,
+    });
+    if (line2Error) {
+      setFormError(line2Error);
+      return;
+    }
+    const cityError = validateText(form.city, { label: 'City', max: 100 });
+    if (cityError) {
+      setFormError(cityError);
+      return;
+    }
+    const stateError = validateText(form.state, { label: 'State', max: 100 });
+    if (stateError) {
+      setFormError(stateError);
+      return;
+    }
+    const pincodeError = validatePincode(form.pincode);
+    if (pincodeError) {
+      setFormError(pincodeError);
+      return;
     }
 
     setSaving(true);

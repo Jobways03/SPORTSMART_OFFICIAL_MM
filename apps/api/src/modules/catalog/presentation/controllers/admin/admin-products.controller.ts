@@ -574,8 +574,19 @@ export class AdminProductsController {
   async approveProduct(@CurrentAdmin() adminId: string, @Param('productId') productId: string) {
     const product = await this.productRepo.findByIdBasic(productId);
     if (!product) throw new NotFoundAppException('Product not found');
-    // Already active/approved — idempotent success
+    // Already live by lifecycle. Pre-Phase-256 this returned an idempotent
+    // success unconditionally — but a product seeded straight to ACTIVE can
+    // still carry moderationStatus=PENDING, leaving it stuck in "Pending
+    // Review" with no UI path to approve (the Enable button hit this branch
+    // and no-opped). Clear the lagging moderation flag here instead.
     if (product.status === 'ACTIVE' || product.status === 'APPROVED') {
+      if (product.moderationStatus !== 'APPROVED') {
+        await this.productRepo.approveModerationOnly(productId, adminId);
+        this.logger.log(
+          `Product ${productId} moderation cleared PENDING→APPROVED by admin ${adminId} (lifecycle already ${product.status})`,
+        );
+        return { success: true, message: 'Product approved', data: null };
+      }
       return { success: true, message: 'Product is already active', data: null };
     }
 

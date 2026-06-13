@@ -10,6 +10,31 @@ import {
 } from '@/services/catalog.service';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
+import { validateText } from '@/lib/validators';
+
+// Barcode / SKU codes are scanned and matched verbatim against POS hardware
+// and the master catalog, so they must be a single token of letters, digits,
+// hyphens or underscores — no spaces or punctuation that a scanner can't emit.
+// Empty is allowed (both fields are optional and fall back to the master SKU).
+const CODE_FORMAT_REGEX = /^[A-Za-z0-9][A-Za-z0-9\-_]*$/;
+
+function validateCodeField(
+  value: string,
+  label: string,
+): string | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null; // optional
+  const lengthError = validateText(trimmed, {
+    min: 3,
+    max: 64,
+    label,
+  });
+  if (lengthError) return lengthError;
+  if (!CODE_FORMAT_REGEX.test(trimmed)) {
+    return `${label} can only contain letters, digits, hyphens and underscores`;
+  }
+  return null;
+}
 
 type TabKey = 'mine' | 'browse';
 
@@ -239,6 +264,14 @@ export default function CatalogPage() {
     e.preventDefault();
     if (!editMapping) return;
     setEditError('');
+    // Validate the barcode format before saving — a malformed code would
+    // otherwise be rejected only after the round-trip, or worse, fail to
+    // scan at the POS later.
+    const barcodeError = validateCodeField(editForm.barcode || '', 'Barcode');
+    if (barcodeError) {
+      setEditError(barcodeError);
+      return;
+    }
     setEditSaving(true);
     // Capture the status before the save so we can show the right
     // success message. The server's updateMapping flips the status
@@ -367,6 +400,19 @@ export default function CatalogPage() {
     // type the same value twice by accident.
     const skuSeen = new Map<string, number>();
     for (const r of selected) {
+      // Validate the format of any manually entered SKU / barcode before
+      // submit so a malformed code is caught here instead of failing the
+      // API call or breaking a later POS scan. Both fields are optional.
+      const skuFormatError = validateCodeField(r.franchiseSku, 'Franchise SKU');
+      if (skuFormatError) {
+        setAddError(`${r.label}: ${skuFormatError}`);
+        return;
+      }
+      const barcodeFormatError = validateCodeField(r.barcode, 'Barcode');
+      if (barcodeFormatError) {
+        setAddError(`${r.label}: ${barcodeFormatError}`);
+        return;
+      }
       const sku = r.franchiseSku.trim();
       if (!sku) continue;
       if (skuSeen.has(sku)) {

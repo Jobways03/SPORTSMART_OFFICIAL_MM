@@ -9,6 +9,7 @@ import {
   MfaBeginEnrollmentResponse,
 } from '@/services/admin-mfa.service';
 import { ApiError } from '@/lib/api-client';
+import { validateOtp } from '@/lib/validators';
 
 type Phase =
   | { kind: 'loading' }
@@ -91,7 +92,8 @@ export default function AdminMfaSettingsPage() {
     e.preventDefault();
     if (phase.kind !== 'enrolling' || submitting) return;
     const trimmed = code.replace(/\s+/g, '');
-    if (!/^[0-9]{6}$/.test(trimmed)) {
+    const otpError = validateOtp(trimmed);
+    if (otpError) {
       setError('Enter the 6-digit code from your authenticator app.');
       return;
     }

@@ -3,6 +3,7 @@
 import { useState, FormEvent } from 'react';
 import Link from 'next/link';
 import { Mail, ArrowRight, Truck, RotateCcw, ShieldCheck, MessageCircle } from 'lucide-react';
+import { validateEmail } from '@/lib/validators';
 
 const InstagramIcon = (props: React.SVGProps<SVGSVGElement>) => (
   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" {...props}>
@@ -306,7 +307,7 @@ function NewsletterForm() {
 
   const onSubmit = (e: FormEvent) => {
     e.preventDefault();
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    if (validateEmail(email) !== null) {
       setStatus('error');
       return;
     }

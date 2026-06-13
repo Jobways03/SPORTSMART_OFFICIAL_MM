@@ -4,6 +4,7 @@ import { Suspense, useCallback, useState, FormEvent } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { apiFetch, ApiError, storeTokens } from '@/lib/api';
+import { validateEmail } from '@/lib/validators';
 import { CaptchaWidget } from '@/components/CaptchaWidget';
 
 const CAPTCHA_REQUIRED =
@@ -40,6 +41,15 @@ function LoginPageInner() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setError(emailError);
+      return;
+    }
+    if (!password) {
+      setError('Password is required');
+      return;
+    }
     if (CAPTCHA_REQUIRED && !captchaToken) {
       setError('Please complete the captcha challenge.');
       return;

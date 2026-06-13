@@ -10,6 +10,7 @@ import {
   STATUS_LABEL,
   STATUS_COLOR,
 } from '@/services/support.service';
+import { validateText } from '@/lib/validators';
 
 export default function SellerTicketDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -39,7 +40,13 @@ export default function SellerTicketDetailPage() {
 
   const sendReply = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!reply.trim() || sending) return;
+    if (sending) return;
+    const replyErr = validateText(reply, { min: 2, max: 5000, label: 'Reply' });
+    if (replyErr) {
+      setError(replyErr);
+      return;
+    }
+    setError('');
     setSending(true);
     try {
       const res = await sellerSupportService.reply(id, reply.trim());

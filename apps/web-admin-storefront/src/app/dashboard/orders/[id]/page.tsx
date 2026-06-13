@@ -477,7 +477,14 @@ function AdminOrderTimeline({ orderStatus, paymentStatus, fulfillmentStatuses }:
   const anyPacked = fulfillmentStatuses.some(s => s === 'PACKED' || s === 'SHIPPED' || s === 'DELIVERED');
 
   const getStepIndex = (): number => {
-    if (isPaid) return 7;
+    // "Paid" is the TERMINAL milestone of this fulfillment timeline (delivered
+    // AND settled). Pre-fix this was `if (isPaid) return 7`, which jumped the
+    // bar to the last step the moment payment was PAID — fine for COD (paid at
+    // delivery) but wrong for ONLINE orders (paid at placement), so a just-
+    // placed paid order showed every step green while it was still "Pending
+    // Verification / Unfulfilled". Gate the final step on delivery; the
+    // separate "Payment paid" badge conveys the payment fact independently.
+    if (isPaid && allDelivered) return 7;
     if (allDelivered) return 6;
     if (anyShipped) return 5;
     if (anyPacked) return 4;

@@ -32,6 +32,7 @@ import { AdminGetSellerUseCase } from '../../application/use-cases/admin-get-sel
 import { AdminEditSellerUseCase } from '../../application/use-cases/admin-edit-seller.use-case';
 import { AdminUpdateSellerStatusUseCase } from '../../application/use-cases/admin-update-seller-status.use-case';
 import { AdminUpdateSellerVerificationUseCase } from '../../application/use-cases/admin-update-seller-verification.use-case';
+import { AdminVerifySellerTaxIdsUseCase } from '../../application/use-cases/admin-verify-seller-tax-ids.use-case';
 import { AdminImpersonateSellerUseCase } from '../../application/use-cases/admin-impersonate-seller.use-case';
 import { AdminEndImpersonationUseCase } from '../../application/use-cases/admin-end-impersonation.use-case';
 import { AdminSendSellerMessageUseCase } from '../../application/use-cases/admin-send-seller-message.use-case';
@@ -56,6 +57,7 @@ export class AdminSellersController {
     private readonly editSellerUseCase: AdminEditSellerUseCase,
     private readonly updateStatusUseCase: AdminUpdateSellerStatusUseCase,
     private readonly updateVerificationUseCase: AdminUpdateSellerVerificationUseCase,
+    private readonly verifyTaxIdsUseCase: AdminVerifySellerTaxIdsUseCase,
     private readonly impersonateUseCase: AdminImpersonateSellerUseCase,
     // Phase 28 (2026-05-21) — shared use case; same dep injection
     // works for the franchise admin controller too.
@@ -252,6 +254,69 @@ export class AdminSellersController {
     return {
       success: true,
       message: `Seller verification updated to ${dto.verificationStatus}`,
+      data,
+    };
+  }
+
+  /**
+   * Phase 254 — manually mark the seller's PAN as verified. This is the flag
+   * the §194-O TDS engine keys off: an unverified PAN forces the §206AA
+   * penalty rate (5%); verifying it drops TDS to the configured rate (1%).
+   * Idempotent.
+   */
+  @Post(':sellerId/verify-pan')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('sellers.approve')
+  async verifyPan(
+    @Param('sellerId') sellerId: string,
+    @Body() body: { reason?: string } = {},
+    @Req() req: Request,
+  ) {
+    const adminId = (req as any).adminId;
+    const data = await this.verifyTaxIdsUseCase.verifyPan({
+      adminId,
+      sellerId,
+      reason: body?.reason,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return {
+      success: true,
+      message: data.alreadyVerified
+        ? 'Seller PAN was already verified'
+        : 'Seller PAN verified',
+      data,
+    };
+  }
+
+  /**
+   * Phase 254 — manually mark the seller's GSTIN as verified (admin checked
+   * the portal; the automated GSTN provider is a stub today). Feeds tax
+   * invoicing, not the TDS rate. Idempotent.
+   */
+  @Post(':sellerId/verify-gstin')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('sellers.approve')
+  async verifyGstin(
+    @Param('sellerId') sellerId: string,
+    @Body() body: { reason?: string } = {},
+    @Req() req: Request,
+  ) {
+    const adminId = (req as any).adminId;
+    const data = await this.verifyTaxIdsUseCase.verifyGst({
+      adminId,
+      sellerId,
+      reason: body?.reason,
+      ipAddress: req.ip,
+      userAgent: req.headers['user-agent'],
+    });
+
+    return {
+      success: true,
+      message: data.alreadyVerified
+        ? 'Seller GSTIN was already verified'
+        : 'Seller GSTIN verified',
       data,
     };
   }

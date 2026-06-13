@@ -8,6 +8,7 @@ import {
   TicketCategory,
   TicketPriority,
 } from '../../../../lib/support';
+import { validateText } from '../../../../lib/validators';
 
 const PRIORITIES: TicketPriority[] = ['LOW', 'NORMAL', 'HIGH', 'URGENT'];
 
@@ -28,8 +29,13 @@ export default function NewAffiliateTicketPage() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!subject.trim()) return setError('Subject is required');
-    if (!body.trim()) return setError('Please describe the issue');
+    const fieldError =
+      validateText(subject, { label: 'Subject', min: 1, max: 200 }) ||
+      validateText(body, { label: 'Description', min: 1, max: 5000 });
+    if (fieldError) {
+      setError(fieldError);
+      return;
+    }
     setSubmitting(true);
     try {
       const ticket = await supportApi.createTicket({

@@ -8,6 +8,7 @@ import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { useAuthGuard } from '@/lib/useAuthGuard';
 import { walletService } from '@/services/wallet.service';
 import { profileService, CustomerProfile } from '@/services/profile.service';
+import { validateAmount } from '@/lib/validators';
 
 const QUICK_AMOUNTS = [100, 500, 1000, 2000, 5000];
 const RAZORPAY_SCRIPT_URL = 'https://checkout.razorpay.com/v1/checkout.js';
@@ -85,15 +86,19 @@ export default function TopupPage() {
     e.preventDefault();
     setError(null);
 
+    // Canonical amount validation: finite, within range, at most 2 decimals.
+    // Range is the business top-up cap (min ₹1 / max ₹1,00,000).
+    const amountError = validateAmount(amountInRupees, {
+      min: 1,
+      max: 100000,
+      decimals: 2,
+      label: 'Amount',
+    });
+    if (amountError) {
+      setError(amountError);
+      return;
+    }
     const rupees = Number(amountInRupees);
-    if (!Number.isFinite(rupees) || rupees < 1) {
-      setError('Enter an amount of ₹1 or more');
-      return;
-    }
-    if (rupees > 100000) {
-      setError('Maximum single top-up is ₹1,00,000');
-      return;
-    }
     const amountInPaise = Math.round(rupees * 100);
 
     const keyId = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID;

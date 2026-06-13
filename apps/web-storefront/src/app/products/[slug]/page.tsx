@@ -156,13 +156,6 @@ export default function ProductDetailPage() {
 
   useEffect(() => setSelectedImage(0), [selectedVariant]);
 
-  useEffect(() => {
-    try {
-      const saved = sessionStorage.getItem('lastCheckedPincode');
-      if (saved && /^\d{6}$/.test(saved)) setPincode(saved);
-    } catch {}
-  }, []);
-
   const getVariantStock = (v: Variant) => v.totalAvailableStock ?? v.totalStock ?? v.stock ?? 0;
 
   const optionGroups = useMemo(() => {
@@ -237,9 +230,6 @@ export default function ProductDetailPage() {
     setPincodeError('');
     setPincodeResult(null);
     setPincodeChecking(true);
-    try {
-      sessionStorage.setItem('lastCheckedPincode', pincode);
-    } catch {}
     try {
       const params = new URLSearchParams({ productId: product.id, pincode });
       if (selectedVariant) params.set('variantId', selectedVariant.id);
@@ -462,13 +452,32 @@ export default function ProductDetailPage() {
                           (v) => v.optionValues.some(ovMatchesVal) && getVariantStock(v) > 0,
                         );
 
-                        const selectVariant = () => {
-                          const otherSelectedIds: string[] = [];
-                          if (selectedVariant) {
-                            for (const ov of selectedVariant.optionValues) {
-                              if (getOvName(ov) !== group.name) otherSelectedIds.push(getOvId(ov));
-                            }
+                        // Phase 260 — the OTHER dimensions' currently-selected
+                        // values. Used to (a) resolve the variant on click and
+                        // (b) decide whether THIS value is reachable without
+                        // changing those other choices.
+                        const otherSelectedIds: string[] = [];
+                        if (selectedVariant) {
+                          for (const ov of selectedVariant.optionValues) {
+                            if (getOvName(ov) !== group.name)
+                              otherSelectedIds.push(getOvId(ov));
                           }
+                        }
+                        // Reachable WITHOUT touching the other dimensions? When
+                        // false, the variant grid is sparse here — picking this
+                        // value must change another option, so we grey it + flag
+                        // it instead of silently snapping with no warning.
+                        const availableWithCurrent = product.variants.some(
+                          (v) =>
+                            v.optionValues.some(ovMatchesVal) &&
+                            getVariantStock(v) > 0 &&
+                            otherSelectedIds.every((id) =>
+                              v.optionValues.some((ov2) => getOvId(ov2) === id),
+                            ),
+                        );
+                        const constrained = hasStock && !availableWithCurrent && !isSelected;
+
+                        const selectVariant = () => {
                           const match =
                             product.variants.find(
                               (v) =>
@@ -485,12 +494,20 @@ export default function ProductDetailPage() {
                             <button
                               key={val.id}
                               onClick={selectVariant}
-                              title={val.value}
+                              title={
+                                !hasStock
+                                  ? `${val.value} — out of stock`
+                                  : constrained
+                                    ? `${val.value} — not available with your current selection; choosing it will update the other options`
+                                    : val.value
+                              }
                               className={`relative size-10 rounded-full border-2 transition-all ${
                                 isSelected
                                   ? 'border-ink-900 ring-2 ring-ink-900 ring-offset-2'
                                   : 'border-ink-200 hover:border-ink-500'
-                              } ${!hasStock ? 'opacity-40' : ''}`}
+                              } ${!hasStock ? 'opacity-40' : ''} ${
+                                constrained ? 'opacity-50' : ''
+                              }`}
                               style={{
                                 backgroundColor: colorHex,
                                 borderColor:
@@ -507,11 +524,20 @@ export default function ProductDetailPage() {
                             key={val.id}
                             onClick={selectVariant}
                             disabled={!hasStock}
+                            title={
+                              !hasStock
+                                ? 'Out of stock'
+                                : constrained
+                                  ? 'Not available with your current selection — choosing it will update the other options'
+                                  : undefined
+                            }
                             className={`min-w-12 h-11 px-4 border text-body font-medium transition-colors ${
                               isSelected
                                 ? 'bg-ink-900 text-white border-ink-900'
                                 : 'bg-white text-ink-900 border-ink-300 hover:border-ink-900'
-                            } ${!hasStock ? 'opacity-40 line-through cursor-not-allowed' : ''}`}
+                            } ${!hasStock ? 'opacity-40 line-through cursor-not-allowed' : ''} ${
+                              constrained ? 'opacity-50 border-dashed' : ''
+                            }`}
                           >
                             {val.value}
                           </button>

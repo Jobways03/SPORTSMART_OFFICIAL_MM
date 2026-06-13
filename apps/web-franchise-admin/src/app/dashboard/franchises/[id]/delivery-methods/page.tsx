@@ -7,6 +7,7 @@ import {
   franchiseAdminDeliveryMethodsService,
   type FranchiseDeliveryMethodSettings,
 } from '@/services/admin-delivery-methods.service';
+import { validatePincode } from '@/lib/validators';
 
 /**
  * Franchise-admin delivery-method settings page. Same UX as the
@@ -74,6 +75,15 @@ export default function FranchiseDeliveryMethodsPage() {
           .map((p) => p.trim())
           .filter(Boolean)
       : null;
+    // Reject before the API call: every token must be a strict 6-digit PIN.
+    // Surface the first bad one via the existing action-error banner.
+    if (pincodes) {
+      const bad = pincodes.find((p) => validatePincode(p) !== null);
+      if (bad) {
+        setActionError(`"${bad}" is not a valid 6-digit pincode`);
+        return;
+      }
+    }
     save({ selfDeliveryPincodes: pincodes });
   };
 

@@ -19,6 +19,16 @@ import { apiClient } from '@/lib/api-client';
 import { usePermissions } from '@/lib/permissions';
 import { paiseToRupeesString } from '@sportsmart/shared-utils';
 
+// Phase 251 — one frozen dynamic charge-rule line captured at cycle creation.
+interface SettlementChargeLineRow {
+  id: string;
+  ruleName: string;
+  baseType: string;
+  rateBps: number;
+  baseAmountInPaise: string | number;
+  amountInPaise: string | number;
+}
+
 interface SellerSettlementRow {
   id: string;
   sellerId: string;
@@ -35,6 +45,19 @@ interface SellerSettlementRow {
   tcsDeductedInPaise?: string | number;
   tdsDeductedInPaise?: string | number;
   totalCommissionGstInPaise?: string | number;
+  // Snapshotted commission-GST rate (bps) — drives the breakdown's rate label
+  // so it reflects the configured rate, not a hard-coded 18%.
+  commissionGstRateBps?: number;
+  // Phase 251 — dynamic charge rules. When chargeRulesApplied is true the net
+  // deducts dynamicChargeTotalInPaise (the sum of chargeLines) instead of the
+  // legacy TCS/TDS/GST columns above. chargeLines is the frozen rule-wise
+  // breakup captured at cycle creation.
+  dynamicChargeTotalInPaise?: string | number;
+  chargeRulesApplied?: boolean;
+  chargeLines?: SettlementChargeLineRow[];
+  // Phase 251 — net actually wired (paise), computed once by the backend
+  // (getCycleDetail). The UI reads this instead of re-deriving the formula.
+  netPayableInPaise?: string | number;
   status: string;
   paidAt?: string | null;
   utrReference?: string | null;
@@ -112,18 +135,11 @@ interface ClawbackDebit {
   createdAt: string;
 }
 
-// Net amount actually wired to the seller (paise) = gross settlement − TCS −
-// TDS − commission GST. Base computed from the decimal × 100 so it's correct
-// even on legacy rows whose *_in_paise mirror is 0; deductions read the paise
-// columns the backend writes at approval.
+// Net amount actually wired to the seller (paise). Phase 251 — single source of
+// truth: the backend computes this once (getCycleDetail → netPayableInPaise) and
+// every surface reads it, so the formula can't drift across UIs.
 function netPayablePaise(s: SellerSettlementRow): number {
-  const gross = Math.round(Number(s.totalSettlementAmount) * 100);
-  return (
-    gross -
-    Number(s.tcsDeductedInPaise ?? 0) -
-    Number(s.tdsDeductedInPaise ?? 0) -
-    Number(s.totalCommissionGstInPaise ?? 0)
-  );
+  return Number(s.netPayableInPaise ?? 0);
 }
 
 export default function SettlementCycleDetailPage() {
@@ -806,26 +822,48 @@ export default function SettlementCycleDetailPage() {
                       Math.round(Number(s.totalSettlementAmount) * 100) && (
                       <div
                         title={
-                          s.status === 'PENDING'
+                          s.chargeRulesApplied
+                            ? 'Deductions from the active settlement charge rules in force when this cycle was created. The NET is what you wire to the seller’s bank.'
+                            : s.status === 'PENDING'
                             ? 'Provisional — only commission GST is known before approval. TCS (1%) and TDS (1% / 5% if no PAN) are computed when the cycle is approved, and the final net is wired at payout.'
                             : "Statutory deductions are remitted to the government on the seller's behalf (the seller reclaims them). The NET is what you wire to the seller's bank."
                         }
                         style={{ fontSize: 10, fontWeight: 400, color: '#5b6066', marginTop: 3, lineHeight: 1.6 }}
                       >
-                        {Number(s.totalCommissionGstInPaise ?? 0) > 0 && (
-                          <div>− GST (18%) {paiseToRupeesString(Number(s.totalCommissionGstInPaise) as never)}</div>
-                        )}
-                        {Number(s.tcsDeductedInPaise ?? 0) > 0 && (
-                          <div>− TCS (1%) {paiseToRupeesString(Number(s.tcsDeductedInPaise) as never)}</div>
-                        )}
-                        {Number(s.tdsDeductedInPaise ?? 0) > 0 && (
-                          <div>− TDS {paiseToRupeesString(Number(s.tdsDeductedInPaise) as never)}</div>
+                        {s.chargeRulesApplied ? (
+                          // Phase 251 — settlement-charge total + rule-wise frozen
+                          // breakup (GST / TDS / TCS …) for this settlement.
+                          <>
+                            <div style={{ fontWeight: 600, color: '#374151' }}>
+                              settlement charges {paiseToRupeesString(Number(s.dynamicChargeTotalInPaise ?? 0) as never)}
+                            </div>
+                            {(s.chargeLines ?? [])
+                              .filter((l) => Number(l.amountInPaise) > 0)
+                              .map((l) => (
+                                <div key={l.id} style={{ paddingLeft: 10 }}>
+                                  − {l.ruleName} ({(l.rateBps / 100).toFixed(2).replace(/\.?0+$/, '')}%){' '}
+                                  {paiseToRupeesString(Number(l.amountInPaise) as never)}
+                                </div>
+                              ))}
+                          </>
+                        ) : (
+                          <>
+                            {Number(s.totalCommissionGstInPaise ?? 0) > 0 && (
+                              <div>− GST ({(s.commissionGstRateBps ?? 1800) / 100}%) {paiseToRupeesString(Number(s.totalCommissionGstInPaise) as never)}</div>
+                            )}
+                            {Number(s.tcsDeductedInPaise ?? 0) > 0 && (
+                              <div>− TCS (1%) {paiseToRupeesString(Number(s.tcsDeductedInPaise) as never)}</div>
+                            )}
+                            {Number(s.tdsDeductedInPaise ?? 0) > 0 && (
+                              <div>− TDS {paiseToRupeesString(Number(s.tdsDeductedInPaise) as never)}</div>
+                            )}
+                          </>
                         )}
                         <div style={{ fontWeight: 700, color: '#0F1115', marginTop: 1 }}>
-                          net pay{s.status === 'PENDING' ? ' (before TCS & TDS)' : ''}{' '}
+                          net pay{!s.chargeRulesApplied && s.status === 'PENDING' ? ' (before TCS & TDS)' : ''}{' '}
                           {paiseToRupeesString(netPayablePaise(s) as never)}
                         </div>
-                        {s.status === 'PENDING' && (
+                        {!s.chargeRulesApplied && s.status === 'PENDING' && (
                           <div
                             style={{ fontSize: 9.5, fontWeight: 400, fontStyle: 'italic', color: '#8a9099', marginTop: 2 }}
                           >

@@ -17,7 +17,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { promises as fs } from 'fs';
-import { dirname, join, resolve } from 'path';
+import { dirname, join } from 'path';
+import { defaultStubTaxPdfDir } from './tax-pdf-storage.provider';
 import type {
   PdfSignedUrlInput,
   PdfUploadInput,
@@ -62,8 +63,7 @@ export class StubTaxPdfStorageProvider implements TaxPdfStorageProvider {
     rootDir?: string,
     private readonly fsAdapter: StubFsAdapter = defaultFs,
   ) {
-    this.rootDir =
-      rootDir ?? resolve(process.cwd(), 'storage', 'tax-pdfs');
+    this.rootDir = rootDir ?? defaultStubTaxPdfDir();
     this.publicBaseUrl =
       process.env.TAX_PDF_PUBLIC_BASE_URL ||
       `http://localhost:${process.env.PORT || '8000'}`;

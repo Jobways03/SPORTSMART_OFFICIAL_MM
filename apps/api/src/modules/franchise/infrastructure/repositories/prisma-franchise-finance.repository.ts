@@ -412,6 +412,9 @@ export class PrismaFranchiseFinanceRepository
         ledgerEntries: {
           orderBy: { createdAt: 'asc' },
         },
+        // Phase 251 — frozen dynamic charge breakup (rule-wise) so the detail
+        // view can itemize what each active rule deducted at cycle creation.
+        chargeLines: { orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }] },
       },
     });
   }
@@ -428,6 +431,9 @@ export class PrismaFranchiseFinanceRepository
             status: true,
           },
         },
+        // Phase 251 — frozen dynamic charge breakup so the per-franchise
+        // settlements list can itemize the deductions + show the net wired.
+        chargeLines: { orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }] },
       },
       orderBy: { createdAt: 'desc' },
     });

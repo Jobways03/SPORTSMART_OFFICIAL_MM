@@ -11,11 +11,14 @@ import {
   AllocationCandidate,
 } from '@/services/admin-routing.service';
 import { ApiError } from '@/lib/api-client';
+import { validatePincode } from '@/lib/validators';
 
 type Tab = 'health' | 'preview';
 
 const HEALTH_REFRESH_MS = 30_000;
-const PINCODE_RE = /^[0-9]{6}$/;
+// Canonical pincode rule (rejects a leading zero) — kept in sync with
+// validatePincode() so the inline `canRun` boolean and the submit guard agree.
+const PINCODE_RE = /^[1-9][0-9]{5}$/;
 
 const fmtAgo = (iso: string) => {
   try {
@@ -374,8 +377,9 @@ function PreviewTab() {
   const onRun = async () => {
     setError('');
     setResult(null);
-    if (!PINCODE_RE.test(pincode.trim())) {
-      setError('Pincode must be 6 digits.');
+    const pincodeError = validatePincode(pincode.trim());
+    if (pincodeError) {
+      setError(pincodeError);
       return;
     }
     if (validRows.length === 0) {

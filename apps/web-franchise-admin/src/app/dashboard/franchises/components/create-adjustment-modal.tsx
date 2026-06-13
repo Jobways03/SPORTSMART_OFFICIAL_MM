@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { adminFranchisesService } from '@/services/admin-franchises.service';
 import { ApiError } from '@/lib/api-client';
+import { validateAmount } from '@/lib/validators';
 import '../../sellers/components/modal.css';
 
 interface Props {
@@ -22,7 +23,22 @@ export default function CreateAdjustmentModal({ franchiseId, businessName, onClo
   const amountValid = !isNaN(parsedAmount) && amount.trim() !== '';
 
   const handleSubmit = async () => {
-    if (!amountValid || !reason.trim()) return;
+    if (!reason.trim()) return;
+    // Signed adjustment: a manual ledger entry may be positive or negative,
+    // so allow the full signed range (a zero entry is a no-op and rejected).
+    const amountError = validateAmount(amount, {
+      min: -10_000_000,
+      max: 10_000_000,
+      label: 'Adjustment amount',
+    });
+    if (amountError) {
+      setError(amountError);
+      return;
+    }
+    if (parsedAmount === 0) {
+      setError('Adjustment amount cannot be zero');
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {

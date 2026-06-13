@@ -46,6 +46,17 @@ export interface SellerDetail {
   sellerShopLogoUrl: string | null;
   status: string;
   verificationStatus: string;
+  // Phase 254 — tax identity (from AdminGetSellerUseCase). panVerified is what
+  // the §194-O TDS engine keys off (unverified → §206AA 5% penalty; verified →
+  // configured rate).
+  legalBusinessName?: string | null;
+  gstin?: string | null;
+  gstStateCode?: string | null;
+  panNumber?: string | null;
+  panLast4?: string | null;
+  panVerified?: boolean;
+  isGstVerified?: boolean;
+  gstVerifiedAt?: string | null;
   isEmailVerified: boolean;
   profileCompletionPercentage: number;
   isProfileCompleted: boolean;
@@ -109,6 +120,23 @@ export const adminSellersService = {
     return apiClient(`/admin/sellers/${sellerId}/verification`, {
       method: 'PATCH',
       body: JSON.stringify({ verificationStatus, reason }),
+    });
+  },
+
+  // Phase 254 — manual PAN / GSTIN verification. verifyPan flips the flag the
+  // §194-O TDS engine keys off (drops 5% no-PAN penalty → configured rate);
+  // verifyGstin marks the GSTIN verified for invoicing. Idempotent.
+  verifyPan(sellerId: string): Promise<ApiResponse> {
+    return apiClient(`/admin/sellers/${sellerId}/verify-pan`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+  },
+
+  verifyGstin(sellerId: string): Promise<ApiResponse> {
+    return apiClient(`/admin/sellers/${sellerId}/verify-gstin`, {
+      method: 'POST',
+      body: JSON.stringify({}),
     });
   },
 

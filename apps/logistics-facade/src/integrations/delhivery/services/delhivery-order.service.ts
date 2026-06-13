@@ -24,6 +24,7 @@ import type {
 import type {
   DelhiveryRvpCreateRequest,
   DelhiveryRvpCreateResponse,
+  DelhiveryRvpShipment,
 } from '../dtos/delhivery-rvp-qc.dto';
 import {
   fromDelhiveryCreateResponse,
@@ -166,6 +167,41 @@ export class DelhiveryOrderService {
       subOrderId: req.subOrderId,
       trackingUrlTemplate: opts.trackingUrlTemplate,
     });
+  }
+
+  /**
+   * Book a REVERSE pickup (customer return) with Delhivery — an RVP create.
+   * Reuses the forward wire mapping, then flips each shipment row into a
+   * reverse pickup (`payment_mode: "Pickup"`, `qc_type: "param"`, empty
+   * `custom_qc` = no doorstep QC). The caller sets `pickup` = customer address
+   * and `drop` = the return warehouse on the payload.
+   */
+  async createReverseShipment(
+    req: CreateShipmentPayload,
+    opts: CreateDelhiveryShipmentOptions,
+  ): Promise<CreateShipmentResult> {
+    if (!opts.pickupWarehouseName || !opts.pickupWarehouseName.trim()) {
+      throw new CarrierError({
+        code: 'VALIDATION_FAILED',
+        detail:
+          'Delhivery createReverseShipment requires a pickupWarehouseName ' +
+          'matching a warehouse registered in the Delhivery One panel.',
+        retryable: false,
+      });
+    }
+    const fwd: DelhiveryCreateShipmentRequest = toDelhiveryShipment(req, {
+      pickupWarehouseName: opts.pickupWarehouseName,
+    });
+    const shipments: DelhiveryRvpShipment[] = fwd.shipments.map((s) => ({
+      ...s,
+      payment_mode: 'Pickup',
+      qc_type: 'param',
+      custom_qc: [],
+    }));
+    return this.createRvpQc(
+      { shipments, pickup_location: fwd.pickup_location },
+      { idempotencyKey: `rvp-${req.subOrderId}` },
+    );
   }
 
   /**

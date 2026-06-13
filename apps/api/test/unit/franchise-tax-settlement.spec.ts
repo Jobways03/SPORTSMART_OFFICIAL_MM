@@ -26,7 +26,19 @@ function makeHook(): { hook: SettlementTds194OHookService; prisma: MockPrisma; t
     section194OTdsLedger: { findUnique: jest.fn() },
   };
   const tds: MockTds = { computeForFranchise: jest.fn(), markWithheld: jest.fn() };
-  const hook = new SettlementTds194OHookService(prisma as any, tds as any);
+  // Phase 252 — TDS slice reads the configured base; default to product (PGS).
+  const taxConfig = {
+    getSettlementTaxConfig: jest.fn().mockResolvedValue({
+      gst: { rateBps: 1800, baseType: 'COMMISSION' },
+      tcs: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
+      tds: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
+    }),
+  };
+  const hook = new SettlementTds194OHookService(
+    prisma as any,
+    tds as any,
+    taxConfig as any,
+  );
   return { hook, prisma, tds };
 }
 
@@ -292,7 +304,20 @@ function makeTcsHook(): {
     gstTcsSettlementLedger: { findUnique: jest.fn() },
   };
   const tcs: MockTcs = { computeForFranchise: jest.fn(), markCollected: jest.fn() };
-  const hook = new SettlementTcsHookService(prisma as any, tcs as any);
+  // Phase 252 — TCS hook now takes TaxConfigService (franchise TCS slice is
+  // unchanged/statutory, so a default stub suffices here).
+  const taxConfig = {
+    getSettlementTaxConfig: jest.fn().mockResolvedValue({
+      gst: { rateBps: 1800, baseType: 'COMMISSION' },
+      tcs: { rateBps: 100, baseType: 'GST' },
+      tds: { rateBps: 100, baseType: 'COMMISSION' },
+    }),
+  };
+  const hook = new SettlementTcsHookService(
+    prisma as any,
+    tcs as any,
+    taxConfig as any,
+  );
   return { hook, prisma, tcs };
 }
 

@@ -317,6 +317,25 @@ export class PrismaProductRepository implements IProductRepository {
     });
   }
 
+  // Phase 256 — clear moderation to APPROVED for an already-live product whose
+  // moderationStatus is still PENDING (an inconsistent state, e.g. seeded
+  // straight to ACTIVE). Stamps the moderation-audit columns the same way a
+  // normal approval does. No lifecycle transition (the row is already ACTIVE).
+  async approveModerationOnly(
+    productId: string,
+    moderatorId: string,
+  ): Promise<void> {
+    await this.prisma.product.update({
+      where: { id: productId },
+      data: {
+        moderationStatus: 'APPROVED',
+        moderatorId,
+        reviewedAt: new Date(),
+        rejectionReason: null,
+      },
+    });
+  }
+
   async softDeleteWithVariants(productId: string): Promise<string[]> {
     // Returns the ids of the variants that were soft-deleted as part
     // of the cascade, so the caller can emit downstream events

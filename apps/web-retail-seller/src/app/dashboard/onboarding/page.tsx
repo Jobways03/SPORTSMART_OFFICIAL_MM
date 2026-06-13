@@ -23,6 +23,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
 import { PincodeFields } from '@sportsmart/ui';
+import { validatePincode, validateText } from '@/lib/validators';
 import './onboarding.css';
 
 // Phase 26 GST — policy change (2026-05-18): UNREGISTERED is no longer
@@ -80,7 +81,6 @@ interface SellerProfile {
 
 const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
-const PIN_RE = /^\d{6}$/;
 const STATE_CODE_RE = /^\d{2}$/;
 
 export default function SellerOnboardingPage() {
@@ -248,12 +248,22 @@ export default function SellerOnboardingPage() {
       errs.push('PAN must be 5 letters + 4 digits + 1 letter (uppercase).');
     if (form.registeredAddress.line1.trim().length < 3)
       errs.push('Registered address line 1 is required.');
-    if (!PIN_RE.test(form.registeredAddress.pincode))
-      errs.push('Registered address pincode must be 6 digits.');
+    // City + state are required on the registered business address; without
+    // them the KYC record can't be matched against the GSTIN jurisdiction.
+    if (validateText(form.registeredAddress.city, { min: 2, max: 100, label: 'Registered address city' }))
+      errs.push('Registered address city is required.');
+    if (validateText(form.registeredAddress.state, { min: 2, max: 100, label: 'Registered address state' }))
+      errs.push('Registered address state is required.');
+    if (validatePincode(form.registeredAddress.pincode))
+      errs.push('Registered address pincode must be a valid 6-digit pincode.');
     if (form.storeAddress.trim().length < 5)
       errs.push('Store address is required.');
-    if (!PIN_RE.test(form.sellerZipCode))
-      errs.push('Store zip code must be 6 digits.');
+    if (validateText(form.city, { min: 2, max: 100, label: 'Store city' }))
+      errs.push('Store city is required.');
+    if (validateText(form.state, { min: 2, max: 100, label: 'Store state' }))
+      errs.push('Store state is required.');
+    if (validatePincode(form.sellerZipCode))
+      errs.push('Store zip code must be a valid 6-digit pincode.');
     if (!form.confirmedAccurate)
       errs.push('Tick the confirmation that the information is accurate.');
     return errs;

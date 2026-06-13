@@ -71,6 +71,11 @@ export class LoginController {
           persona: 'customer',
           accessToken,
           refreshToken,
+          // Phase 259 — match the access COOKIE lifetime to the access TOKEN
+          // TTL (data.expiresIn). Without this the cookie defaulted to 1h while
+          // the JWT lives JWT_ACCESS_TTL (1d), so the browser dropped the access
+          // cookie after 1h and a page refresh logged the customer out.
+          accessTtlSeconds: (data as { expiresIn?: number })?.expiresIn,
           domain: this.env.getString('AUTH_COOKIE_DOMAIN', '') || null,
           secure:
             this.env.isProduction() ||

@@ -6,6 +6,7 @@ import {
   RefundMethod,
 } from '@/services/admin-returns.service';
 import { ApiError } from '@/lib/api-client';
+import { validateText } from '@/lib/validators';
 import '../../sellers/components/modal.css';
 
 interface Props {
@@ -38,8 +39,13 @@ export default function ConfirmRefundModal({
   const valid = trimmed.length > 0;
 
   const handleSubmit = async () => {
-    if (!valid) {
-      setError('Refund reference is required');
+    const refError = validateText(trimmed, {
+      min: 4,
+      max: 200,
+      label: 'Refund reference',
+    });
+    if (refError) {
+      setError(refError);
       return;
     }
     setSubmitting(true);

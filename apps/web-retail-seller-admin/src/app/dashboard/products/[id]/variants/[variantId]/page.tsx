@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { adminProductsService } from '@/services/admin-products.service';
 import { ApiError } from '@/lib/api-client';
+import { validateUploadFile } from '@/lib/validators';
 import '../../../product-form.css';
 import { useModal } from '@sportsmart/ui';
 
@@ -162,8 +163,12 @@ const router = useRouter();
 
     const validFiles: File[] = [];
     for (let i = 0; i < files.length; i++) {
-      if (files[i].size > 5 * 1024 * 1024) {
-        showToast('error', `"${files[i].name}" exceeds 5MB and was skipped.`);
+      const fileError = validateUploadFile(files[i], {
+        maxBytes: 5 * 1024 * 1024,
+        types: ['image/jpeg', 'image/png', 'image/webp'],
+      });
+      if (fileError) {
+        showToast('error', `"${files[i].name}": ${fileError} — skipped.`);
       } else {
         validFiles.push(files[i]);
       }

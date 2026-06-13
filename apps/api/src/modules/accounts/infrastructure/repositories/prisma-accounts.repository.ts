@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { AccountsRepository } from '../../domain/repositories/accounts.repository.interface';
 import { Prisma } from '@prisma/client';
+// Phase 251 — single source of truth for the settlement net payable.
+import { settlementNetFromRow } from '../../../settlements/domain/settlement-net';
 import type { SettlementAdjustmentType } from '@prisma/client';
 import {
   ConflictAppException,
@@ -1624,6 +1626,20 @@ export class PrismaAccountsRepository implements AccountsRepository {
           totalPlatformEarning: true, paidAt: true, createdAt: true,
           // Phase 178 (#15) — payout drill-down: bank/UPI reference + SLA due date.
           paymentReference: true, payoutDueBy: true,
+          // Phase 251 — dynamic charge rules: total + flag + frozen rule-wise
+          // breakup so the admin franchise tab can itemize the deductions + net.
+          // Legacy statutory columns are needed to compute the net of older
+          // (non-rule) cycles via the shared settlement-net helper.
+          dynamicChargeTotalInPaise: true, chargeRulesApplied: true,
+          tcsDeductedInPaise: true, tdsDeductedInPaise: true,
+          totalCommissionGstInPaise: true,
+          chargeLines: {
+            orderBy: [{ priority: 'asc' }, { createdAt: 'asc' }],
+            select: {
+              id: true, ruleName: true, baseType: true, rateBps: true,
+              baseAmountInPaise: true, amountInPaise: true,
+            },
+          },
         },
       }),
       this.prisma.franchiseSettlement.count({ where }),
@@ -1640,6 +1656,23 @@ export class PrismaAccountsRepository implements AccountsRepository {
         payoutDueBy: s.payoutDueBy ? s.payoutDueBy.toISOString() : null,
         paidAt: s.paidAt ? s.paidAt.toISOString() : null,
         createdAt: s.createdAt.toISOString(),
+        // Phase 251 — paise BigInt → string on the wire (codebase convention).
+        dynamicChargeTotalInPaise: s.dynamicChargeTotalInPaise.toString(),
+        chargeRulesApplied: s.chargeRulesApplied,
+        // Single source of truth net (paise string) — gross (netPayableToFranchise)
+        // minus the dynamic total or the legacy statutory trio.
+        netPayableInPaise: settlementNetFromRow(
+          s,
+          BigInt(new Prisma.Decimal(s.netPayableToFranchise).mul(100).toFixed(0)),
+        ).toString(),
+        chargeLines: s.chargeLines.map((l) => ({
+          id: l.id,
+          ruleName: l.ruleName,
+          baseType: l.baseType,
+          rateBps: l.rateBps,
+          baseAmountInPaise: l.baseAmountInPaise.toString(),
+          amountInPaise: l.amountInPaise.toString(),
+        })),
       })),
     };
   }

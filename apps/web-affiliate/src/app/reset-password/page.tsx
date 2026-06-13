@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { apiFetch } from '../../lib/api';
+import { validatePassword } from '../../lib/validators';
 
 /**
  * Step 3 of the affiliate password reset flow. Reads the resetToken
@@ -36,6 +37,18 @@ export default function ResetPasswordPage() {
     e.preventDefault();
     if (!canSubmit) return;
     setError('');
+    // Defensive guard mirroring the canonical strong-password rule; the
+    // requirement checklist above already gates the button, this catches any
+    // bypass before the API call.
+    const pwError = validatePassword(newPassword);
+    if (pwError) {
+      setError(pwError);
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setError('Passwords do not match');
+      return;
+    }
     setLoading(true);
     try {
       await apiFetch('/affiliate/auth/reset-password', {

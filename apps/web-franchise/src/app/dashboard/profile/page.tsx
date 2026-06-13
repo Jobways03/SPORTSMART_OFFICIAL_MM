@@ -9,6 +9,7 @@ import {
 } from '@/services/profile.service';
 import { useModal, PincodeFields } from '@sportsmart/ui';
 import { apiClient, ApiError } from '@/lib/api-client';
+import { validatePassword } from '@/lib/validators';
 
 type PincodeData = {
   district: string;
@@ -129,12 +130,11 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     e.preventDefault();
     setPwError('');
     setPwSuccess('');
-    if (pwNew.length < 8) {
-      setPwError('New password must be at least 8 characters');
-      return;
-    }
-    if (!/^(?=.*[A-Za-z])(?=.*\d)/.test(pwNew)) {
-      setPwError('New password must contain at least one letter and one number');
+    // Phase 252 — use the SAME strong rule as register/reset (8+ with upper,
+    // lower, digit and special) instead of the weak letter+digit inline check.
+    const pwStrengthError = validatePassword(pwNew);
+    if (pwStrengthError) {
+      setPwError(pwStrengthError);
       return;
     }
     if (pwNew !== pwConfirm) {

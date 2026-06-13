@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { apiFetch, formatINR } from '../../../lib/api';
+import { validateAmount } from '../../../lib/validators';
 
 interface Settings {
   defaultCommissionPercentage: number;
@@ -87,6 +88,11 @@ export default function SettingsPage() {
       if (!Number.isFinite(num)) return { ok: false, error: `${label} must be a number.` };
       if (num < 0) return { ok: false, error: `${label} can't be negative.` };
       if (kind === 'percent' && num > 100) return { ok: false, error: `${label} can't exceed 100%.` };
+      if (kind === 'currency') {
+        // Cap money-into-ledger floors/thresholds at a sane ledger maximum.
+        const amountErr = validateAmount(raw, { min: 0, max: 10_000_000, decimals: 2, label });
+        if (amountErr) return { ok: false, error: amountErr };
+      }
       if (kind === 'days') {
         if (!Number.isInteger(num)) return { ok: false, error: `${label} must be a whole number of days.` };
         if (num > 365) return { ok: false, error: `${label} can't exceed 365 days.` };

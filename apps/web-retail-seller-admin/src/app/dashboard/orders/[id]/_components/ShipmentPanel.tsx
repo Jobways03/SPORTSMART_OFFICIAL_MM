@@ -96,6 +96,26 @@ export function ShipmentPanel({ subOrderId, onChange }: Props) {
       setErr('Provide at least a courier name or AWB');
       return;
     }
+    // AWB, when given, is an alphanumeric carrier reference (8-30 chars).
+    const awbTrimmed = createAwb.trim();
+    if (awbTrimmed && !/^[A-Za-z0-9-]{8,30}$/.test(awbTrimmed)) {
+      setErr('AWB must be 8-30 letters, digits, or hyphens');
+      return;
+    }
+    // Tracking URL, when given, must be a valid http(s) URL.
+    const urlTrimmed = createUrl.trim();
+    if (urlTrimmed) {
+      let parsed: URL | null = null;
+      try {
+        parsed = new URL(urlTrimmed);
+      } catch {
+        parsed = null;
+      }
+      if (!parsed || (parsed.protocol !== 'http:' && parsed.protocol !== 'https:')) {
+        setErr('Tracking URL must be a valid http(s) link');
+        return;
+      }
+    }
     setCreating(true);
     setErr(null);
     try {
@@ -117,8 +137,14 @@ export function ShipmentPanel({ subOrderId, onChange }: Props) {
   };
 
   const handleStatusUpdate = async () => {
-    if (!statusInput.trim()) {
+    const statusTrimmed = statusInput.trim();
+    if (!statusTrimmed) {
       setErr('Status is required');
+      return;
+    }
+    // Status is a short carrier status token (letters, digits, _ - / and spaces).
+    if (!/^[A-Za-z0-9 _/-]{2,40}$/.test(statusTrimmed)) {
+      setErr('Status must be 2-40 letters, digits, spaces, or _ / -');
       return;
     }
     setUpdatingStatus(true);

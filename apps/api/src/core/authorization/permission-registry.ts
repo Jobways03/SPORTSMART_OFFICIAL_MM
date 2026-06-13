@@ -139,6 +139,8 @@ export const PERMISSIONS = {
   'settlements.markPaid':   'Record UTR / mark as paid',
   'settlements.hold':       'Hold / resume a commission record (fraud / review)',
   'settlements.adjustRecord': 'Adjust a single commission record (dispute resolution)',
+  'settlements.charges.read':  'View settlement tax/charge rules',
+  'settlements.charges.write': 'Create / edit settlement tax/charge rules',
 
   // Liability ledger (Phase 150) — seller-debit claw-back lifecycle.
   'liability_ledger.read':   'View seller-debit ledger + pending-claw-back summary',

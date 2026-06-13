@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { adminAuthService } from '@/services/admin-auth.service';
 import { ApiError } from '@/lib/api-client';
+import { validateOtp } from '@/lib/validators';
 import '../../login/login.css';
 
 /**
@@ -42,8 +43,9 @@ function VerifyInner() {
     setError('');
     setResentMessage('');
     const trimmed = code.trim();
-    if (!/^\d{6}$/.test(trimmed)) {
-      setError('Enter the 6-digit code from your email.');
+    const otpErr = validateOtp(trimmed);
+    if (otpErr) {
+      setError(otpErr);
       return;
     }
     setLoading(true);

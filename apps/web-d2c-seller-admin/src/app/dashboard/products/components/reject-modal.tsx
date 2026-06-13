@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { ProductListItem, adminProductsService } from '@/services/admin-products.service';
 import { ApiError } from '@/lib/api-client';
+import { validateText } from '@/lib/validators';
 import './modal.css';
 
 interface Props {
@@ -20,6 +21,15 @@ export default function RejectModal({ product, onClose, onSuccess }: Props) {
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
+    const reasonError = validateText(reason, {
+      min: 5,
+      max: 1000,
+      label: 'Reason',
+    });
+    if (reasonError) {
+      setError(reasonError);
+      return;
+    }
     setSubmitting(true);
     setError('');
     try {

@@ -10,6 +10,7 @@ import {
 } from '@/services/admin-procurement.service';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
+import { validateAmount } from '@/lib/validators';
 
 function formatINR(n: number | string | null | undefined): string {
   // Procurement amounts (landed cost, approved total, procurement
@@ -148,10 +149,13 @@ export default function AdminProcurementDetailPage() {
       }
       if (it.approvedQty > 0) {
         anyApproved = true;
-        if (it.landedUnitCost <= 0) {
-          setActionError(
-            'Landed unit cost must be greater than 0 for approved items',
-          );
+        const costError = validateAmount(it.landedUnitCost, {
+          min: 0.01,
+          max: 10_000_000,
+          label: 'Landed unit cost',
+        });
+        if (costError) {
+          setActionError(`${costError} for approved items`);
           return;
         }
       }

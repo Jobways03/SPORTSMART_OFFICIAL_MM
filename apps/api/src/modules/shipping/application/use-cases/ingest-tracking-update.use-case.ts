@@ -111,6 +111,12 @@ export class IngestTrackingUpdateUseCase {
       select: { id: true, fulfillmentStatus: true, lastTrackingEventAt: true },
     });
     if (!subOrder) {
+      // The AWB may belong to a customer-return REVERSE pickup (RVP), whose AWB
+      // is stored on the Return (pickupTrackingNumber), not a sub-order. If so,
+      // drive the return's lifecycle from the reverse scan (Step 3).
+      if (await this.tryAdvanceReturnByReverseAwb(awb, snapshot)) {
+        return { subOrderId: null, applied: true };
+      }
       this.logger.warn(`Tracking update for unknown AWB ${awb} — orphan?`);
       return { subOrderId: null, applied: false, reason: 'ORPHAN' };
     }
@@ -150,6 +156,56 @@ export class IngestTrackingUpdateUseCase {
       applied: result.applied,
       reason: result.reason,
     };
+  }
+
+  /**
+   * Reverse-pickup (RVP) tracking (Step 3). The AWB belongs to a customer
+   * Return (Return.pickupTrackingNumber), not a sub-order. Map the courier scan
+   * to a return transition and hand it to the returns module (which owns the
+   * FSM) via an event — `reverse_in_transit` for any pickup/transit scan,
+   * `reverse_received` once it's delivered back to the warehouse. Returns true
+   * when the AWB matched a return and an event was dispatched.
+   */
+  private async tryAdvanceReturnByReverseAwb(
+    awb: string,
+    snapshot: TrackingSnapshot,
+  ): Promise<boolean> {
+    const ret = await this.prisma.return.findFirst({
+      where: { pickupTrackingNumber: awb },
+      select: { id: true },
+    });
+    if (!ret) return false;
+
+    const status = (snapshot.currentStatus || '').toUpperCase();
+    // "Delivered" on a reverse AWB = arrived back at the warehouse.
+    const delivered = status.includes('DELIVERED');
+    const inTransit =
+      !delivered &&
+      ['PICKED_UP', 'IN_TRANSIT', 'OUT_FOR_DELIVERY', 'DISPATCHED', 'REV_'].some(
+        (s) => status.includes(s),
+      );
+    const eventName = delivered
+      ? 'shipping.return.reverse_received'
+      : inTransit
+        ? 'shipping.return.reverse_in_transit'
+        : null;
+    if (!eventName) return false;
+
+    try {
+      await this.eventBus.publish({
+        eventName,
+        aggregate: 'Return',
+        aggregateId: ret.id,
+        occurredAt: new Date(),
+        payload: { returnId: ret.id, awb, status: snapshot.currentStatus },
+      });
+    } catch {
+      /* best-effort — a dropped event just defers the manual mark */
+    }
+    this.logger.log(
+      `Reverse-pickup scan for return ${ret.id} (awb=${awb}, status=${snapshot.currentStatus}) → ${eventName}`,
+    );
+    return true;
   }
 
   /**

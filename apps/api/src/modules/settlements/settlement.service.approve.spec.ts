@@ -115,6 +115,15 @@ function buildService(opts: {
     }),
     issueForSettlement: jest.fn(),
   };
+  // Phase 252 — tax config (commission-GST rate/base; only read at createCycle,
+  // not approve — a default-returning stub is enough here).
+  const taxConfig: any = {
+    getSettlementTaxConfig: jest.fn().mockResolvedValue({
+      gst: { rateBps: 1800, baseType: 'COMMISSION' },
+      tcs: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
+      tds: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
+    }),
+  };
   const service = new SettlementService(
     prisma,
     audit,
@@ -122,6 +131,7 @@ function buildService(opts: {
     tcsHook,
     tdsHook,
     commissionInvoice,
+    taxConfig,
   );
   return {
     service,

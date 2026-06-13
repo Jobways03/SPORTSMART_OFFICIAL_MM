@@ -13,6 +13,13 @@ import {
 } from '@/services/admin-franchises.service';
 import { useModal } from '@sportsmart/ui';
 import { apiClient, ApiError } from '@/lib/api-client';
+import {
+  validateGSTIN,
+  validatePAN,
+  validateIndianMobile,
+  validateRequiredName,
+  validatePincode,
+} from '@/lib/validators';
 import FranchiseStatusModal from '../components/franchise-status-modal';
 import { ShipmentPanel } from './_components/ShipmentPanel';
 import FranchiseVerificationModal from '../components/franchise-verification-modal';
@@ -260,6 +267,25 @@ export default function AdminFranchiseDetailPage() {
   };
 
   const handleEditSave = async () => {if (!franchise) return;
+    // Phase 252 — validate KYC fields before persisting. GST/PAN drive §52 TCS /
+    // §194-O TDS + tax invoices, so a malformed value must not overwrite the
+    // live record. Name/phone required; GST/PAN validated only when provided.
+    const gst = (editForm.gstNumber ?? '').trim();
+    const pan = (editForm.panNumber ?? '').trim();
+    const pincode = (editForm.pincode ?? '').trim();
+    const warehousePincode = (editForm.warehousePincode ?? '').trim();
+    const validationError =
+      validateRequiredName(editForm.ownerName ?? '', 'Owner name') ||
+      validateRequiredName(editForm.businessName ?? '', 'Business name') ||
+      validateIndianMobile(editForm.phoneNumber ?? '') ||
+      (gst ? validateGSTIN(gst) : null) ||
+      (pan ? validatePAN(pan) : null) ||
+      (pincode ? validatePincode(pincode) : null) ||
+      (warehousePincode ? validatePincode(warehousePincode) : null);
+    if (validationError) {
+      void notify(validationError);
+      return;
+    }
     setEditSaving(true);
     try {
       await adminFranchisesService.editFranchise(franchise.id, editForm);
@@ -681,6 +707,51 @@ export default function AdminFranchiseDetailPage() {
                     <InfoItem label="Franchise Code" value={franchise.franchiseCode} />
                     <InfoItem label="GST Number" value={franchise.gstNumber} />
                     <InfoItem label="PAN Number" value={franchise.panNumber} />
+                  </div>
+                )}
+                {/* Phase 254 — §194-O TDS rate is driven by KYC verification:
+                    an unverified franchise (or one without a PAN) is withheld at
+                    the §206AA 5% penalty; a VERIFIED franchise with a PAN on file
+                    drops to the configured rate (e.g. 1%). Mirrors the seller-side
+                    PAN-verify card (franchises have no separate panVerified flag —
+                    the overall verificationStatus is the §206AA signal). */}
+                {!editMode && (
+                  <div
+                    style={{
+                      marginTop: 14,
+                      padding: 12,
+                      borderRadius: 8,
+                      border: '1px solid',
+                      ...(franchise.verificationStatus === 'VERIFIED' && franchise.panNumber
+                        ? { background: '#ECFDF5', borderColor: '#A7F3D0', color: '#065F46' }
+                        : { background: '#FFFBEB', borderColor: '#FDE68A', color: '#92400E' }),
+                    }}
+                  >
+                    {franchise.verificationStatus === 'VERIFIED' && franchise.panNumber ? (
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>
+                        ✓ Section&nbsp;194-O TDS: your configured rate (e.g. 1%). This
+                        franchise&apos;s KYC is VERIFIED with a PAN on file — no §206AA penalty.
+                      </span>
+                    ) : (
+                      <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+                        <span style={{ fontSize: 13, fontWeight: 600 }}>
+                          ⚠ Section&nbsp;194-O TDS: 5% (§206AA penalty).{' '}
+                          {franchise.panNumber
+                            ? 'Verify this franchise’s KYC to drop TDS to your configured rate (e.g. 1%).'
+                            : 'A PAN must be on file before verification can reduce the rate.'}
+                        </span>
+                        {franchise.panNumber && (
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => setActiveModal('verification')}
+                            style={{ padding: '6px 12px', fontSize: 13 }}
+                          >
+                            Verify KYC
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

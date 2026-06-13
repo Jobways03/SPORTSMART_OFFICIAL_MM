@@ -2246,7 +2246,13 @@ export class CheckoutService {
         // Cast mirrors OrdersPublicFacade.flipPaymentStatusIfFrom — the
         // OrderPaymentStatus enum is the canonical type; the string union
         // is widened at the Prisma boundary.
-        paymentStatus: { in: ['PENDING', 'FAILED'] as any },
+        // Phase 257 — 'FAILED' is NOT a member of OrderPaymentStatus
+        // (CREATED|PENDING|PAID|EXPIRED|VOIDED|CANCELLED); passing it in the
+        // `in` array made Prisma reject the whole query ("Invalid value for
+        // argument `in`. Expected OrderPaymentStatus"), 500-ing every online
+        // payment verify. The valid pre-paid states are PENDING + CREATED
+        // (Phase-66 "Razorpay order minted, modal unopened").
+        paymentStatus: { in: ['PENDING', 'CREATED'] as any },
       },
       data: this.moneyDualWrite.applyPaise('masterOrder', {
         orderStatus: 'PLACED',

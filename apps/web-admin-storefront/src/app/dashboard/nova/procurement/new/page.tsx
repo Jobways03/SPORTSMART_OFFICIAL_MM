@@ -9,6 +9,7 @@ import {
   OwnBrandWarehouse,
   inr,
 } from '@/services/admin-nova.service';
+import { validateAmount } from '@/lib/validators';
 
 interface LineItem {
   productId: string;
@@ -58,8 +59,11 @@ export default function NewProcurementPage() {
       if (!it.productId.trim()) return setError(`Line ${i + 1}: product UUID is required`);
       const q = Number(it.quantityOrdered);
       if (!Number.isInteger(q) || q <= 0) return setError(`Line ${i + 1}: quantity must be a positive integer`);
-      const c = Number(it.unitCost);
-      if (!Number.isFinite(c) || c < 0) return setError(`Line ${i + 1}: unit cost must be ≥ 0`);
+      // Unit cost: required, >= 0, capped at ₹10,000,000 with 2dp.
+      const costErr = validateAmount(it.unitCost, {
+        label: `Line ${i + 1}: unit cost`,
+      });
+      if (costErr) return setError(costErr);
     }
     setSubmitting(true);
     try {

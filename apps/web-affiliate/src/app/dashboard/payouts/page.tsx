@@ -3,6 +3,12 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiFetch, formatDate, formatINR } from '../../../lib/api';
+import {
+  validateAccountHolderName,
+  validateBankAccount,
+  validateIFSC,
+  validateUPI,
+} from '../../../lib/validators';
 
 interface PayoutMethod {
   id: string;
@@ -444,6 +450,18 @@ function AddMethodForm({ onSaved, existingCount }: { onSaved: () => void; existi
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErr('');
+    // Phase 252 — validate money-routing fields before hitting the API. The
+    // browser `required` only blocks empties; these enforce the real formats.
+    const validationError =
+      type === 'BANK'
+        ? validateAccountHolderName(holder) ||
+          validateBankAccount(accountNumber) ||
+          validateIFSC(ifsc)
+        : validateUPI(upiId);
+    if (validationError) {
+      setErr(validationError);
+      return;
+    }
     setSubmitting(true);
     try {
       const body: any = { type, setPrimary };

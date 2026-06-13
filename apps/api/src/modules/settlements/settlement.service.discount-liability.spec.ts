@@ -60,6 +60,14 @@ function buildService(ledgerRows: any[]) {
   const tcsHook = {} as any;
   const tdsHook = {} as any;
   const commissionInvoice = {} as any;
+  // Phase 252 — tax config stub (commission-GST rate/base; not exercised here).
+  const taxConfig = {
+    getSettlementTaxConfig: jest.fn().mockResolvedValue({
+      gst: { rateBps: 1800, baseType: 'COMMISSION' },
+      tcs: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
+      tds: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
+    }),
+  } as any;
 
   const service = new SettlementService(
     client,
@@ -68,6 +76,7 @@ function buildService(ledgerRows: any[]) {
     tcsHook,
     tdsHook,
     commissionInvoice,
+    taxConfig,
   );
   return { service, ledgerAggregate, ledgerFindMany, ledgerCount };
 }

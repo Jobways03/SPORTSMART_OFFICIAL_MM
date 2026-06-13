@@ -18,6 +18,7 @@ import { useRouter } from 'next/navigation';
 import { apiClient, ApiError } from '@/lib/api-client';
 import { franchiseProfileService, FranchiseProfile } from '@/services/profile.service';
 import { PincodeFields } from '@sportsmart/ui';
+import { validatePincode } from '@/lib/validators';
 import './franchise-onboarding.css';
 
 type GstType = 'REGULAR' | 'COMPOSITION' | 'CASUAL';
@@ -150,6 +151,19 @@ export default function FranchiseOnboardingPage() {
     if (!form.businessState.trim()) next.businessState = 'State is required';
     if (!PIN_RE.test(form.businessPincode.trim())) {
       next.businessPincode = 'Pincode must be 6 digits';
+    }
+    // Warehouse address is optional, but if the franchise has started filling
+    // it in, the pincode must be a real 6-digit Indian pincode (can't start
+    // with 0). The payload only sends a warehouseAddress when one of these
+    // fields is set, so mirror that "partially filled" condition here.
+    const warehouseStarted =
+      !!form.warehouseLine1.trim() ||
+      !!form.warehouseCity.trim() ||
+      !!form.warehouseState.trim() ||
+      !!form.warehousePincode.trim();
+    if (warehouseStarted) {
+      const whPinError = validatePincode(form.warehousePincode);
+      if (whPinError) next.warehousePincode = whPinError;
     }
     if (!form.confirmedAccurate) {
       next.confirmedAccurate = 'You must confirm the details are accurate';
@@ -482,6 +496,7 @@ export default function FranchiseOnboardingPage() {
 
           <PincodeFields
             idPrefix="wh"
+            errors={{ pincode: errors.warehousePincode }}
             value={{
               pincode: form.warehousePincode,
               city: form.warehouseCity,

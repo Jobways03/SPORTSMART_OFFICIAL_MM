@@ -193,7 +193,29 @@ export default function FranchiseAccountsPage() {
                         <tr key={s.id} style={{ borderTop: '1px solid #F3F4F6' }}>
                           <td style={td}>{s.cycleId.slice(0, 8)}</td>
                           <td style={td}>{s.status}</td>
-                          <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatINR(s.netPayableToFranchise)}</td>
+                          <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>
+                            {formatINR(s.netPayableToFranchise)}
+                            {s.chargeRulesApplied && Number(s.dynamicChargeTotalInPaise ?? 0) > 0 && (
+                              <div
+                                title="Dynamic settlement charge rules in force when this cycle was created. The NET is what is wired to the franchise."
+                                style={{ fontSize: 10, fontWeight: 400, color: '#5b6066', marginTop: 3, lineHeight: 1.6 }}
+                              >
+                                <div style={{ fontWeight: 600, color: '#374151' }}>
+                                  settlement charges {formatINR(String(Number(s.dynamicChargeTotalInPaise ?? 0) / 100))}
+                                </div>
+                                {(s.chargeLines ?? [])
+                                  .filter((l) => Number(l.amountInPaise) > 0)
+                                  .map((l) => (
+                                    <div key={l.id} style={{ paddingLeft: 10 }}>
+                                      − {l.ruleName} ({(l.rateBps / 100).toFixed(2).replace(/\.?0+$/, '')}%) {formatINR(String(Number(l.amountInPaise) / 100))}
+                                    </div>
+                                  ))}
+                                <div style={{ fontWeight: 700, color: '#15803d', marginTop: 1 }}>
+                                  net pay {formatINR(String(Number(s.netPayableInPaise ?? 0) / 100))}
+                                </div>
+                              </div>
+                            )}
+                          </td>
                           <td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatINR(s.totalPlatformEarning)}</td>
                           <td style={td}>{s.paymentReference ?? '—'}</td>
                           <td style={td}>{s.payoutDueBy ? new Date(s.payoutDueBy).toLocaleDateString('en-IN') : '—'}</td>

@@ -10,6 +10,7 @@ import {
   ProductImage,
 } from '@/services/product.service';
 import { apiClient, ApiError } from '@/lib/api-client';
+import { validateAmount, validateUploadFile } from '@/lib/validators';
 import '../../product-form.css';
 import { RichTextEditor, useModal } from '@sportsmart/ui';
 // Phase 39 (2026-05-21) — category metafield form section + payload mapper.
@@ -438,8 +439,11 @@ const router = useRouter();
       errs.title = 'Title is required';
     }
     if (!form.hasVariants) {
-      if (!form.basePrice || isNaN(Number(form.basePrice)) || Number(form.basePrice) <= 0) {
-        errs.basePrice = 'Price is required and must be greater than 0';
+      // Money into the catalog — finite, > 0, <= 10,000,000, at most 2
+      // decimal places (canonical validateAmount).
+      const priceErr = validateAmount(form.basePrice, { min: 0.01, label: 'Price' });
+      if (priceErr) {
+        errs.basePrice = priceErr;
       }
       if (form.baseStock === '' || isNaN(Number(form.baseStock)) || Number(form.baseStock) < 0) {
         errs.baseStock = 'Stock is required and must be 0 or more';
@@ -668,8 +672,13 @@ const router = useRouter();
 
     const validFiles: File[] = [];
     for (let i = 0; i < files.length; i++) {
-      if (files[i].size > 5 * 1024 * 1024) {
-        showToast('error', `"${files[i].name}" exceeds 5MB and was skipped.`);
+      // Type + size guard (image-only, 5MB) mirroring the backend upload
+      // rules; invalid files are skipped with a per-file message.
+      const fileErr = validateUploadFile(files[i], {
+        types: ['image/jpeg', 'image/png', 'image/webp'],
+      });
+      if (fileErr) {
+        showToast('error', `"${files[i].name}" ${fileErr.toLowerCase()} — skipped.`);
       } else {
         validFiles.push(files[i]);
       }

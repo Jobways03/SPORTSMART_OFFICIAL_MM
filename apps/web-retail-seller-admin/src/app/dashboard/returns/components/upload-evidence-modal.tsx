@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { adminReturnsService } from '@/services/admin-returns.service';
+import { validateUploadFile } from '@/lib/validators';
 import '../../sellers/components/modal.css';
 
 interface Props {
@@ -23,12 +24,12 @@ export default function UploadEvidenceModal({
   const [submitting, setSubmitting] = useState(false);
 
   const handleSubmit = async () => {
-    if (!file) {
-      setError('Please select an image file');
-      return;
-    }
-    if (file.size > 5 * 1024 * 1024) {
-      setError('File must be under 5 MB');
+    const fileError = validateUploadFile(file, {
+      maxBytes: 5 * 1024 * 1024,
+      types: ['image/jpeg', 'image/png', 'image/webp'],
+    });
+    if (fileError || !file) {
+      setError(fileError ?? 'Please select an image file');
       return;
     }
     setSubmitting(true);
