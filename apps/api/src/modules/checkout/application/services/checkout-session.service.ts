@@ -14,13 +14,6 @@ export interface CheckoutItemAllocation {
   quantity: number;
   unitPrice: number;
   lineTotal: number;
-  // Phase 44 (2026-05-21) — pricing-tier snapshot. unitPrice is the
-  // tier-adjusted (effective) price; the fields below record the
-  // applied tier so order placement can persist the snapshot.
-  appliedPricingTierId?: string | null;
-  appliedDiscountPercent?: number | null;
-  appliedFixedUnitPrice?: number | null;
-  appliedListUnitPrice?: number | null;
   serviceable: boolean;
   unserviceableReason?: string;
   /**

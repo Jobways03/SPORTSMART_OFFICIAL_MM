@@ -1,22 +1,28 @@
 'use client';
 
 import { useState } from 'react';
-import { ProductListItem, adminProductsService } from '@/services/admin-products.service';
+import { adminProductsService } from '@/services/admin-products.service';
 import { ApiError } from '@/lib/api-client';
 import './modal.css';
 
+// Minimal structural shape — callers pass either a ProductListItem (list page)
+// or a ProductDetail (edit page); the modal only reads id/title/seller.
 interface Props {
-  product: ProductListItem;
+  product: { id: string; title: string; seller?: { sellerShopName?: string | null } | null };
   onClose: () => void;
   onSuccess: () => void;
 }
+
+const MIN_REASON = 10;
 
 export default function RejectModal({ product, onClose, onSuccess }: Props) {
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const canSubmit = reason.trim().length > 0;
+  // Backend requires >= 10 chars; gate the button so the admin sees the
+  // requirement up front instead of a round-trip 400.
+  const canSubmit = reason.trim().length >= MIN_REASON;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -58,7 +64,11 @@ export default function RejectModal({ product, onClose, onSuccess }: Props) {
               onChange={e => setReason(e.target.value)}
               maxLength={1000}
             />
-            <div className="char-count">{reason.length}/1000</div>
+            <div className="char-count">
+              {reason.trim().length < MIN_REASON
+                ? `Minimum ${MIN_REASON} characters (${reason.trim().length}/${MIN_REASON})`
+                : `${reason.length}/1000`}
+            </div>
           </div>
         </div>
         <div className="modal-footer">

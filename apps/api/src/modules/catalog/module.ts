@@ -15,10 +15,6 @@ import { SellerAllocationService } from './application/services/seller-allocatio
 import { PostOfficeCacheService } from './application/services/post-office-cache.service';
 import { CatalogCacheService } from './application/services/catalog-cache.service';
 import { StockSyncService } from './application/services/stock-sync.service';
-// Story 3.5 — pricing tier service (display-only at v1).
-import { ProductPricingTierService } from './application/services/product-pricing-tier.service';
-// Phase 44 (2026-05-21) — resolver that picks best-eligible tier for a line.
-import { PricingResolutionService } from './application/services/pricing-resolution.service';
 // Phase 45 (2026-05-21) — atomic tax-config attestation w/ audit log.
 import { ProductTaxAttestationService } from './application/services/product-tax-attestation.service';
 // Phase 39 (2026-05-21) — required-metafield enforcement on submit/approve.
@@ -87,12 +83,6 @@ import { AdminBrandsController } from './presentation/controllers/admin/admin-br
 // Controllers - Public (Filters)
 import { StorefrontFiltersController } from './presentation/controllers/public/storefront-filters.controller';
 
-// Story 3.5 — pricing tier controllers (admin CRUD + public read).
-import { AdminProductPricingTiersController } from './presentation/controllers/admin/admin-product-pricing-tiers.controller';
-import { StorefrontProductPricingTiersController } from './presentation/controllers/public/storefront-product-pricing-tiers.controller';
-// Phase 44 (2026-05-21) — seller-facing CRUD (audit gap #4).
-import { SellerProductPricingTiersController } from './presentation/controllers/seller/seller-product-pricing-tiers.controller';
-
 // Controllers - Seller (Service Area)
 import { SellerServiceAreaController } from './presentation/controllers/seller/seller-service-area.controller';
 
@@ -151,9 +141,6 @@ import { StockCacheInvalidationHandler } from './application/event-handlers/stoc
     AdminBrandsController,
     StorefrontFiltersController,
     SellerServiceAreaController,
-    AdminProductPricingTiersController,
-    StorefrontProductPricingTiersController,
-    SellerProductPricingTiersController,
   ],
   providers: [
     // ── Repository bindings ─────────────────────────────────────────────
@@ -183,8 +170,6 @@ import { StockCacheInvalidationHandler } from './application/event-handlers/stoc
     SellerAllocationService,
     CatalogCacheService,
     StockSyncService,
-    ProductPricingTierService,
-    PricingResolutionService,
     ProductTaxAttestationService,
     MetafieldValidationService,
     StorefrontFilterValidatorService,

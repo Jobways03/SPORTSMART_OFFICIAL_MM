@@ -21,7 +21,16 @@ import {
   NotFoundAppException,
   BadRequestAppException,
 } from '../../../../../core/exceptions';
-import { AdminAuthGuard, PermissionsGuard } from '../../../../../core/guards';
+import {
+  AdminAuthGuard,
+  PermissionsGuard,
+  AdminMappingSellerScopeGuard,
+  AdminProductSellerScopeGuard,
+} from '../../../../../core/guards';
+import {
+  resolveSellerScope,
+  scopeAllowsType,
+} from '../../../../../core/authorization/seller-scope';
 import { Permissions } from '../../../../../core/decorators/permissions.decorator';
 import { Idempotent } from '../../../../../core/decorators/idempotent.decorator';
 import { PRODUCT_REPOSITORY, IProductRepository } from '../../../domain/repositories/product.repository.interface';
@@ -69,7 +78,17 @@ const STALE_REPAIR_LOCK_TTL_SECONDS = 60;
  */
 @ApiTags('Admin Seller Mappings')
 @Controller('admin')
-@UseGuards(AdminAuthGuard, PermissionsGuard)
+// Seller-type scope enforcement (Phase 38 boundary, extended here). The mapping
+// guard scopes every `:mappingId` route (approve/reject/stop/reapprove/update)
+// by the mapping's owning seller type; the product guard scopes the
+// `products/:productId/seller-mappings` read. Bulk routes carry no id param —
+// both guards no-op there and the handlers filter out-of-scope ids per-row.
+@UseGuards(
+  AdminAuthGuard,
+  PermissionsGuard,
+  AdminMappingSellerScopeGuard,
+  AdminProductSellerScopeGuard,
+)
 export class AdminSellerMappingsController {
   constructor(
     @Inject(PRODUCT_REPOSITORY) private readonly productRepo: IProductRepository,
@@ -444,6 +463,17 @@ export class AdminSellerMappingsController {
     if (!existing) {
       throw new NotFoundAppException('Seller mapping not found');
     }
+    // Don't approve a mapping onto a product that has been removed or archived
+    // (the seller /map product-status gate only ran at creation time; the
+    // product may have been taken down since). Pre-live states (DRAFT/SUBMITTED/
+    // APPROVED) are allowed — the mapping simply won't allocate until the
+    // product itself goes ACTIVE.
+    const mappedProduct = await this.productRepo.findByIdBasic(existing.productId);
+    if (!mappedProduct || mappedProduct.status === 'ARCHIVED') {
+      throw new BadRequestAppException(
+        'Cannot approve mapping — the product has been archived or removed.',
+      );
+    }
     // Phase 57 (2026-05-22) — precondition: pickup pincode must be a
     // valid 6-digit Indian pincode (audit Gap #12). Pre-Phase-57 a
     // mapping with `pickupPincode='abc'` could be approved; the
@@ -711,6 +741,13 @@ export class AdminSellerMappingsController {
     if (!existing) {
       throw new NotFoundAppException('Seller mapping not found');
     }
+    // Don't re-activate a mapping onto a removed/archived product (see approve).
+    const mappedProduct = await this.productRepo.findByIdBasic(existing.productId);
+    if (!mappedProduct || mappedProduct.status === 'ARCHIVED') {
+      throw new BadRequestAppException(
+        'Cannot reapprove mapping — the product has been archived or removed.',
+      );
+    }
     if (
       !existing.pickupPincode ||
       !PINCODE_PATTERN.test(existing.pickupPincode)
@@ -761,6 +798,30 @@ export class AdminSellerMappingsController {
    * batch. Audit + event + cache invalidation fire per
    * successfully-approved row.
    */
+  /**
+   * Partition a list of mapping ids by the caller's seller-type scope. A scoped
+   * admin may only act on mappings whose owning seller is in scope; out-of-scope
+   * ids are returned separately so bulk handlers can report them as not-found
+   * (no existence leak), mirroring the product bulk-approve pattern. Unrestricted
+   * admins (no scope perm / SUPER_ADMIN) get everything in scope.
+   */
+  private async partitionMappingsByScope(
+    mappingIds: string[],
+    permissions: readonly string[] | undefined,
+  ): Promise<{ inScope: string[]; outOfScope: string[] }> {
+    const scope = resolveSellerScope(permissions);
+    if (scope.unrestricted) return { inScope: mappingIds, outOfScope: [] };
+    const rows = await this.sellerMappingRepo.findSellerScopeByIds(mappingIds);
+    const typeById = new Map(rows.map((r) => [r.id, r.sellerType]));
+    const inScope: string[] = [];
+    const outOfScope: string[] = [];
+    for (const id of mappingIds) {
+      if (scopeAllowsType(scope, typeById.get(id) as any)) inScope.push(id);
+      else outOfScope.push(id);
+    }
+    return { inScope, outOfScope };
+  }
+
   @Post('seller-mappings/bulk/approve')
   @HttpCode(HttpStatus.OK)
   @Permissions('catalog.approve')
@@ -771,24 +832,27 @@ export class AdminSellerMappingsController {
   ) {
     const adminId = (req as any).adminId as string | undefined;
 
-    // Snapshot before-state for the audit log — single query.
-    const before = await this.sellerMappingRepo.findManyByIdsForSeller(
+    // Seller-type scope filter — bulk routes carry no :mappingId param, so the
+    // class guard can't scope them; filter here (out-of-scope → reported not-found).
+    const { inScope, outOfScope } = await this.partitionMappingsByScope(
       dto.mappingIds,
-      'IGNORED', // hack: this helper requires sellerId; use a different one
+      (req as any).user?.permissions,
     );
-    // Fall back to per-row findById since the seller-scoped lookup
-    // doesn't apply here.
+
+    // Snapshot before-state per row for the audit log.
     const beforeMap = new Map<string, any>();
-    for (const id of dto.mappingIds) {
+    for (const id of inScope) {
       const row = await this.sellerMappingRepo.findById(id);
       if (row) beforeMap.set(id, row);
     }
-    void before;
 
     const results = await this.sellerMappingRepo.bulkApprove(
-      dto.mappingIds,
+      inScope,
       adminId ?? 'unknown-admin',
     );
+    for (const id of outOfScope) {
+      results.push({ mappingId: id, ok: false, reason: 'not_found' });
+    }
 
     // Side effects per successful row. We invalidate the catalog
     // cache once at the end rather than per row.
@@ -880,18 +944,27 @@ export class AdminSellerMappingsController {
   ) {
     const adminId = (req as any).adminId as string | undefined;
 
+    // Seller-type scope filter (see bulkApproveMappings).
+    const { inScope, outOfScope } = await this.partitionMappingsByScope(
+      dto.mappingIds,
+      (req as any).user?.permissions,
+    );
+
     // Snapshot before-state per row for the audit log.
     const beforeMap = new Map<string, any>();
-    for (const id of dto.mappingIds) {
+    for (const id of inScope) {
       const row = await this.sellerMappingRepo.findById(id);
       if (row) beforeMap.set(id, row);
     }
 
     const results = await this.sellerMappingRepo.bulkStop(
-      dto.mappingIds,
+      inScope,
       adminId ?? 'unknown-admin',
       dto.reason,
     );
+    for (const id of outOfScope) {
+      results.push({ mappingId: id, ok: false, reason: 'not_found' });
+    }
 
     let totalReleased = 0;
     for (const r of results) {

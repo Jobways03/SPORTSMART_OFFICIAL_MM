@@ -13,7 +13,7 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
   constructor(private readonly prisma: PrismaService) {}
 
   async findProductsPaginated(params: StorefrontListParams): Promise<{ products: any[]; total: number }> {
-    const { page, limit, search, categoryId, brandId, collectionId, sortBy, minPrice, maxPrice, filterObj } = params;
+    const { page, limit, search, categoryId, brandId, collectionId, sortBy, minPrice, maxPrice, tag, filterObj } = params;
     const sport = (params as { sport?: string }).sport;
     const offset = (page - 1) * limit;
 
@@ -64,6 +64,13 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
     if (search) {
       const searchPattern = `%${escapeLikePattern(search)}%`;
       conditions.push(Prisma.sql`(p.title ILIKE ${searchPattern} OR p.short_description ILIKE ${searchPattern} OR p.product_code ILIKE ${searchPattern})`);
+    }
+    // Tag filter — products carrying a tag whose raw text matches (case-
+    // insensitive exact). Powers the PDP tag-chip → /products?tag=<name> link.
+    if (tag) {
+      conditions.push(Prisma.sql`EXISTS (
+        SELECT 1 FROM product_tags pt WHERE pt.product_id = p.id AND lower(pt.tag) = lower(${tag})
+      )`);
     }
     if (minPrice) {
       const min = parseFloat(minPrice);

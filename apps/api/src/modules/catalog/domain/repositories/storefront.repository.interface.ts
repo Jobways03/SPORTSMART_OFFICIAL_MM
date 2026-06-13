@@ -11,6 +11,9 @@ export interface StorefrontListParams {
   minPrice?: string;
   maxPrice?: string;
   sport?: string;
+  // Product tag (raw tag text, case-insensitive). Powers the PDP tag-chip →
+  // /products?tag=<name> filtered listing.
+  tag?: string;
   filterObj?: Record<string, string>;
 }
 

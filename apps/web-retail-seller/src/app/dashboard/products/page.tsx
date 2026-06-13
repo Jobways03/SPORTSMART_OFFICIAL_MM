@@ -25,6 +25,9 @@ export default function ProductsPage() {
   const [error, setError] = useState('');
   const [sellerStatus, setSellerStatus] = useState<string>('');
   const [isEmailVerified, setIsEmailVerified] = useState<boolean>(true);
+  // True until /seller/auth/me resolves — gates the approval screen so an
+  // approved seller doesn't see a ~1s "Account Approval Required" flash on nav.
+  const [statusLoading, setStatusLoading] = useState<boolean>(true);
 
   // Filters
   const [search, setSearch] = useState('');
@@ -74,7 +77,10 @@ export default function ProductsPage() {
         setSellerStatus(res.data.status);
         setIsEmailVerified(res.data.isEmailVerified);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setStatusLoading(false);
+      });
     return () => {
       cancelled = true;
     };
@@ -175,6 +181,16 @@ export default function ProductsPage() {
   };
 
   const hasFilters = search || statusFilter;
+
+  if (statusLoading) {
+    return (
+      <div className="products-page">
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#9ca3af' }}>
+          Loading…
+        </div>
+      </div>
+    );
+  }
 
   if (!canAccessProducts) {
     const message = sellerStatus !== 'ACTIVE'

@@ -2,6 +2,16 @@
 // Seller Module - owned tables
 // ============================================
 
+/// Legal entity type captured at KYC onboarding (MCA business structures).
+/// Shared by Seller and Franchise. Nullable on the models for legacy rows.
+enum BusinessEntityType {
+  PUBLIC_LIMITED
+  PRIVATE_LIMITED
+  SOLE_PROPRIETORSHIP
+  GENERAL_PARTNERSHIP
+  LLP
+}
+
 model Seller {
   id                  String       @id @default(uuid())
   // Phase 38 — discriminator that scopes the seller to a single
@@ -75,6 +85,9 @@ model Seller {
   /// coexist; once submitted, the value must be unique.
   gstin                         String?             @unique @map("gstin")
   legalBusinessName             String?             @map("legal_business_name")
+  /// Legal entity type (company / partnership / proprietorship), captured
+  /// at KYC submit. Nullable for rows created before this field existed.
+  entityType                    BusinessEntityType? @map("entity_type")
   registeredBusinessAddressJson Json?               @map("registered_business_address_json")
   gstStateCode                  String?             @map("gst_state_code")
   gstRegistrationType           GstRegistrationType @default(REGULAR) @map("gst_registration_type")

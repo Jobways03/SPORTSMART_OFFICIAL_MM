@@ -90,7 +90,7 @@ function makeRepo(over: Partial<Record<keyof CartRepository, any>> = {}): jest.M
     deleteAbandonedCartsOlderThan: jest.fn().mockResolvedValue(0),
     incrementOrCreateCartItem: jest.fn().mockResolvedValue(undefined),
     setSavedForLater: jest.fn().mockResolvedValue(undefined),
-    updateCartItemPricingSnapshot: jest.fn().mockResolvedValue(undefined),
+    getListUnitPriceInPaise: jest.fn().mockResolvedValue(10000n),
     moveToCartIfStockAvailable: jest.fn().mockResolvedValue({ moved: true, availableStock: 100 }),
     ...over,
   } as unknown as jest.Mocked<CartRepository>;
@@ -135,8 +135,7 @@ describe('CartService — Phase 196', () => {
         items: [
           {
             id: 'i1', productId: 'p1', variantId: null, quantity: 3, savedForLater: false,
-            appliedPricingTierId: null, appliedDiscountPercent: null, appliedFixedUnitPrice: null,
-            appliedListUnitPrice: null, unitPriceAtAddInPaise: null,
+            unitPriceAtAddInPaise: null,
             product: { id: 'p1', title: 'T', slug: 't', basePrice: 99.99, baseStock: 5, baseSku: 'S', hasVariants: false, status: 'ACTIVE', isDeleted: false, images: [], seller: null },
             variant: null,
           },
@@ -144,12 +143,7 @@ describe('CartService — Phase 196', () => {
       }),
       getAggregatedStockBatch: jest.fn().mockResolvedValue({ get: () => 100 }),
     });
-    const catalog: any = {
-      resolveBatchUnitPrices: jest.fn().mockResolvedValue([
-        { effectiveUnitPrice: 99.99, listUnitPrice: 99.99, appliedTierId: null, appliedDiscountPercent: null, appliedFixedUnitPrice: null },
-      ]),
-    };
-    const svc = new CartService(repo, catalog);
+    const svc = new CartService(repo, {} as any);
     const out: any = await svc.getCart('cust-1');
     // 99.99 → 9999 paise × 3 = 29997 paise = ₹299.97 (no float drift)
     expect(out.totalAmountInPaise).toBe('29997');

@@ -3,6 +3,7 @@ import {
   AdminOrderSellerScopeGuard,
   AdminReturnSellerScopeGuard,
   AdminProductSellerScopeGuard,
+  AdminMappingSellerScopeGuard,
 } from './entity-seller-scope.guard';
 import { NotFoundAppException } from '../exceptions/not-found.exception';
 
@@ -89,6 +90,52 @@ describe('AdminProductSellerScopeGuard', () => {
     await expect(
       guard.canActivate(makeCtx({ user: { permissions: ['catalog.read'] }, params: { productId: 'p1' } })),
     ).resolves.toBe(true);
+  });
+});
+
+describe('AdminMappingSellerScopeGuard', () => {
+  const guardWith = (mapping: any) => {
+    const prisma = {
+      sellerProductMapping: { findUnique: jest.fn(async () => mapping) },
+    } as any;
+    return { guard: new AdminMappingSellerScopeGuard(prisma), prisma };
+  };
+
+  it('allows a RETAIL-scoped admin on a RETAIL seller mapping', async () => {
+    const { guard } = guardWith({ seller: { sellerType: 'RETAIL' } });
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['sellers.scope.retail'] }, params: { mappingId: 'm1' } })),
+    ).resolves.toBe(true);
+  });
+
+  it('404s a D2C-scoped admin on a RETAIL seller mapping (the H6 boundary)', async () => {
+    const { guard } = guardWith({ seller: { sellerType: 'RETAIL' } });
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['sellers.scope.d2c'] }, params: { mappingId: 'm1' } })),
+    ).rejects.toBeInstanceOf(NotFoundAppException);
+  });
+
+  it('404s when the mapping is missing', async () => {
+    const { guard } = guardWith(null);
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['sellers.scope.d2c'] }, params: { mappingId: 'gone' } })),
+    ).rejects.toBeInstanceOf(NotFoundAppException);
+  });
+
+  it('no-ops (allows) on routes without a mappingId param so it composes with the product guard', async () => {
+    const { guard, prisma } = guardWith(null);
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['sellers.scope.d2c'] }, params: { productId: 'p1' } })),
+    ).resolves.toBe(true);
+    expect(prisma.sellerProductMapping.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('allows an unrestricted admin without a DB hit', async () => {
+    const { guard, prisma } = guardWith({ seller: { sellerType: 'RETAIL' } });
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['catalog.approve'] }, params: { mappingId: 'm1' } })),
+    ).resolves.toBe(true);
+    expect(prisma.sellerProductMapping.findUnique).not.toHaveBeenCalled();
   });
 });
 

@@ -240,7 +240,6 @@ describe('PrismaCheckoutRepository.placeOrderTransaction (Phase 67)', () => {
                   unitPrice: 100.02,
                   quantity: 1,
                   totalPrice: 100.02,
-                  appliedListUnitPrice: 100.02,
                 },
               ],
             },
@@ -249,6 +248,43 @@ describe('PrismaCheckoutRepository.placeOrderTransaction (Phase 67)', () => {
       ),
     // Phase 197 (#21) — drift error is now a generic customer-facing message
     // (exact was/now figures are logged server-side only).
+    ).rejects.toMatchObject({ message: expect.stringContaining('prices in your cart have changed') });
+  });
+
+  it('Gap #12 — rejects downward drift too (stale lower price must not bill)', async () => {
+    // Pricing-tier removal (2026-06-12) — with tiers gone a submitted
+    // price BELOW canonical is no longer a legitimate discount; the
+    // compare is bidirectional. Locks the restored behavior so a
+    // future edit can't silently regress to upward-only.
+    const { repo } = makeRepo({
+      product: { id: 'p-1', basePrice: '100.00', status: 'ACTIVE' },
+    });
+    await expect(
+      repo.placeOrderTransaction(
+        baseInput({
+          fulfillmentGroups: {
+            'SELLER:s-1': {
+              nodeName: 'Shop A',
+              nodeType: 'SELLER',
+              nodeId: 's-1',
+              items: [
+                {
+                  productId: 'p-1',
+                  variantId: null,
+                  productTitle: 'Shoe',
+                  variantTitle: null,
+                  sku: 'SKU-1',
+                  masterSku: 'MS-1',
+                  imageUrl: null,
+                  unitPrice: 99.98,
+                  quantity: 1,
+                  totalPrice: 99.98,
+                },
+              ],
+            },
+          },
+        }),
+      ),
     ).rejects.toMatchObject({ message: expect.stringContaining('prices in your cart have changed') });
   });
 

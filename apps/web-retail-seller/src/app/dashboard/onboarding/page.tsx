@@ -30,6 +30,12 @@ import './onboarding.css';
 // permits it so legacy profiles loaded from the API don't crash the
 // page, but the form prevents new submissions in that state.
 type GstType = 'REGULAR' | 'COMPOSITION' | 'CASUAL' | 'UNREGISTERED';
+type EntityType =
+  | 'PUBLIC_LIMITED'
+  | 'PRIVATE_LIMITED'
+  | 'SOLE_PROPRIETORSHIP'
+  | 'GENERAL_PARTNERSHIP'
+  | 'LLP';
 
 interface SellerProfile {
   sellerId: string;
@@ -43,6 +49,7 @@ interface SellerProfile {
   gstin?: string | null;
   gstStateCode?: string | null;
   gstRegistrationType?: GstType | null;
+  entityType?: EntityType | null;
   /**
    * Phase 19 (2026-05-20) — API no longer returns the full PAN. The
    * onboarding page used to read panNumber from the profile to
@@ -56,16 +63,21 @@ interface SellerProfile {
   registeredBusinessAddressJson?: {
     line1?: string;
     line2?: string;
+    locality?: string;
     city?: string;
     state?: string;
     pincode?: string;
     country?: string;
   } | null;
+  locality?: string | null;
   storeAddress?: string | null;
   city?: string | null;
   state?: string | null;
   country?: string | null;
   sellerZipCode?: string | null;
+  hasBankDetails?: boolean;
+  bankAccountLast4?: string | null;
+  bankName?: string | null;
   /**
    * Phase 19 (2026-05-20) — kept for back-compat with rows that still
    * carry a value in the legacy column. New rejections write to
@@ -82,6 +94,27 @@ const PAN_RE = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
 const PIN_RE = /^\d{6}$/;
 const STATE_CODE_RE = /^\d{2}$/;
+const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const ACCOUNT_RE = /^[0-9]{9,18}$/;
+
+const ENTITY_LABELS: Record<string, string> = {
+  PUBLIC_LIMITED: 'Public Limited Company',
+  PRIVATE_LIMITED: 'Private Limited Company',
+  SOLE_PROPRIETORSHIP: 'Sole Proprietorship',
+  GENERAL_PARTNERSHIP: 'General Partnership',
+  LLP: 'Limited Liability Partnership (LLP)',
+};
+
+const titleCase = (s?: string | null) =>
+  (s ?? '').toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+
+// Mask the PAN portion of a GSTIN so it's consistent with the masked PAN:
+// keep the 2-digit state code + the PAN's last 4 + the entity/Z/checksum.
+const maskGstin = (g: string) =>
+  g.length === 15 ? `${g.slice(0, 2)}XXXXXX${g.slice(8, 12)}${g.slice(12)}` : g;
+
+const joinAddr = (parts: (string | null | undefined)[]) =>
+  parts.map((p) => (p ?? '').trim()).filter(Boolean).join(', ');
 
 export default function SellerOnboardingPage() {
   const router = useRouter();
@@ -100,6 +133,7 @@ export default function SellerOnboardingPage() {
   const [form, setForm] = useState({
     legalBusinessName: '',
     gstRegistrationType: 'REGULAR' as GstType,
+    entityType: '' as '' | EntityType,
     gstin: '',
     gstStateCode: '',
     panNumber: '',
@@ -118,7 +152,12 @@ export default function SellerOnboardingPage() {
     country: 'India',
     sellerZipCode: '',
     storeLocality: '',
+    sameAsRegistered: false,
     shortStoreDescription: '',
+    bankAccountHolderName: '',
+    bankAccountNumber: '',
+    bankIfscCode: '',
+    bankName: '',
     confirmedAccurate: false,
   });
 
@@ -138,6 +177,7 @@ export default function SellerOnboardingPage() {
         legalBusinessName: data.legalBusinessName ?? prev.legalBusinessName,
         gstRegistrationType:
           (data.gstRegistrationType as GstType) ?? prev.gstRegistrationType,
+        entityType: (data.entityType as EntityType) ?? prev.entityType,
         gstin: data.gstin ?? prev.gstin,
         gstStateCode: data.gstStateCode ?? prev.gstStateCode,
         panNumber: data.panNumber ?? prev.panNumber,
@@ -174,6 +214,29 @@ export default function SellerOnboardingPage() {
   useEffect(() => {
     loadProfile();
   }, [loadProfile]);
+
+  // Mirror the store/pickup address to the registered address while
+  // "same as registered" is ticked.
+  useEffect(() => {
+    if (!form.sameAsRegistered) return;
+    setForm((f) => ({
+      ...f,
+      storeAddress: f.registeredAddress.line1,
+      sellerZipCode: f.registeredAddress.pincode,
+      city: f.registeredAddress.city,
+      state: f.registeredAddress.state,
+      country: f.registeredAddress.country,
+      storeLocality: f.registeredAddress.locality,
+    }));
+  }, [
+    form.sameAsRegistered,
+    form.registeredAddress.line1,
+    form.registeredAddress.pincode,
+    form.registeredAddress.city,
+    form.registeredAddress.state,
+    form.registeredAddress.country,
+    form.registeredAddress.locality,
+  ]);
 
   // Once approved, jump to first-listing wizard.
   useEffect(() => {
@@ -230,6 +293,8 @@ export default function SellerOnboardingPage() {
     const errs: string[] = [];
     if (form.legalBusinessName.trim().length < 2)
       errs.push('Legal business name is required.');
+    if (!form.entityType)
+      errs.push('Type of entity is required.');
     // Phase 26 GST — GSTIN + GST state code are mandatory for every
     // seller now. UNREGISTERED was previously the escape hatch; the
     // dropdown no longer offers it, but if a legacy profile still has
@@ -254,6 +319,14 @@ export default function SellerOnboardingPage() {
       errs.push('Store address is required.');
     if (!PIN_RE.test(form.sellerZipCode))
       errs.push('Store zip code must be 6 digits.');
+    if (form.bankAccountHolderName.trim().length < 2)
+      errs.push('Bank account holder name is required.');
+    if (!ACCOUNT_RE.test(form.bankAccountNumber.replace(/\s+/g, '')))
+      errs.push('Bank account number must be 9–18 digits.');
+    if (!IFSC_RE.test(form.bankIfscCode.trim().toUpperCase()))
+      errs.push('IFSC must be 4 letters + 0 + 6 alphanumerics (e.g. HDFC0001234).');
+    if (form.bankName.trim().length < 2)
+      errs.push('Bank name is required.');
     if (!form.confirmedAccurate)
       errs.push('Tick the confirmation that the information is accurate.');
     return errs;
@@ -265,6 +338,17 @@ export default function SellerOnboardingPage() {
     setSubmitting(true);
     setSubmitError(null);
     try {
+      // Save the payout bank account first — the endpoint encrypts the
+      // account number at rest. Then submit the KYC for review.
+      await apiClient('/seller/bank-details', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          accountHolderName: form.bankAccountHolderName.trim(),
+          accountNumber: form.bankAccountNumber.replace(/\s+/g, ''),
+          ifscCode: form.bankIfscCode.trim().toUpperCase(),
+          bankName: form.bankName.trim() || undefined,
+        }),
+      });
       await apiClient('/seller/onboarding/submit', {
         method: 'POST',
         body: JSON.stringify({
@@ -273,27 +357,24 @@ export default function SellerOnboardingPage() {
           // conditional skipping for UNREGISTERED. Validation above
           // already blocks submission if either is missing.
           gstRegistrationType: form.gstRegistrationType,
+          entityType: form.entityType,
           gstin: form.gstin.toUpperCase(),
           gstStateCode: form.gstStateCode,
           panNumber: form.panNumber.toUpperCase(),
-          // Fold the picked locality into the existing address fields so it's
-          // captured without adding new (whitelist-rejected) payload keys.
+          // Locality is sent as its own field (registered: inside the address
+          // JSON; store: the top-level `locality`) so it lands in its column
+          // instead of being appended to the address text.
           registeredBusinessAddress: {
             line1: form.registeredAddress.line1,
-            line2:
-              form.registeredAddress.line2 ||
-              form.registeredAddress.locality ||
-              '',
+            line2: form.registeredAddress.line2 || '',
+            locality: form.registeredAddress.locality || undefined,
             city: form.registeredAddress.city,
             state: form.registeredAddress.state,
             pincode: form.registeredAddress.pincode,
             country: form.registeredAddress.country,
           },
-          storeAddress:
-            form.storeLocality &&
-            !form.storeAddress.includes(form.storeLocality)
-              ? `${form.storeAddress.trim()}, ${form.storeLocality}`
-              : form.storeAddress.trim(),
+          storeAddress: form.storeAddress.trim(),
+          locality: form.storeLocality || undefined,
           city: form.city,
           state: form.state,
           country: form.country,
@@ -464,6 +545,22 @@ export default function SellerOnboardingPage() {
               ITC” banner.
             </div>
 
+            <label htmlFor="entityType">Type of entity *</label>
+            <select
+              id="entityType"
+              value={form.entityType}
+              onChange={(e) =>
+                setForm({ ...form, entityType: e.target.value as EntityType })
+              }
+            >
+              <option value="">Select entity type…</option>
+              <option value="PUBLIC_LIMITED">Public Limited Company</option>
+              <option value="PRIVATE_LIMITED">Private Limited Company</option>
+              <option value="SOLE_PROPRIETORSHIP">Sole Proprietorship</option>
+              <option value="GENERAL_PARTNERSHIP">General Partnership</option>
+              <option value="LLP">Limited Liability Partnership (LLP)</option>
+            </select>
+
             <label htmlFor="gstRegistrationType">GST registration type *</label>
             <select
               id="gstRegistrationType"
@@ -476,8 +573,11 @@ export default function SellerOnboardingPage() {
               }
             >
               <option value="REGULAR">Regular</option>
-              <option value="COMPOSITION">Composition</option>
-              <option value="CASUAL">Casual</option>
+              {/* Composition & Casual hidden for now — only Regular is offered
+                  (default stays REGULAR). Re-enable these <option>s to restore
+                  the full GST registration type list. */}
+              {/* <option value="COMPOSITION">Composition</option> */}
+              {/* <option value="CASUAL">Casual</option> */}
               {/* Phase 26 GST — UNREGISTERED removed from new submissions.
                   GSTIN is mandatory for every active seller. Sub-threshold
                   sellers must register for GSTIN before listing. */}
@@ -487,9 +587,16 @@ export default function SellerOnboardingPage() {
             <input
               id="gstin"
               value={form.gstin}
-              onChange={(e) =>
-                setForm({ ...form, gstin: e.target.value.toUpperCase() })
-              }
+              onChange={(e) => {
+                const v = e.target.value.toUpperCase();
+                // GST state code = the first 2 digits of the GSTIN, so derive it
+                // automatically and keep the field read-only (no manual entry).
+                setForm({
+                  ...form,
+                  gstin: v,
+                  gstStateCode: v.slice(0, 2).replace(/\D/g, ''),
+                });
+              }}
               maxLength={15}
               required
               placeholder="e.g. 27ABCDE1234F1Z5"
@@ -499,13 +606,16 @@ export default function SellerOnboardingPage() {
             <input
               id="gstStateCode"
               value={form.gstStateCode}
-              onChange={(e) =>
-                setForm({ ...form, gstStateCode: e.target.value.replace(/\D/g, '') })
-              }
+              readOnly
               maxLength={2}
               required
-              placeholder="e.g. 27 for Maharashtra"
+              placeholder="Auto-filled from GSTIN"
+              aria-describedby="gstStateCode-hint"
+              style={{ background: '#f1f5f9', color: '#475569', cursor: 'not-allowed' }}
             />
+            <p id="gstStateCode-hint" className="onboarding__hint" style={{ margin: '4px 0 0' }}>
+              Auto-filled from the first 2 digits of your GSTIN.
+            </p>
 
             <label htmlFor="panNumber">PAN number *</label>
             <input
@@ -521,7 +631,7 @@ export default function SellerOnboardingPage() {
 
             <fieldset className="onboarding__group">
               <legend>Registered business address *</legend>
-              <label>Line 1</label>
+              <label>Street address</label>
               <input
                 value={form.registeredAddress.line1}
                 onChange={(e) =>
@@ -534,19 +644,6 @@ export default function SellerOnboardingPage() {
                   })
                 }
                 required
-              />
-              <label>Line 2 (optional)</label>
-              <input
-                value={form.registeredAddress.line2}
-                onChange={(e) =>
-                  setForm({
-                    ...form,
-                    registeredAddress: {
-                      ...form.registeredAddress,
-                      line2: e.target.value,
-                    },
-                  })
-                }
               />
               <PincodeFields
                 idPrefix="reg"
@@ -567,15 +664,27 @@ export default function SellerOnboardingPage() {
 
             <fieldset className="onboarding__group">
               <legend>Store / pickup address *</legend>
+              <label className="onboarding__check" style={{ margin: '0 0 6px' }}>
+                <input
+                  type="checkbox"
+                  checked={form.sameAsRegistered}
+                  onChange={(e) =>
+                    setForm({ ...form, sameAsRegistered: e.target.checked })
+                  }
+                />
+                <span>Same as registered business address</span>
+              </label>
               <label>Street address</label>
               <input
                 value={form.storeAddress}
                 onChange={(e) => setForm({ ...form, storeAddress: e.target.value })}
+                disabled={form.sameAsRegistered}
                 required
               />
               <PincodeFields
                 idPrefix="store"
                 showCountry
+                disabled={form.sameAsRegistered}
                 value={{
                   pincode: form.sellerZipCode,
                   city: form.city,
@@ -593,6 +702,54 @@ export default function SellerOnboardingPage() {
                     storeLocality: patch.locality ?? f.storeLocality,
                   }))
                 }
+              />
+            </fieldset>
+
+            <fieldset className="onboarding__group">
+              <legend>Bank account details *</legend>
+              <label>Account holder name</label>
+              <input
+                value={form.bankAccountHolderName}
+                onChange={(e) =>
+                  setForm({ ...form, bankAccountHolderName: e.target.value })
+                }
+                maxLength={150}
+                placeholder="Name as per bank records"
+                required
+              />
+              <label>Account number</label>
+              <input
+                value={form.bankAccountNumber}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    bankAccountNumber: e.target.value.replace(/\D/g, '').slice(0, 18),
+                  })
+                }
+                inputMode="numeric"
+                maxLength={18}
+                placeholder="9–18 digit account number"
+                required
+              />
+              <label>IFSC code</label>
+              <input
+                value={form.bankIfscCode}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    bankIfscCode: e.target.value.toUpperCase().slice(0, 11),
+                  })
+                }
+                maxLength={11}
+                placeholder="e.g. HDFC0001234"
+                required
+              />
+              <label>Bank name</label>
+              <input
+                value={form.bankName}
+                onChange={(e) => setForm({ ...form, bankName: e.target.value })}
+                maxLength={150}
+                placeholder="e.g. HDFC Bank"
               />
             </fieldset>
 
@@ -676,16 +833,54 @@ export default function SellerOnboardingPage() {
               {profile.legalBusinessName ?? '—'}
             </div>
             <div style={{ marginBottom: 4 }}>
-              <strong>GSTIN:</strong> {profile.gstin ?? '—'}
+              <strong>Entity type:</strong>{' '}
+              {profile.entityType
+                ? ENTITY_LABELS[profile.entityType] ?? profile.entityType
+                : '—'}
+            </div>
+            <div style={{ marginBottom: 4 }}>
+              <strong>GST registration type:</strong>{' '}
+              {profile.gstRegistrationType ?? '—'}
+            </div>
+            <div style={{ marginBottom: 4 }}>
+              <strong>GSTIN:</strong>{' '}
+              {profile.gstin ? maskGstin(profile.gstin) : '—'}
             </div>
             <div style={{ marginBottom: 4 }}>
               <strong>PAN:</strong>{' '}
               {profile.panLast4 ? `XXXXXX${profile.panLast4}` : '—'}
             </div>
             <div style={{ marginBottom: 4 }}>
+              <strong>Registered business address:</strong>{' '}
+              {profile.registeredBusinessAddressJson
+                ? joinAddr([
+                    profile.registeredBusinessAddressJson.line1,
+                    profile.registeredBusinessAddressJson.line2,
+                    profile.registeredBusinessAddressJson.locality,
+                    titleCase(profile.registeredBusinessAddressJson.city),
+                    titleCase(profile.registeredBusinessAddressJson.state),
+                    profile.registeredBusinessAddressJson.pincode,
+                  ])
+                : '—'}
+            </div>
+            <div style={{ marginBottom: 4 }}>
               <strong>Store address:</strong>{' '}
               {profile.storeAddress
-                ? `${profile.storeAddress}, ${profile.city ?? ''} ${profile.state ?? ''} ${profile.sellerZipCode ?? ''}`
+                ? joinAddr([
+                    profile.storeAddress,
+                    profile.locality,
+                    titleCase(profile.city),
+                    titleCase(profile.state),
+                    profile.sellerZipCode,
+                  ])
+                : '—'}
+            </div>
+            <div style={{ marginBottom: 4 }}>
+              <strong>Bank account:</strong>{' '}
+              {profile.hasBankDetails
+                ? `••••${profile.bankAccountLast4 ?? '----'}${
+                    profile.bankName ? ` · ${profile.bankName}` : ''
+                  }`
                 : '—'}
             </div>
             {profile.lastProfileUpdatedAt && (

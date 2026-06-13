@@ -1,5 +1,6 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { NotFoundAppException } from '../../../../core/exceptions';
+import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   FranchisePartnerRepository,
   FRANCHISE_PARTNER_REPOSITORY,
@@ -10,6 +11,7 @@ export class AdminGetFranchiseUseCase {
   constructor(
     @Inject(FRANCHISE_PARTNER_REPOSITORY)
     private readonly franchiseRepo: FranchisePartnerRepository,
+    private readonly prisma: PrismaService,
   ) {}
 
   async execute(franchiseId: string) {
@@ -18,6 +20,20 @@ export class AdminGetFranchiseUseCase {
     if (!franchise || franchise.isDeleted) {
       throw new NotFoundAppException('Franchise not found');
     }
+
+    // Bank payout details (masked) — joined so the admin can see the
+    // franchise's settlement account without leaving the record.
+    const bank = await this.prisma.franchiseBankDetails
+      .findUnique({
+        where: { franchisePartnerId: franchiseId },
+        select: {
+          accountNumberLast4: true,
+          bankName: true,
+          accountHolderName: true,
+          ifscCode: true,
+        },
+      })
+      .catch(() => null);
 
     return {
       id: franchise.id,
@@ -52,6 +68,12 @@ export class AdminGetFranchiseUseCase {
       lastLoginAt: franchise.lastLoginAt,
       createdAt: franchise.createdAt,
       updatedAt: franchise.updatedAt,
+      // Bank payout details (masked) for the admin Bank section.
+      hasBankDetails: !!bank,
+      bankName: bank?.bankName ?? null,
+      bankAccountHolderName: bank?.accountHolderName ?? null,
+      bankAccountLast4: bank?.accountNumberLast4 ?? null,
+      bankIfscCode: bank?.ifscCode ?? null,
     };
   }
 }

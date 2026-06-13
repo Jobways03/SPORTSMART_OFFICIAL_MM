@@ -103,7 +103,7 @@ export function CategoryMetafieldFormSection({ categoryId, values, onChange }: P
   if (!categoryId) {
     return (
       <div className="form-card">
-        <div className="form-card-title">CATEGORY FIELDS</div>
+        <div className="form-card-title">Category fields</div>
         <p style={{ color: '#6b7280', fontSize: 13 }}>
           Select a category to see the fields required for this product type.
         </p>
@@ -114,7 +114,7 @@ export function CategoryMetafieldFormSection({ categoryId, values, onChange }: P
   if (loading) {
     return (
       <div className="form-card">
-        <div className="form-card-title">CATEGORY FIELDS</div>
+        <div className="form-card-title">Category fields</div>
         <p style={{ color: '#6b7280', fontSize: 13 }}>Loading category fields…</p>
       </div>
     );
@@ -123,7 +123,7 @@ export function CategoryMetafieldFormSection({ categoryId, values, onChange }: P
   if (err) {
     return (
       <div className="form-card">
-        <div className="form-card-title">CATEGORY FIELDS</div>
+        <div className="form-card-title">Category fields</div>
         <p style={{ color: '#b91c1c', fontSize: 13 }}>{err}</p>
       </div>
     );
@@ -132,7 +132,7 @@ export function CategoryMetafieldFormSection({ categoryId, values, onChange }: P
   if (definitions.length === 0) {
     return (
       <div className="form-card">
-        <div className="form-card-title">CATEGORY FIELDS</div>
+        <div className="form-card-title">Category fields</div>
         <p style={{ color: '#6b7280', fontSize: 13 }}>
           This category does not define any product fields.
         </p>
@@ -148,7 +148,7 @@ export function CategoryMetafieldFormSection({ categoryId, values, onChange }: P
 
   return (
     <div className="form-card">
-      <div className="form-card-title">CATEGORY FIELDS</div>
+      <div className="form-card-title">Category fields</div>
       <p style={{ color: '#6b7280', fontSize: 12, marginBottom: 16 }}>
         These fields are defined by the catalog admin for this category.
         Fields marked <span style={{ color: '#b91c1c' }}>*</span> are required for submission.

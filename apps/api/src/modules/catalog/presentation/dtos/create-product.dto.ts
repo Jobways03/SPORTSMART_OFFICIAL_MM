@@ -71,6 +71,7 @@ export class CreateVariantInlineDto {
 
 export class CreateProductDto {
   @IsString()
+  @MaxLength(255)
   title!: string;
 
   @IsOptional()
@@ -91,10 +92,12 @@ export class CreateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(1024)
   shortDescription?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(50000)
   description?: string;
 
   @IsBoolean()

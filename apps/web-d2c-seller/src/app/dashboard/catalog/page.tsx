@@ -63,6 +63,9 @@ export default function BrowseCatalogPage() {
   // Seller status gating
   const [sellerStatus, setSellerStatus] = useState<string>('');
   const [isEmailVerified, setIsEmailVerified] = useState<boolean>(true);
+  // True until /seller/auth/me resolves — gates the approval screen so an
+  // approved seller doesn't see a ~1s "Account Approval Required" flash on nav.
+  const [statusLoading, setStatusLoading] = useState<boolean>(true);
 
   // Modal state
   const [showMapModal, setShowMapModal] = useState(false);
@@ -92,7 +95,10 @@ export default function BrowseCatalogPage() {
         setSellerStatus(res.data.status);
         setIsEmailVerified(res.data.isEmailVerified);
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setStatusLoading(false);
+      });
 
     // Fetch seller profile to get default pickup pincode
     apiClient<{ sellerZipCode?: string }>('/seller/profile')
@@ -263,6 +269,16 @@ export default function BrowseCatalogPage() {
       setMapLoading(false);
     }
   };
+
+  if (statusLoading) {
+    return (
+      <div className="products-page">
+        <div style={{ textAlign: 'center', padding: '60px 20px', color: '#9ca3af' }}>
+          Loading…
+        </div>
+      </div>
+    );
+  }
 
   if (!canAccess) {
     const message = sellerStatus !== 'ACTIVE'

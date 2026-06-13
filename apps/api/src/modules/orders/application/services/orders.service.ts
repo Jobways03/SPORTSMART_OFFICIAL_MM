@@ -5110,11 +5110,9 @@ export class OrdersService {
 
   /**
    * Phase 197 (My-Orders audit #2) — customer-safe order-item shape.
-   * Matches the storefront `OrderItem` type. Excludes internal pricing-
-   * tier snapshots (appliedPricingTierId / appliedDiscountPercent /
-   * appliedFixedUnitPrice / appliedListUnitPrice), stockReservationId,
-   * imagePublicId, masterSku, and the paise mirrors (the customer reads
-   * the Decimal unitPrice/totalPrice).
+   * Matches the storefront `OrderItem` type. Excludes internal columns
+   * (stockReservationId, imagePublicId, masterSku) and the paise
+   * mirrors (the customer reads the Decimal unitPrice/totalPrice).
    */
   private toCustomerSafeItem(it: any) {
     return {

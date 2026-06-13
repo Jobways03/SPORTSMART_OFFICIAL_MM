@@ -25,6 +25,7 @@ import { AdminGetMeUseCase } from './application/use-cases/admin-get-me.use-case
 import { RefreshAdminSessionUseCase } from './application/use-cases/refresh-admin-session.use-case';
 import { AdminListSellersUseCase } from './application/use-cases/admin-list-sellers.use-case';
 import { AdminGetSellerUseCase } from './application/use-cases/admin-get-seller.use-case';
+import { AdminUpdateSellerBankUseCase } from './application/use-cases/admin-update-seller-bank.use-case';
 import { AdminEditSellerUseCase } from './application/use-cases/admin-edit-seller.use-case';
 import { AdminUpdateSellerStatusUseCase } from './application/use-cases/admin-update-seller-status.use-case';
 import { AdminUpdateSellerVerificationUseCase } from './application/use-cases/admin-update-seller-verification.use-case';
@@ -57,11 +58,14 @@ import { RoleService } from './application/services/role.service';
 
 // Policies
 import { SellerStatusTransitionPolicy } from '../seller/application/policies/seller-status-transition.policy';
+// SellerModule exports SellerBankDetailsService (account-number encryption)
+// reused by the admin-side "edit bank details" path.
+import { SellerModule } from '../seller/module';
 
 @Module({
   // DiscoveryModule exposes DiscoveryService + MetadataScanner for the
   // route-authz-inventory scanner (walks the live controller graph).
-  imports: [DiscoveryModule],
+  imports: [DiscoveryModule, SellerModule],
   controllers: [
     AdminAuthController,
     AdminSellersController,
@@ -96,6 +100,7 @@ import { SellerStatusTransitionPolicy } from '../seller/application/policies/sel
     RefreshAdminSessionUseCase,
     AdminListSellersUseCase,
     AdminGetSellerUseCase,
+    AdminUpdateSellerBankUseCase,
     AdminEditSellerUseCase,
     AdminUpdateSellerStatusUseCase,
     AdminUpdateSellerVerificationUseCase,

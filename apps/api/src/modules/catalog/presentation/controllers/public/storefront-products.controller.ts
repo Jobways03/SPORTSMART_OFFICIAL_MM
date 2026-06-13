@@ -76,6 +76,7 @@ export class StorefrontProductsController {
   @ApiQuery({ name: 'collectionId', required: false })
   @ApiQuery({ name: 'brand', required: false, description: 'Brand slug — resolved to brandId' })
   @ApiQuery({ name: 'collection', required: false, description: 'Collection slug — resolved to collectionId' })
+  @ApiQuery({ name: 'tag', required: false, description: 'Product tag name — filters to products carrying this tag' })
   async listProducts(
     @Req() req: Request,
     @Query('page') page?: string,
@@ -90,6 +91,7 @@ export class StorefrontProductsController {
     @Query('brand') brandSlug?: string,
     @Query('collection') collectionSlug?: string,
     @Query('sport') sport?: string,
+    @Query('tag') tag?: string,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(60, Math.max(1, parseInt(limit || '20', 10) || 20));
@@ -180,17 +182,20 @@ export class StorefrontProductsController {
     );
 
     const sportTrim = sport?.trim() || undefined;
+    // Tag filter — normalized + length-capped before it reaches the cache key
+    // and the SQL, same hygiene as the other free-text params.
+    const tagTrim = tag?.trim().normalize('NFKC').slice(0, 80) || undefined;
     // Phase 195 (#7) — trim/strip-control/cap-length the free-text search
     // before it reaches the cache key OR the ILIKE pattern, so a 2 KB
     // payload can't become a 2 KB scan pattern and look-alike whitespace
     // can't fragment the cache.
     const searchTerm = sanitizeSearchTerm(search) || undefined;
     const result = await this.cache.getOrSetProductList(
-      { page: pageNum, limit: limitNum, search: searchTerm, categoryId, brandId, collectionId, sortBy, minPrice, maxPrice, availability: filterObj.availability || null, brandFilter: filterObj.brand || null, filters: stableFilters, sport: sportTrim || null },
+      { page: pageNum, limit: limitNum, search: searchTerm, categoryId, brandId, collectionId, sortBy, minPrice, maxPrice, availability: filterObj.availability || null, brandFilter: filterObj.brand || null, filters: stableFilters, sport: sportTrim || null, tag: tagTrim || null },
       async () => {
         const { products, total } = await this.storefrontRepo.findProductsPaginated({
           page: pageNum, limit: limitNum, search: searchTerm, categoryId, brandId, collectionId,
-          sortBy, minPrice, maxPrice, sport: sportTrim, filterObj,
+          sortBy, minPrice, maxPrice, sport: sportTrim, tag: tagTrim, filterObj,
         });
 
         // Enrich the page with two batch queries: distinct COLOR

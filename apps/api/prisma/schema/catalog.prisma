@@ -370,9 +370,6 @@ model Product {
   franchiseCatalogMappings FranchiseCatalogMapping[]
   // Sprint 3 Story 2.2 — see wishlist.prisma.
   wishlistItems            WishlistItem[]
-  // Story 3.5 — quantity-based pricing tiers for upsell hints on PDP.
-  // Display-only at v1; cart-time application is a separate story.
-  pricingTiers             ProductPricingTier[]
   // User-generated reviews (see product-reviews.prisma).
   reviews                  ProductReview[]
   // Phase 193 (#15) — back-in-stock notify requests (see back-in-stock.prisma).
@@ -441,84 +438,6 @@ enum TaxAttestationAction {
   RESET
   EDITED
   BULK_EDITED
-}
-
-// Story 3.5 — Product Pricing Tiers (display-only at v1).
-//
-// Each row represents one rung on the quantity ladder:
-//   "Save 10% if you buy 5 or more — current 3, add 2 more to unlock"
-//
-// We store the discount as a *percent* of unit price rather than a
-// fixed amount so the tier auto-tracks price changes (no stale
-// per-paise math to refresh when the seller updates base price).
-//
-// Scope decision (2026-05-13): cart-time price mutation is OUT.
-// Operators populate the tiers; PDP renders the ladder + active tier;
-// checkout still charges the base price. Wiring tiers into actual
-// pricing requires stacking-vs-coupon semantics, refund-line basis,
-// and commission-base policy — none of which is decided yet. Adding
-// it carelessly silently changes settlement.
-model ProductPricingTier {
-  id        String  @id @default(uuid())
-  productId String  @map("product_id")
-  // Nullable — tier can target a specific variant OR apply to all
-  // variants when null. ANSI NULLs-distinct unique enforces "one tier
-  // per (product, variant, minQuantity)" without collapsing the
-  // "any variant" case across variants.
-  variantId String? @map("variant_id")
-
-  // Inclusive lower bound: tier applies when cart line quantity >=
-  // minQuantity. Multiple tiers per product form a ladder; the
-  // highest matching tier wins at display time.
-  minQuantity Int  @map("min_quantity")
-  // Phase 44 (2026-05-21) — inclusive upper bound for closed-range
-  // tiers (e.g. "Buy 10-24: 5% off"). NULL = unbounded. Migration
-  // adds a CHECK (max_quantity IS NULL OR max_quantity >= min_quantity).
-  maxQuantity Int? @map("max_quantity")
-
-  // Phase 44 — pricing modes are mutually exclusive. Exactly one of
-  // discountPercent / fixedUnitPrice must be set; the migration adds
-  // a CHECK constraint for that invariant.
-  //
-  // discountPercent — percent off the line's list unit price (0-100,
-  // enforced at the service layer).
-  discountPercent Decimal? @map("discount_percent") @db.Decimal(5, 2)
-  // fixedUnitPrice — absolute override (e.g. "₹999 at 50+"). Keeps
-  // the same Decimal(10,2) scale as variant.price / product.basePrice.
-  fixedUnitPrice  Decimal? @map("fixed_unit_price") @db.Decimal(10, 2)
-
-  // Phase 44 — optional schedule window. NULL on either end means
-  // open-ended on that side. The active-check is
-  //   isActive=true AND (startAt IS NULL OR startAt <= NOW)
-  //                AND (endAt IS NULL OR endAt > NOW)
-  startAt DateTime? @map("start_at")
-  endAt   DateTime? @map("end_at")
-
-  // Optional override copy ("Buy 5+ save 10%"). Falls back to a
-  // formatted default when null. Useful when ops wants a campaign
-  // tagline instead of the bare math.
-  displayLabel String? @map("display_label")
-
-  // Off by default so creates can be staged before going live.
-  isActive Boolean @default(true) @map("is_active")
-
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  product    Product     @relation(fields: [productId], references: [id], onDelete: Cascade)
-  // Phase 44 (2026-05-21) — back-relations from the snapshot columns
-  // on CartItem / OrderItem so a tier can find every line that
-  // referenced it (useful for audit + commission re-computation).
-  cartItems  CartItem[]
-  orderItems OrderItem[]
-
-  @@unique([productId, variantId, minQuantity], name: "product_variant_qty_unique")
-  @@index([productId])
-  @@index([productId, isActive])
-  // Phase 44 — covers the resolver's "active tiers in window for
-  // product+variant" query.
-  @@index([productId, isActive, variantId])
-  @@map("product_pricing_tiers")
 }
 
 model ProductOption {

@@ -34,6 +34,7 @@ import { AdminUpdateFranchiseCommissionUseCase } from '../../application/use-cas
 import { AdminEditFranchiseProfileUseCase } from '../../application/use-cases/admin-edit-franchise-profile.use-case';
 import { AdminSendFranchiseMessageUseCase } from '../../application/use-cases/admin-send-franchise-message.use-case';
 import { AdminChangeFranchisePasswordUseCase } from '../../application/use-cases/admin-change-franchise-password.use-case';
+import { AdminUpdateFranchiseBankUseCase } from '../../application/use-cases/admin-update-franchise-bank.use-case';
 import { AdminImpersonateFranchiseUseCase } from '../../application/use-cases/admin-impersonate-franchise.use-case';
 import { AdminEndImpersonationUseCase } from '../../../admin/application/use-cases/admin-end-impersonation.use-case';
 import { AdminDeleteFranchiseUseCase } from '../../application/use-cases/admin-delete-franchise.use-case';
@@ -45,6 +46,7 @@ import { AdminUpdateFranchiseCommissionDto } from '../dtos/admin-update-franchis
 import { AdminEditFranchiseProfileDto } from '../dtos/admin-edit-franchise-profile.dto';
 import { AdminSendFranchiseMessageDto } from '../dtos/admin-send-franchise-message.dto';
 import { AdminChangeFranchisePasswordDto } from '../dtos/admin-change-franchise-password.dto';
+import { AdminUpdateFranchiseBankDto } from '../dtos/admin-update-franchise-bank.dto';
 
 @ApiTags('Admin Franchise')
 @Controller('admin/franchises')
@@ -63,6 +65,7 @@ export class AdminFranchiseController {
     private readonly adminEditFranchiseProfileUseCase: AdminEditFranchiseProfileUseCase,
     private readonly adminSendFranchiseMessageUseCase: AdminSendFranchiseMessageUseCase,
     private readonly adminChangeFranchisePasswordUseCase: AdminChangeFranchisePasswordUseCase,
+    private readonly adminUpdateFranchiseBankUseCase: AdminUpdateFranchiseBankUseCase,
     private readonly adminImpersonateFranchiseUseCase: AdminImpersonateFranchiseUseCase,
     // Phase 28 (2026-05-21) — shared use case for end-impersonation.
     private readonly endImpersonationUseCase: AdminEndImpersonationUseCase,
@@ -488,6 +491,40 @@ export class AdminFranchiseController {
     });
 
     return { success: true, message: 'Franchise password changed', data };
+  }
+
+  // ── Bank Details ──────────────────────────────────────────
+
+  @Patch(':franchiseId/bank-details')
+  @HttpCode(HttpStatus.OK)
+  // The class-level @Permissions is 'franchise.read'; a payout-account change is
+  // a sensitive write, so override to the 'franchise.approve' management
+  // permission (same gate as status/verification). @Throttle is a coarse abuse
+  // cap. Reuses FranchiseBankDetailsService — account number is encrypted at
+  // rest and only the last 4 are returned.
+  @Permissions('franchise.approve')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  async updateBankDetails(
+    @Param('franchiseId') franchiseId: string,
+    @Body() dto: AdminUpdateFranchiseBankDto,
+    @Req() req: Request,
+  ) {
+    const adminId = (req as any).adminId;
+    const userAgentHeader = req.headers['user-agent'];
+    const data = await this.adminUpdateFranchiseBankUseCase.execute({
+      adminId,
+      franchiseId,
+      accountHolderName: dto.accountHolderName,
+      accountNumber: dto.accountNumber,
+      ifscCode: dto.ifscCode,
+      bankName: dto.bankName,
+      upiVpa: dto.upiVpa,
+      ipAddress: req.ip || req.socket.remoteAddress || undefined,
+      userAgent:
+        typeof userAgentHeader === 'string' ? userAgentHeader : undefined,
+    });
+
+    return { success: true, message: 'Franchise bank details updated', data };
   }
 
   // ── Delete ────────────────────────────────────────────────

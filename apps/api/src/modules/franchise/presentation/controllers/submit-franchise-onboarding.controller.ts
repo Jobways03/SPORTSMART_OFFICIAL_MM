@@ -39,6 +39,7 @@ export class SubmitFranchiseOnboardingController {
     const data = await this.submitOnboardingUseCase.execute({
       franchiseId,
       legalBusinessName: dto.legalBusinessName,
+      entityType: dto.entityType,
       gstRegistrationType: dto.gstRegistrationType,
       gstNumber: dto.gstNumber,
       gstStateCode: dto.gstStateCode,

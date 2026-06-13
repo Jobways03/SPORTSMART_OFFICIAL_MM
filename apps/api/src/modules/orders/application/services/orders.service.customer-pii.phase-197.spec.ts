@@ -89,8 +89,6 @@ function sensitiveMasterRow(overrides: Partial<any> = {}): any {
             quantity: 1,
             totalPrice: 1999.0,
             unitPriceInPaise: 199900n, // not in customer shape
-            appliedListUnitPrice: 2200.0, // MUST NOT leak
-            appliedPricingTierId: 'tier-1', // MUST NOT leak
             stockReservationId: 'res-1', // MUST NOT leak
           },
         ],
@@ -134,8 +132,6 @@ const SENSITIVE_ITEM_KEYS = [
   'masterSku',
   'imagePublicId',
   'unitPriceInPaise',
-  'appliedListUnitPrice',
-  'appliedPricingTierId',
   'stockReservationId',
 ];
 
