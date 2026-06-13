@@ -96,7 +96,7 @@ export class SellerPublicFacade {
     isEmailVerified: boolean;
     profileCompletionPercentage: number;
   }> {
-    const [seller, productCount, orderCount] = await Promise.all([
+    const [seller, distinctProducts, orderCount] = await Promise.all([
       this.prisma.seller.findUnique({
         where: { id: sellerId },
         select: {
@@ -105,8 +105,12 @@ export class SellerPublicFacade {
           profileCompletionPercentage: true,
         },
       }),
-      this.prisma.sellerProductMapping.count({
-        where: { sellerId, isActive: true },
+      // Count DISTINCT products, not mapping rows — one product with N variants
+      // is N mapping rows, which previously over-reported "totalProducts" by the
+      // variant multiplier. Exclude soft-deleted mappings.
+      this.prisma.sellerProductMapping.groupBy({
+        by: ['productId'],
+        where: { sellerId, isActive: true, deletedAt: null },
       }),
       this.prisma.subOrder.count({
         where: { sellerId },
@@ -114,7 +118,7 @@ export class SellerPublicFacade {
     ]);
 
     return {
-      totalProducts: productCount,
+      totalProducts: distinctProducts.length,
       totalOrders: orderCount,
       isProfileCompleted: seller?.isProfileCompleted ?? false,
       isEmailVerified: seller?.isEmailVerified ?? false,

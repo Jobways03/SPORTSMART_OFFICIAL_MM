@@ -12,13 +12,6 @@ export interface CartItemWithDetails {
   // Sprint 3 Story 2.3 — true when the item is parked, false when
   // it's in the active cart and counts toward order total.
   savedForLater: boolean;
-  // Phase 44 (2026-05-21) — pricing-tier snapshot on the cart row.
-  // The cart service reads these to detect drift between the stored
-  // snapshot and a freshly resolved tier (e.g. after qty change).
-  appliedPricingTierId: string | null;
-  appliedDiscountPercent: any;
-  appliedFixedUnitPrice: any;
-  appliedListUnitPrice: any;
   // Phase 61 (2026-05-22) — add-time snapshot in paise (audit
   // Gap #22). The cart service reads this to surface a
   // `priceChanged` flag when the live price drifts from the
@@ -163,20 +156,15 @@ export interface CartRepository {
   setSavedForLater(itemId: string, value: boolean): Promise<void>;
 
   /**
-   * Phase 44 (2026-05-21) — persist the resolved pricing-tier snapshot.
-   * Called by the cart service whenever the snapshot drifts from the
-   * value already on the row (qty change, tier flipped active, etc).
-   * NULL values clear the snapshot when no tier qualifies.
+   * Live list unit price in paise for (product, variant) —
+   * variant.price when a variant is given, product.basePrice
+   * otherwise. Used by addItem for the add-time price snapshot
+   * (audit Gap #22).
    */
-  updateCartItemPricingSnapshot(
-    itemId: string,
-    snapshot: {
-      appliedPricingTierId: string | null;
-      appliedDiscountPercent: number | null;
-      appliedFixedUnitPrice: number | null;
-      appliedListUnitPrice: number | null;
-    },
-  ): Promise<void>;
+  getListUnitPriceInPaise(
+    productId: string,
+    variantId: string | null,
+  ): Promise<bigint>;
 
   /**
    * Phase 4.1 (2026-05-16) — atomic move-to-cart with stock check.

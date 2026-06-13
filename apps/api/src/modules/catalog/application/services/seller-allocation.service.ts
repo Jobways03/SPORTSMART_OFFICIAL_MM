@@ -683,9 +683,16 @@ export class SellerAllocationService {
     // reservations against the same mapping serialize correctly.
     const txResult = await this.prisma.$transaction(async (tx) => {
       const lockedRows = await tx.$queryRaw<
-        Array<{ id: string; stock_qty: number; reserved_qty: number }>
+        Array<{
+          id: string;
+          stock_qty: number;
+          reserved_qty: number;
+          approval_status: string;
+          is_active: boolean;
+          deleted_at: Date | null;
+        }>
       >`
-        SELECT id, stock_qty, reserved_qty
+        SELECT id, stock_qty, reserved_qty, approval_status, is_active, deleted_at
         FROM seller_product_mappings
         WHERE id = ${mappingId}
         FOR UPDATE
@@ -695,18 +702,28 @@ export class SellerAllocationService {
         throw new NotFoundAppException(`Mapping ${mappingId} not found`);
       }
 
+      // The reserve primitive is exposed directly (POST /storefront/allocate/
+      // reserve) and must self-enforce the mapping lifecycle — the allocator's
+      // APPROVED + active filter only protects the allocate() path, not this
+      // endpoint. Without this gate any authenticated caller could reserve (and
+      // then confirm-deduct) stock against a mapping an admin had STOPPED, or
+      // one that is unapproved / paused / soft-deleted, corrupting cross-seller
+      // aggregate stock and routing inventory through a disabled node.
+      if (
+        locked.deleted_at !== null ||
+        locked.is_active !== true ||
+        locked.approval_status !== 'APPROVED'
+      ) {
+        throw new ConflictAppException(
+          `Mapping ${mappingId} is not orderable`,
+        );
+      }
+
       const available = locked.stock_qty - locked.reserved_qty;
       if (available < quantity) {
         throw new ConflictAppException(
           `Insufficient stock: available=${available}, requested=${quantity}`,
         );
-      }
-
-      const mapping = await tx.sellerProductMapping.findUnique({
-        where: { id: mappingId },
-      });
-      if (!mapping) {
-        throw new NotFoundAppException(`Mapping ${mappingId} not found`);
       }
 
       const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000);
@@ -964,12 +981,17 @@ export class SellerAllocationService {
       });
 
       if (!reservation) throw new NotFoundAppException(`Reservation ${reservationId} not found`);
-      if (reservation.status !== 'RESERVED') return; // already released/confirmed
 
-      await tx.stockReservation.update({
-        where: { id: reservationId },
+      // Atomic claim: only the transaction that flips RESERVED→RELEASED is
+      // allowed to decrement reservedQty. A bare read-then-update raced a
+      // concurrent release/confirm and double-decremented. count===0 means
+      // another path already moved the row off RESERVED — no-op (matches the
+      // prior "already released/confirmed" short-circuit).
+      const claim = await tx.stockReservation.updateMany({
+        where: { id: reservationId, status: 'RESERVED' },
         data: { status: 'RELEASED' },
       });
+      if (claim.count === 0) return;
 
       await tx.sellerProductMapping.update({
         where: { id: reservation.mappingId },
@@ -1048,17 +1070,30 @@ export class SellerAllocationService {
       });
 
       if (!reservation) throw new NotFoundAppException(`Reservation ${reservationId} not found`);
-      if (reservation.status !== 'RESERVED') {
-        throw new ConflictAppException(`Reservation ${reservationId} is already ${reservation.status}`);
-      }
 
-      await tx.stockReservation.update({
-        where: { id: reservationId },
+      // Atomic claim: only the transaction that flips RESERVED→CONFIRMED runs
+      // the stock deduction. A bare read-then-update let two concurrent confirms
+      // of the same reservation both pass the status check and both decrement
+      // (silent oversell of real inventory + the shared variant stock).
+      const claim = await tx.stockReservation.updateMany({
+        where: { id: reservationId, status: 'RESERVED' },
         data: {
           status: 'CONFIRMED',
           orderId: orderId ?? reservation.orderId,
         },
       });
+      if (claim.count === 0) {
+        // Already moved off RESERVED. Treat a repeat confirm as idempotent;
+        // any other terminal state is a genuine conflict.
+        const fresh = await tx.stockReservation.findUnique({
+          where: { id: reservationId },
+          select: { status: true },
+        });
+        if (fresh?.status === 'CONFIRMED') return;
+        throw new ConflictAppException(
+          `Reservation ${reservationId} is already ${fresh?.status ?? 'unknown'}`,
+        );
+      }
 
       // Deduct from actual stockQty and release reservedQty
       const mapping = await tx.sellerProductMapping.update({

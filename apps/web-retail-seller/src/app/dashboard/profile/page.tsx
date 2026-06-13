@@ -308,6 +308,23 @@ export default function SellerProfilePage() {
     if (authReady) fetchProfile();
   }, [authReady, fetchProfile]);
 
+  // Bank payout details (masked) for the Bank Account card.
+  const [bankInfo, setBankInfo] = useState<{
+    hasBankDetails: boolean;
+    details?: {
+      accountHolderName: string;
+      accountNumberLast4: string;
+      ifscCode: string;
+      bankName: string;
+    };
+  } | null>(null);
+  useEffect(() => {
+    if (!authReady) return;
+    apiClient('/seller/bank-details/status')
+      .then((res) => setBankInfo((res.data as typeof bankInfo) ?? null))
+      .catch(() => {});
+  }, [authReady]);
+
   // No auto-lookup on load — only show dropdown when user changes pincode
 
   // --- Email verification ---
@@ -1440,6 +1457,7 @@ export default function SellerProfilePage() {
 
           <PincodeFields
             idPrefix="store"
+            forceLocality
             showCountry
             disabled={readonly || isSaving}
             value={{
@@ -1463,6 +1481,51 @@ export default function SellerProfilePage() {
               if (patch.locality !== undefined) updateField('locality', patch.locality);
             }}
           />
+        </div>
+
+        {/* Bank Account (read-only) */}
+        <div className="profile-card">
+          <div className="profile-card-header">
+            <h2>Bank Account</h2>
+            <p>Your settlement payout account (masked for security)</p>
+          </div>
+          {bankInfo?.hasBankDetails && bankInfo.details ? (
+            <div className="form-grid-2">
+              <div className="profile-form-group">
+                <label>Bank Name</label>
+                <div className="readonly-field">
+                  <span className="lock-icon">&#128274;</span>
+                  {bankInfo.details.bankName}
+                </div>
+              </div>
+              <div className="profile-form-group">
+                <label>Account Holder</label>
+                <div className="readonly-field">
+                  <span className="lock-icon">&#128274;</span>
+                  {bankInfo.details.accountHolderName}
+                </div>
+              </div>
+              <div className="profile-form-group">
+                <label>Account Number</label>
+                <div className="readonly-field">
+                  <span className="lock-icon">&#128274;</span>
+                  {'••••••'}
+                  {bankInfo.details.accountNumberLast4}
+                </div>
+              </div>
+              <div className="profile-form-group">
+                <label>IFSC Code</label>
+                <div className="readonly-field">
+                  <span className="lock-icon">&#128274;</span>
+                  {bankInfo.details.ifscCode}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <p style={{ color: '#6b7280', fontSize: 14, margin: 0 }}>
+              No bank account on file yet. Add your payout account during onboarding.
+            </p>
+          )}
         </div>
 
         {/* Store Description */}

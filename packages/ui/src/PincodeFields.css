@@ -4,7 +4,7 @@
 
 .pin {
   display: grid;
-  gap: 4px;
+  gap: 0;
 }
 .pin__grid {
   display: grid;
@@ -19,7 +19,7 @@
   font-size: 13px;
   font-weight: 600;
   color: #374151;
-  margin: 14px 0 6px;
+  margin: 16px 0 7px;
   display: block;
 }
 .pin input,
@@ -50,7 +50,7 @@
 }
 .pin__note {
   font-size: 12px;
-  margin-top: 5px;
+  margin: 7px 0 1px;
   color: #6b7280;
 }
 .pin__note--ok {

@@ -15,7 +15,7 @@ import {
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { SupplyTaxability } from '@prisma/client';
-import { CreateVariantInlineDto, ProductSeoDto } from './create-product.dto';
+import { ProductSeoDto } from './create-product.dto';
 import { SellerMetafieldValueDto } from './seller-create-product.dto';
 
 /**
@@ -29,6 +29,7 @@ import { SellerMetafieldValueDto } from './seller-create-product.dto';
 export class SellerUpdateProductDto {
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   title?: string;
 
   @IsOptional()
@@ -41,10 +42,12 @@ export class SellerUpdateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(1024)
   shortDescription?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(50000)
   description?: string;
 
   @IsOptional()
@@ -130,11 +133,8 @@ export class SellerUpdateProductDto {
   @Type(() => ProductSeoDto)
   seo?: ProductSeoDto;
 
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => CreateVariantInlineDto)
-  variants?: CreateVariantInlineDto[];
+  // variants[] removed — updateInTransaction never persisted them (accepted-but-
+  // ignored trap). Variant edits go through /seller/products/:id/variants.
 
   /**
    * Phase 249 (#4) — AI-content provenance on the update path. The

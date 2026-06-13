@@ -28,6 +28,15 @@ export enum GstRegistrationTypeDto {
   CASUAL = 'CASUAL',
 }
 
+/** Legal entity type — mirrors prisma enum `BusinessEntityType`. */
+export enum BusinessEntityTypeDto {
+  PUBLIC_LIMITED = 'PUBLIC_LIMITED',
+  PRIVATE_LIMITED = 'PRIVATE_LIMITED',
+  SOLE_PROPRIETORSHIP = 'SOLE_PROPRIETORSHIP',
+  GENERAL_PARTNERSHIP = 'GENERAL_PARTNERSHIP',
+  LLP = 'LLP',
+}
+
 /**
  * Submitted by the seller themselves once they've filled out their KYC
  * details. Triggers the admin approval queue: verificationStatus moves
@@ -48,6 +57,12 @@ export class SubmitSellerOnboardingDto {
     message: 'GST registration type must be REGULAR, COMPOSITION, or CASUAL',
   })
   gstRegistrationType!: GstRegistrationTypeDto;
+
+  @IsEnum(BusinessEntityTypeDto, {
+    message:
+      'Entity type must be a public/private limited company, sole proprietorship, general partnership, or LLP',
+  })
+  entityType!: BusinessEntityTypeDto;
 
   /**
    * Phase 19 (2026-05-20) — unconditionally required. Removed the

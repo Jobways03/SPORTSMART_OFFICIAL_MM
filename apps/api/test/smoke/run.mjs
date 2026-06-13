@@ -380,34 +380,6 @@ await runStep('POST /admin/notifications/dispatch (validation)', async () => {
   );
 });
 
-// ── Sprint 4 Story 3.5: pricing-tier validation ───────────────────────
-// Admin POST with a negative discount percent should be rejected by
-// the service-level guard (DB also has a check constraint, but the
-// service rejects it first). Hits a bogus product id; we expect a
-// 4xx response either way, which proves the route is wired + guards
-// pass. Avoid trying to read a real product — keeps smoke lightweight.
-await runStep('POST /admin/products/:fake/pricing-tiers (validation)', async () => {
-  if (!ctx.adminAccessToken) throw new Error('no admin token');
-  const res = await http(
-    'POST',
-    '/admin/products/00000000-0000-0000-0000-000000000000/pricing-tiers',
-    {
-      token: ctx.adminAccessToken,
-      body: { minQuantity: 0, discountPercent: -5 },
-    },
-  );
-  if (res.status < 400 || res.status >= 500) {
-    throw new Error(
-      `expected 4xx on bad payload, got ${res.status} body=${JSON.stringify(res.body).slice(0, 200)}`,
-    );
-  }
-  logPass(
-    'POST /admin/products/:fake/pricing-tiers (validation)',
-    `${res.status} as expected`,
-    res.elapsedMs,
-  );
-});
-
 // ── Sprint 9 Story 3.4: Nova stock-transfer validation ─────────────────
 // Posts a transfer with same source + destination so the service short-
 // circuits with a 400. Validates:

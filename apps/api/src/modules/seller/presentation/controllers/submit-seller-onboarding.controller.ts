@@ -60,6 +60,7 @@ export class SubmitSellerOnboardingController {
     const data = await this.submitOnboardingUseCase.execute({
       sellerId,
       legalBusinessName: dto.legalBusinessName,
+      entityType: dto.entityType,
       gstRegistrationType: dto.gstRegistrationType,
       gstin: dto.gstin,
       gstStateCode: dto.gstStateCode,

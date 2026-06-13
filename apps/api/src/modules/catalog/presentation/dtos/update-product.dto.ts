@@ -16,21 +16,21 @@ import {
   IsEnum,
 } from 'class-validator';
 import { Type } from 'class-transformer';
-import { SupplyTaxability } from '@prisma/client';
-import { ProductSeoDto, CreateVariantInlineDto } from './create-product.dto';
+import { ProductSeoDto } from './create-product.dto';
 
 export class UpdateProductDto {
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   title?: string;
 
+  // categoryName / brandName intentionally NOT accepted — admins reference
+  // existing taxonomy by uuid (categoryId/brandId). The controller already
+  // ignored these, so accepting them caused silent no-op "success"; rejecting
+  // them (forbidNonWhitelisted) makes the contract honest.
   @IsOptional()
   @IsUUID()
   categoryId?: string;
-
-  @IsOptional()
-  @IsString()
-  categoryName?: string;
 
   @IsOptional()
   @IsUUID()
@@ -38,14 +38,12 @@ export class UpdateProductDto {
 
   @IsOptional()
   @IsString()
-  brandName?: string;
-
-  @IsOptional()
-  @IsString()
+  @MaxLength(1024)
   shortDescription?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(50000)
   description?: string;
 
   @IsOptional()
@@ -183,11 +181,9 @@ export class UpdateProductDto {
   @Type(() => ProductSeoDto)
   seo?: ProductSeoDto;
 
-  @IsOptional()
-  @IsArray()
-  @ValidateNested({ each: true })
-  @Type(() => CreateVariantInlineDto)
-  variants?: CreateVariantInlineDto[];
+  // variants[] removed — updateInTransaction never persisted them, so an
+  // accepted-but-ignored field silently dropped inline variant edits. Variant
+  // mutations go through the dedicated /admin/products/:id/variants endpoints.
 
   // Phase 249 (#4) — AI-content provenance on the admin update path.
   // Same semantics as CreateProductDto.aiGenerationLogId: when present

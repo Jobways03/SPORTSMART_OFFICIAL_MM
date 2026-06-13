@@ -24,7 +24,6 @@ import {
 } from '../../../../core/exceptions';
 import { CartService } from './cart.service';
 import { CartRepository } from '../../domain/repositories/cart.repository.interface';
-import type { CatalogPublicFacade } from '../../../catalog/application/facades/catalog-public.facade';
 import {
   AddCartItemDto,
   MergeCartDto,
@@ -48,20 +47,6 @@ async function dtoMessages<T extends object>(
 
 const UUID = '00000000-0000-4000-8000-000000000001';
 const UUID2 = '00000000-0000-4000-8000-000000000002';
-
-const makeCatalogStub = (effective = 100) => ({
-  resolveBatchUnitPrices: jest.fn(
-    async (items: ReadonlyArray<{ listUnitPrice: number }>) =>
-      items.map((i) => ({
-        effectiveUnitPrice: effective,
-        appliedTierId: null,
-        appliedDiscountPercent: null,
-        appliedFixedUnitPrice: null,
-        listUnitPrice: i.listUnitPrice,
-      })),
-  ),
-  resolveUnitPrice: jest.fn(),
-} as any);
 
 function makeRepo(
   overrides: Partial<jest.Mocked<CartRepository>> = {},
@@ -89,7 +74,7 @@ function makeRepo(
     deleteAbandonedCartsOlderThan: jest.fn().mockResolvedValue(0),
     incrementOrCreateCartItem: jest.fn().mockResolvedValue(undefined),
     setSavedForLater: jest.fn().mockResolvedValue(undefined),
-    updateCartItemPricingSnapshot: jest.fn().mockResolvedValue(undefined),
+    getListUnitPriceInPaise: jest.fn().mockResolvedValue(10000n),
     moveToCartIfStockAvailable: jest
       .fn()
       .mockResolvedValue({ moved: true, availableStock: 100 }),
@@ -175,7 +160,7 @@ describe('CartService.updateItem (Phase 61 — Gap #6)', () => {
         .fn()
         .mockResolvedValue({ id: 'i-1', productId: UUID, variantId: null, quantity: 2 }),
     });
-    const svc = new CartService(repo, makeCatalogStub() as any);
+    const svc = new CartService(repo, {} as any);
     await expect(svc.updateItem('cust-1', 'i-1', 0)).rejects.toBeInstanceOf(
       BadRequestAppException,
     );
@@ -192,8 +177,9 @@ describe('CartService.addItem race-safe stock (Phase 61 — Gap #7)', () => {
   it('passes availableStock + price snapshot + cart-line cap to incrementOrCreateCartItem', async () => {
     const repo = makeRepo({
       getAggregatedStock: jest.fn().mockResolvedValue(5),
+      getListUnitPriceInPaise: jest.fn().mockResolvedValue(19900n),
     });
-    const svc = new CartService(repo, makeCatalogStub(199) as any);
+    const svc = new CartService(repo, {} as any);
     await svc.addItem('cust-1', UUID, UUID2, 2);
 
     expect(repo.incrementOrCreateCartItem).toHaveBeenCalledWith(
@@ -217,7 +203,7 @@ describe('CartService.addItem race-safe stock (Phase 61 — Gap #7)', () => {
         }),
       ),
     });
-    const svc = new CartService(repo, makeCatalogStub() as any);
+    const svc = new CartService(repo, {} as any);
     await expect(svc.addItem('cust-1', UUID, UUID2, 1)).rejects.toBeInstanceOf(
       BadRequestAppException,
     );
@@ -231,7 +217,7 @@ describe('CartService.addItem race-safe stock (Phase 61 — Gap #7)', () => {
         }),
       ),
     });
-    const svc = new CartService(repo, makeCatalogStub() as any);
+    const svc = new CartService(repo, {} as any);
     await expect(svc.addItem('cust-1', UUID, UUID2, 1)).rejects.toBeInstanceOf(
       ConflictAppException,
     );
@@ -248,10 +234,6 @@ describe('CartService.getCart (Phase 61 — projection)', () => {
       variantId: UUID2,
       quantity: 1,
       savedForLater: false,
-      appliedPricingTierId: null,
-      appliedDiscountPercent: null,
-      appliedFixedUnitPrice: null,
-      appliedListUnitPrice: null,
       unitPriceAtAddInPaise: 10000n,
       product: {
         id: UUID,
@@ -286,7 +268,7 @@ describe('CartService.getCart (Phase 61 — projection)', () => {
         .fn()
         .mockResolvedValue({ id: 'cart-1', customerId: 'cust-1', items: [buildItem()] }),
     });
-    const svc = new CartService(repo, makeCatalogStub(100) as any);
+    const svc = new CartService(repo, {} as any);
     const res = await svc.getCart('cust-1');
     expect(res.items).toHaveLength(1);
     expect(res.items[0]).toMatchObject({
@@ -305,7 +287,7 @@ describe('CartService.getCart (Phase 61 — projection)', () => {
         .fn()
         .mockResolvedValue({ id: 'cart-1', customerId: 'cust-1', items: [archived] }),
     });
-    const svc = new CartService(repo, makeCatalogStub(100) as any);
+    const svc = new CartService(repo, {} as any);
     const res = await svc.getCart('cust-1');
     expect(res.items[0]).toMatchObject({
       unavailable: true,
@@ -324,7 +306,7 @@ describe('CartService.getCart (Phase 61 — projection)', () => {
         .fn()
         .mockResolvedValue({ id: 'cart-1', customerId: 'cust-1', items: [deletedVariant] }),
     });
-    const svc = new CartService(repo, makeCatalogStub(100) as any);
+    const svc = new CartService(repo, {} as any);
     const res = await svc.getCart('cust-1');
     expect(res.items[0]).toMatchObject({
       unavailable: true,
@@ -333,13 +315,16 @@ describe('CartService.getCart (Phase 61 — projection)', () => {
   });
 
   it('surfaces priceChanged=true when live price drifts from the snapshot (audit Gap #22)', async () => {
-    // snapshot = 10000 paise; resolver returns 150 → 15000 paise
+    // snapshot = 10000 paise; live variant price 150 → 15000 paise
+    const drifted = buildItem({
+      variant: { ...buildItem().variant, price: 150 },
+    });
     const repo = makeRepo({
       findByCustomerId: jest
         .fn()
-        .mockResolvedValue({ id: 'cart-1', customerId: 'cust-1', items: [buildItem()] }),
+        .mockResolvedValue({ id: 'cart-1', customerId: 'cust-1', items: [drifted] }),
     });
-    const svc = new CartService(repo, makeCatalogStub(150) as any);
+    const svc = new CartService(repo, {} as any);
     const res = await svc.getCart('cust-1');
     expect(res.items[0]).toMatchObject({
       priceChanged: true,
@@ -354,7 +339,7 @@ describe('CartService.getCart (Phase 61 — projection)', () => {
         .fn()
         .mockResolvedValue({ id: 'cart-1', customerId: 'cust-1', items: [buildItem()] }),
     });
-    const svc = new CartService(repo, makeCatalogStub(100) as any);
+    const svc = new CartService(repo, {} as any);
     const res = await svc.getCart('cust-1');
     expect(res.items[0]).toMatchObject({ priceChanged: false });
   });
@@ -369,7 +354,7 @@ describe('CartService.mergeAnonymousCart (Phase 61)', () => {
         .fn()
         .mockImplementation(async (productId: string) => productId !== 'bad-product'),
     });
-    const svc = new CartService(repo, makeCatalogStub() as any);
+    const svc = new CartService(repo, {} as any);
     const res = await svc.mergeAnonymousCart('cust-1', [
       { productId: UUID, quantity: 1 },
       { productId: 'bad-product', quantity: 2 },
@@ -386,7 +371,7 @@ describe('CartService.mergeAnonymousCart (Phase 61)', () => {
 
   it('returns empty failures array on a fully-successful merge', async () => {
     const repo = makeRepo();
-    const svc = new CartService(repo, makeCatalogStub() as any);
+    const svc = new CartService(repo, {} as any);
     const res = await svc.mergeAnonymousCart('cust-1', [
       { productId: UUID, quantity: 1 },
       { productId: UUID2, quantity: 2 },
@@ -404,7 +389,7 @@ describe('CartService.sweepAbandonedCarts (Phase 61 — Gap #12)', () => {
     const repo = makeRepo({
       deleteAbandonedCartsOlderThan: jest.fn().mockResolvedValue(7),
     });
-    const svc = new CartService(repo, makeCatalogStub() as any);
+    const svc = new CartService(repo, {} as any);
     const cutoff = new Date('2026-01-01T00:00:00Z');
     const deleted = await svc.sweepAbandonedCarts(cutoff);
     expect(repo.deleteAbandonedCartsOlderThan).toHaveBeenCalledWith(cutoff);

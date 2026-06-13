@@ -242,7 +242,8 @@ export default function DashboardLayout({
       </aside>
 
       <main className="dashboard-content">
-        {banner && (
+        {/* Hide the onboarding banner on the onboarding page (it self-links here). */}
+        {banner && pathname !== '/dashboard/onboarding' && (
           <div
             role={banner.kind === 'error' || banner.kind === 'warning' ? 'alert' : 'status'}
             style={{

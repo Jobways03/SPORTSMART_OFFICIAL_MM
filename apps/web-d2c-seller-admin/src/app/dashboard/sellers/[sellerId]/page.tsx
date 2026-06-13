@@ -27,6 +27,7 @@ import SendMessageModal from '../components/send-message-modal';
 import ChangePasswordModal from '../components/change-password-modal';
 import DeleteSellerModal from '../components/delete-seller-modal';
 import ImpersonateModal from '../components/impersonate-modal';
+import EditBankModal from '../components/edit-bank-modal';
 import './profile.css';
 import '../sellers.css';
 
@@ -75,7 +76,7 @@ interface Toast {
 }
 
 type FormErrors = Partial<Record<keyof FormData | 'phone', string>>;
-type ModalType = 'status' | 'verification' | 'kyc' | 'message' | 'password' | 'delete' | 'impersonate' | null;
+type ModalType = 'status' | 'verification' | 'kyc' | 'message' | 'password' | 'delete' | 'impersonate' | 'editbank' | null;
 
 function detailToFormData(p: SellerDetail): FormData {
   return {
@@ -139,6 +140,14 @@ function getStatusLabel(status: string): string {
   };
   return map[status] || status;
 }
+
+const ENTITY_LABELS: Record<string, string> = {
+  PUBLIC_LIMITED: 'Public Limited Company',
+  PRIVATE_LIMITED: 'Private Limited Company',
+  SOLE_PROPRIETORSHIP: 'Sole Proprietorship',
+  GENERAL_PARTNERSHIP: 'General Partnership',
+  LLP: 'Limited Liability Partnership (LLP)',
+};
 
 function getVerificationLabel(status: string): string {
   return status.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
@@ -546,30 +555,43 @@ export default function AdminSellerDetailPage() {
       </div>
 
       {/* Admin Actions */}
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', marginBottom: 20 }}>
-        {canReviewKyc && <ActionBtn label="✓ Verify KYC" onClick={() => setActiveModal('kyc')} />}
-        <ActionBtn label="Change Status" onClick={() => setActiveModal('status')} />
-        <ActionBtn label="Send Message" onClick={() => setActiveModal('message')} />
-        <ActionBtn label="Change Password" onClick={() => setActiveModal('password')} />
-        {/* Delivery method entitlements (Self Delivery). Opens a
-            dedicated screen for the toggle + service-area pincodes. */}
-        <ActionBtn
-          label="🚚 Delivery Methods"
-          onClick={() =>
-            router.push(`/dashboard/sellers/${seller.sellerId}/delivery-methods`)
-          }
-        />
+      <div className="sa-actions">
+        {canReviewKyc && (
+          <ActionBtn
+            label="Verify KYC"
+            icon="kyc"
+            variant="primary"
+            onClick={() => setActiveModal('kyc')}
+          />
+        )}
+        <ActionBtn label="Change Status" icon="status" onClick={() => setActiveModal('status')} />
+        <ActionBtn label="Send Message" icon="message" onClick={() => setActiveModal('message')} />
+        <ActionBtn label="Change Password" icon="password" onClick={() => setActiveModal('password')} />
         {/* Logistics partners (courier registration). Carries the sellerId
             so the Settings panel renders for this brand instead of the
             "append ?sellerId=" placeholder. */}
         <ActionBtn
-          label="📦 Logistics Partners"
+          label="Logistics Partners"
+          icon="logistics"
           onClick={() =>
             router.push(`/dashboard/settings?sellerId=${seller.sellerId}`)
           }
         />
-        {canImpersonate && <ActionBtn label="Impersonate" onClick={() => setActiveModal('impersonate')} />}
-        {canDelete && <ActionBtn label="Delete" onClick={() => setActiveModal('delete')} danger />}
+        {canImpersonate && (
+          <ActionBtn
+            label="Impersonate"
+            icon="impersonate"
+            onClick={() => setActiveModal('impersonate')}
+          />
+        )}
+        {canDelete && (
+          <ActionBtn
+            label="Delete"
+            icon="delete"
+            variant="danger"
+            onClick={() => setActiveModal('delete')}
+          />
+        )}
       </div>
 
       {/* Verification & Completion */}
@@ -605,7 +627,6 @@ export default function AdminSellerDetailPage() {
       {/* Media Preview (read-only for admin) */}
       <div className="media-cards-row">
         <div className="media-upload-card">
-          <h3>Profile Image</h3>
           <div className="media-preview-container">
             <div className="media-preview-circle">
               {seller.sellerProfileImageUrl ? (
@@ -615,12 +636,14 @@ export default function AdminSellerDetailPage() {
               )}
             </div>
           </div>
-          <div className="media-guidelines">
-            {seller.sellerProfileImageUrl ? 'Image uploaded' : 'No image uploaded'}
+          <div className="media-info">
+            <h3>Profile Image</h3>
+            <div className="media-guidelines">
+              {seller.sellerProfileImageUrl ? 'Image uploaded' : 'No image uploaded'}
+            </div>
           </div>
         </div>
         <div className="media-upload-card">
-          <h3>Shop Logo</h3>
           <div className="media-preview-container">
             <div className="media-preview-rect">
               {seller.sellerShopLogoUrl ? (
@@ -630,8 +653,11 @@ export default function AdminSellerDetailPage() {
               )}
             </div>
           </div>
-          <div className="media-guidelines">
-            {seller.sellerShopLogoUrl ? 'Logo uploaded' : 'No logo uploaded'}
+          <div className="media-info">
+            <h3>Shop Logo</h3>
+            <div className="media-guidelines">
+              {seller.sellerShopLogoUrl ? 'Logo uploaded' : 'No logo uploaded'}
+            </div>
           </div>
         </div>
       </div>
@@ -814,6 +840,71 @@ export default function AdminSellerDetailPage() {
                 ))}
               </select>
             </div>
+          )}
+        </div>
+
+        {/* GST & Tax (read-only) */}
+        <div className="profile-card">
+          <div className="profile-card-header">
+            <h2>GST &amp; Tax</h2>
+            <p>Tax identity submitted during onboarding</p>
+          </div>
+          <InfoRow label="Legal business name" value={seller.legalBusinessName || '—'} />
+          <InfoRow
+            label="Entity type"
+            value={seller.entityType ? ENTITY_LABELS[seller.entityType] ?? seller.entityType : '—'}
+          />
+          <InfoRow label="GST registration type" value={seller.gstRegistrationType || '—'} />
+          <InfoRow label="GSTIN" value={seller.gstin || '— (not submitted)'} />
+          <InfoRow label="GST state code" value={seller.gstStateCode || '—'} />
+          <InfoRow label="PAN" value={seller.panLast4 ? `XXXXXX${seller.panLast4}` : '—'} />
+          <InfoRow label="GST verified" value={seller.isGstVerified ? 'Yes' : 'No'} />
+          <InfoRow
+            label="Registered address"
+            value={(() => {
+              const j = seller.registeredBusinessAddressJson;
+              if (!j) return '—';
+              return (
+                [j.line1, j.line2, j.locality, j.city, j.state, j.pincode]
+                  .filter(Boolean)
+                  .join(', ') || '—'
+              );
+            })()}
+          />
+        </div>
+
+        {/* Bank Account */}
+        <div className="profile-card">
+          <div className="profile-card-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <h2>Bank Account</h2>
+              <p>Settlement payout account (masked)</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveModal('editbank')}
+              style={{
+                padding: '6px 14px', fontSize: 12, fontWeight: 600,
+                border: '1px solid var(--border)', borderRadius: 'var(--radius)',
+                background: '#fff', cursor: 'pointer', color: 'var(--primary, #2563eb)',
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {seller.hasBankDetails ? 'Edit' : 'Add'}
+            </button>
+          </div>
+          {seller.hasBankDetails ? (
+            <>
+              <InfoRow label="Bank name" value={seller.bankName || '—'} />
+              <InfoRow label="Account holder" value={seller.bankAccountHolderName || '—'} />
+              <InfoRow
+                label="Account number"
+                value={seller.bankAccountLast4 ? `••••••${seller.bankAccountLast4}` : '—'}
+              />
+              <InfoRow label="IFSC" value={seller.bankIfscCode || '—'} />
+            </>
+          ) : (
+            <InfoRow label="Bank account" value="Not provided yet" />
           )}
         </div>
 
@@ -1051,6 +1142,19 @@ export default function AdminSellerDetailPage() {
       {activeModal === 'delete' && sellerListItem && (
         <DeleteSellerModal seller={sellerListItem} onClose={closeModal} onSuccess={onActionComplete} />
       )}
+      {activeModal === 'editbank' && sellerListItem && (
+        <EditBankModal
+          seller={sellerListItem}
+          initial={{
+            bankName: seller.bankName,
+            accountHolderName: seller.bankAccountHolderName,
+            accountLast4: seller.bankAccountLast4,
+            ifscCode: seller.bankIfscCode,
+          }}
+          onClose={closeModal}
+          onSuccess={onActionComplete}
+        />
+      )}
       {activeModal === 'impersonate' && sellerListItem && (
         <ImpersonateModal seller={sellerListItem} onClose={closeModal} />
       )}
@@ -1058,19 +1162,76 @@ export default function AdminSellerDetailPage() {
   );
 }
 
-function ActionBtn({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
+const ACTION_ICONS = {
+  kyc: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  ),
+  status: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M8 3 4 7l4 4" />
+      <path d="M4 7h16" />
+      <path d="m16 21 4-4-4-4" />
+      <path d="M20 17H4" />
+    </svg>
+  ),
+  message: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <rect width="20" height="16" x="2" y="4" rx="2" />
+      <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7" />
+    </svg>
+  ),
+  password: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  ),
+  logistics: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2" />
+      <path d="M15 18H9" />
+      <path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 18.52 8H14" />
+      <circle cx="17" cy="18" r="2" />
+      <circle cx="7" cy="18" r="2" />
+    </svg>
+  ),
+  impersonate: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  ),
+  delete: (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 6h18" />
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+      <line x1="10" x2="10" y1="11" y2="17" />
+      <line x1="14" x2="14" y1="11" y2="17" />
+    </svg>
+  ),
+};
+
+function ActionBtn({
+  label,
+  onClick,
+  icon,
+  variant = 'secondary',
+}: {
+  label: string;
+  onClick: () => void;
+  icon?: keyof typeof ACTION_ICONS;
+  variant?: 'primary' | 'secondary' | 'danger';
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
-      style={{
-        padding: '8px 16px', fontSize: 13, fontWeight: 500,
-        border: `1px solid ${danger ? '#fecaca' : 'var(--color-border)'}`,
-        borderRadius: 'var(--radius)', background: '#fff', cursor: 'pointer',
-        color: danger ? 'var(--color-error)' : 'var(--color-text)',
-        transition: 'all 0.15s',
-      }}
+      className={`sa-action sa-action--${variant}`}
     >
+      {icon && <span className="sa-action__icon">{ACTION_ICONS[icon]}</span>}
       {label}
     </button>
   );

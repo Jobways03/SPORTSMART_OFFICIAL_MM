@@ -20,6 +20,7 @@ import { EventBusService } from '../../../../../bootstrap/events/event-bus.servi
 import {
   NotFoundAppException,
   BadRequestAppException,
+  ForbiddenAppException,
 } from '../../../../../core/exceptions';
 import { AppException } from '../../../../../core/exceptions/app.exception';
 import {
@@ -39,6 +40,8 @@ import { ProductCodeService } from '../../../application/services/product-code.s
 import { MetafieldValidationService } from '../../../application/services/metafield-validation.service';
 // Phase 45 (2026-05-21) — atomic tax-config attestation w/ audit log.
 import { ProductTaxAttestationService } from '../../../application/services/product-tax-attestation.service';
+// Storefront cache invalidation on moderation/status transitions.
+import { CatalogCacheService } from '../../../application/services/catalog-cache.service';
 import {
   BULK_TAX_CONFIG_MAX_PRODUCTS,
   BulkUpdateTaxConfigDto,
@@ -109,6 +112,7 @@ export class AdminProductsController {
     private readonly prisma: PrismaService,
     private readonly metafieldValidation: MetafieldValidationService,
     private readonly taxAttestation: ProductTaxAttestationService,
+    private readonly catalogCache: CatalogCacheService,
   ) {
     this.logger.setContext('AdminProductsController');
   }
@@ -311,13 +315,28 @@ export class AdminProductsController {
   // Mirrors the seller create path; a double-click on the admin
   // form returns the same product instead of creating a duplicate.
   @Idempotent()
-  async createProduct(@CurrentAdmin() adminId: string, @Body() dto: AdminCreateProductDto) {
+  async createProduct(@CurrentAdmin() adminId: string, @Body() dto: AdminCreateProductDto, @Req() req?: any) {
 
     let seller: { id: string; status: string } | null = null;
     if (dto.sellerEmail) {
       seller = await this.productRepo.findSellerByEmail(dto.sellerEmail);
       if (!seller) throw new NotFoundAppException(`Seller with email ${dto.sellerEmail} not found`);
       if (seller.status !== 'ACTIVE') throw new AppException('Seller account is not active', 'BAD_REQUEST');
+      // Seller-type scope: a scoped admin must not assign a product to (and
+      // auto-create a mapping for) a seller outside their type — the class
+      // scope guard can't cover this because there's no :productId yet and the
+      // target seller comes from the body. Out-of-scope is reported as
+      // not-found so the seller's existence isn't leaked.
+      const scopedTypes = resolveScopedTypes(req?.user?.permissions);
+      if (scopedTypes) {
+        const s = await this.prisma.seller.findUnique({
+          where: { id: seller.id },
+          select: { sellerType: true },
+        });
+        if (!s?.sellerType || !scopedTypes.includes(s.sellerType as any)) {
+          throw new NotFoundAppException(`Seller with email ${dto.sellerEmail} not found`);
+        }
+      }
     }
 
     // Phase 29 (2026-05-21) — taxonomy must be referenced by uuid.
@@ -389,6 +408,7 @@ export class AdminProductsController {
     // an APPROVED mapping would be picked up by the routing engine as
     // soon as the product is later approved. PENDING + isActive=false
     // forces an explicit per-seller approval step.
+    let mappingError: string | null = null;
     if (seller) {
       try {
         const sellerProfile = await this.productRepo.findSellerById(seller.id);
@@ -407,7 +427,11 @@ export class AdminProductsController {
               pickupAddress: sellerProfile?.storeAddress || null,
               pickupPincode: sellerProfile?.sellerZipCode || null,
               dispatchSla: 2,
-              approvalStatus: 'PENDING',
+              // MappingApprovalStatus enum value is PENDING_APPROVAL — the
+              // literal 'PENDING' is not a member and threw a swallowed
+              // PrismaClientValidationError, leaving admin-created products
+              // with NO seller mapping (silently unsellable).
+              approvalStatus: 'PENDING_APPROVAL',
               isActive: false,
             });
           }
@@ -422,14 +446,18 @@ export class AdminProductsController {
             pickupAddress: sellerProfile?.storeAddress || null,
             pickupPincode: sellerProfile?.sellerZipCode || null,
             dispatchSla: 2,
-            approvalStatus: 'PENDING',
+            approvalStatus: 'PENDING_APPROVAL',
             isActive: false,
           });
         }
 
-        this.logger.log(`Auto-created PENDING seller mapping(s) for admin-created product ${product.id}`);
-      } catch (mappingError) {
-        this.logger.warn(`Failed to auto-create seller mapping for admin product ${product.id}: ${mappingError}`);
+        this.logger.log(`Auto-created PENDING_APPROVAL seller mapping(s) for admin-created product ${product.id}`);
+      } catch (err) {
+        // Surface the failure instead of silently swallowing it — a failed
+        // mapping create leaves the product unsellable, which the admin needs
+        // to know about (and act on) rather than discover via the storefront.
+        mappingError = err instanceof Error ? err.message : String(err);
+        this.logger.error(`Failed to auto-create seller mapping for admin product ${product.id}: ${mappingError}`);
       }
     }
 
@@ -438,7 +466,9 @@ export class AdminProductsController {
     return {
       success: true,
       message: seller
-        ? 'Product created as DRAFT. Seller mapping is PENDING and must be approved via /admin/products/:productId/approve.'
+        ? mappingError
+          ? `Product created as DRAFT, but the seller mapping could NOT be created (${mappingError}). Map the seller manually before approving.`
+          : 'Product created as DRAFT. Seller mapping is PENDING and must be approved via /admin/products/:productId/approve.'
         : 'Product created as DRAFT. Use /admin/products/:productId/approve to publish.',
       data: fullProduct,
     };
@@ -451,6 +481,7 @@ export class AdminProductsController {
     @CurrentAdmin() adminId: string,
     @Param('productId') productId: string,
     @Body() dto: UpdateProductDto,
+    @Req() req?: any,
   ) {
     const existing = await this.productRepo.findByIdBasic(productId);
     if (!existing) throw new NotFoundAppException('Product not found');
@@ -476,7 +507,14 @@ export class AdminProductsController {
     if (dto.description !== undefined) updateData.description = dto.description;
     if (dto.hasVariants !== undefined) updateData.hasVariants = dto.hasVariants;
     if (dto.basePrice !== undefined) updateData.basePrice = dto.basePrice;
-    if (dto.procurementPrice !== undefined) updateData.procurementPrice = dto.procurementPrice;
+    // procurementPrice is the platform-negotiated franchise landed cost feeding
+    // the margin/settlement engine — SUPER_ADMIN only. The admin edit forms
+    // always include the key (null when untouched), so SILENTLY IGNORE it for
+    // non-super admins (mirrors how categoryName is dropped) rather than 403-ing
+    // an otherwise-valid edit; only a super admin's value is written.
+    if (dto.procurementPrice !== undefined && req?.user?.roles?.includes('SUPER_ADMIN')) {
+      updateData.procurementPrice = dto.procurementPrice;
+    }
     if (dto.compareAtPrice !== undefined) updateData.compareAtPrice = dto.compareAtPrice;
     if (dto.costPrice !== undefined) updateData.costPrice = dto.costPrice;
     if (dto.baseSku !== undefined) updateData.baseSku = dto.baseSku;
@@ -517,6 +555,14 @@ export class AdminProductsController {
 
     const product = await this.productRepo.updateInTransaction(productId, updateData, dto.tags, dto.seo);
     this.logger.log(`Product ${productId} updated by admin ${adminId}`);
+
+    // Admin content edits land on a possibly-live product without going through
+    // moderation, so refresh the storefront caches (list + the old AND new slug
+    // if a rename changed it) rather than serving stale content until the TTL.
+    await this.invalidateStorefront(existing.slug);
+    if (updateData.slug && updateData.slug !== existing.slug) {
+      await this.catalogCache.invalidateProductDetail(updateData.slug).catch(() => {});
+    }
 
     const fullProduct = await this.productRepo.findFullProduct(product.id);
     return { success: true, message: 'Product updated successfully', data: fullProduct };
@@ -568,15 +614,57 @@ export class AdminProductsController {
     return { success: true, message: 'Product deleted successfully', data: null };
   }
 
+  /**
+   * Invalidate the storefront caches after a product lifecycle transition so a
+   * just-suspended/archived/rejected product stops rendering (and a just-
+   * approved one starts) within milliseconds instead of waiting out the TTL.
+   * Best-effort — a cache miss must never fail the moderation action.
+   */
+  private async invalidateStorefront(slug?: string | null): Promise<void> {
+    await this.catalogCache.invalidateProductLists().catch(() => {});
+    if (slug) await this.catalogCache.invalidateProductDetail(slug).catch(() => {});
+  }
+
+  /**
+   * Resolve which of `ids` are in the admin's seller-type scope, or `null` for
+   * an unrestricted admin (apply no filter). Out-of-scope / non-existent ids
+   * are simply absent from the returned set so callers report them as
+   * not-found (no existence leak). Mirrors the inline bulk-approve scoping.
+   */
+  private async computeInScopeIds(ids: string[], req: any): Promise<Set<string> | null> {
+    const scopedTypes = resolveScopedTypes(req?.user?.permissions);
+    if (!scopedTypes) return null; // unrestricted admin
+    const rows = await this.prisma.product.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, seller: { select: { sellerType: true } } } as any,
+    });
+    return new Set(
+      rows
+        .filter((r: any) => r.seller?.sellerType && scopedTypes.includes(r.seller.sellerType))
+        .map((r: any) => r.id as string),
+    );
+  }
+
   @Patch(':productId/approve')
   @HttpCode(HttpStatus.OK)
   @Permissions('catalog.approve')
   async approveProduct(@CurrentAdmin() adminId: string, @Param('productId') productId: string) {
     const product = await this.productRepo.findByIdBasic(productId);
     if (!product) throw new NotFoundAppException('Product not found');
-    // Already active/approved — idempotent success
-    if (product.status === 'ACTIVE' || product.status === 'APPROVED') {
-      return { success: true, message: 'Product is already active', data: null };
+    // Already live — idempotent success.
+    if (product.status === 'ACTIVE') {
+      return { success: true, message: 'Product is already live', data: null };
+    }
+    // Already catalog-approved — idempotent. Making it live is a separate
+    // SUPER_ADMIN step (PATCH :id/publish) performed after the HSN/tax config
+    // is set + verified, not a re-run of approve.
+    if (product.status === 'APPROVED') {
+      return {
+        success: true,
+        message:
+          'Product is already approved — a super admin sets the HSN/tax config and makes it live.',
+        data: null,
+      };
     }
 
     const approvableStatuses = ['SUBMITTED', 'DRAFT', 'REJECTED', 'CHANGES_REQUESTED'];
@@ -584,13 +672,9 @@ export class AdminProductsController {
       throw new AppException(`Cannot approve a product with status ${product.status}`, 'BAD_REQUEST');
     }
 
-    // Phase 39 (2026-05-21) — required category metafield gate on
-    // approve. The repository's approveInTransaction enforces the
-    // Phase 29 publish-readiness check (brand, category, basePrice,
-    // image) but doesn't reach into the metafield table. Catch the
-    // missing-required-metafield case here so the admin sees a
-    // single 400 with the field list rather than approving a row
-    // that then renders as "incomplete" on the storefront.
+    // Required category metafield gate — catalog content completeness (target
+    // gender, size, etc.). Caught here so the reviewer gets a single 400 with the
+    // field list rather than approving a row that renders "incomplete".
     const mfCheck = await this.metafieldValidation.validateRequiredOnSubmit(
       productId,
       product.categoryId ?? null,
@@ -603,17 +687,58 @@ export class AdminProductsController {
       );
     }
 
-    await this.productRepo.approveInTransaction(
+    // 2026-06-13 — catalog-only approval. → status=APPROVED (NOT live). The
+    // publish-readiness/tax gate runs later at make-live (PATCH :id/publish), a
+    // SUPER_ADMIN step after the HSN/tax config is set. This lets a seller admin
+    // sign off catalog content without being blocked on a tax verification only
+    // the super admin can perform.
+    await this.productRepo.catalogApproveInTransaction(
       productId,
-      [
-        { fromStatus: product.status, toStatus: 'APPROVED', changedBy: adminId, reason: 'Product approved' },
-        { fromStatus: 'APPROVED', toStatus: 'ACTIVE', changedBy: adminId, reason: 'Product activated after approval' },
-      ],
+      [{ fromStatus: product.status, toStatus: 'APPROVED', changedBy: adminId, reason: 'Catalog approved' }],
       { moderatorId: adminId },
     );
 
-    this.logger.log(`Product ${productId} approved by admin ${adminId}`);
+    this.logger.log(`Product ${productId} catalog-approved by admin ${adminId}`);
+    return {
+      success: true,
+      message: 'Product approved. A super admin must set the HSN/tax config and make it live.',
+      data: null,
+    };
+  }
 
+  // 2026-06-13 — make a catalog-approved product live (APPROVED → ACTIVE).
+  // SUPER_ADMIN only: this is the tax/finance signoff step performed AFTER the
+  // HSN/tax config is set + verified. Delegates to reactivateInTransaction, which
+  // runs the full publish-readiness gate (category/brand/price/image/
+  // taxConfigVerified-for-TAXABLE/required metafields) and activates DRAFT
+  // variants. Also re-publishes a previously-live SUSPENDED/ARCHIVED product.
+  @Patch(':productId/publish')
+  @HttpCode(HttpStatus.OK)
+  @Roles('SUPER_ADMIN')
+  @Permissions('catalog.approve')
+  async publishProduct(@CurrentAdmin() adminId: string, @Param('productId') productId: string) {
+    const product = await this.productRepo.findByIdBasic(productId);
+    if (!product) throw new NotFoundAppException('Product not found');
+    if (product.status === 'ACTIVE') {
+      return { success: true, message: 'Product is already live', data: null };
+    }
+    const publishable = ['APPROVED', 'SUSPENDED', 'ARCHIVED'];
+    if (!publishable.includes(product.status) || product.moderationStatus !== 'APPROVED') {
+      throw new BadRequestAppException(
+        'Catalog-approve this product first — only an approved product can be made live.',
+      );
+    }
+
+    await this.productRepo.reactivateInTransaction(
+      productId,
+      [{ fromStatus: product.status, toStatus: 'ACTIVE', changedBy: adminId, reason: 'Made live' }],
+      { moderatorId: adminId },
+    );
+
+    this.logger.log(`Product ${productId} made live by super admin ${adminId}`);
+
+    // The "now live" event — drives the seller notification + search indexing,
+    // both of which expect a live listing. Fires only on actual go-live.
     try {
       await this.eventBus.publish({
         eventName: 'catalog.listing.approved', aggregate: 'Product', aggregateId: productId,
@@ -624,7 +749,8 @@ export class AdminProductsController {
       this.logger.warn(`Failed to emit catalog.listing.approved event: ${err}`);
     }
 
-    return { success: true, message: 'Product approved and activated successfully', data: null };
+    await this.invalidateStorefront(product.slug);
+    return { success: true, message: 'Product is now live', data: null };
   }
 
   // Phase 37 — admin attestation of the tax config. Separate from
@@ -720,13 +846,13 @@ export class AdminProductsController {
     if (dto.supplyTaxability !== undefined) updateData.supplyTaxability = dto.supplyTaxability;
     if (dto.defaultUqcCode !== undefined) updateData.defaultUqcCode = dto.defaultUqcCode;
 
-    const { updated } = await this.prisma.$transaction(async (tx) => {
+    const { updated, autoSuspended } = await this.prisma.$transaction(async (tx) => {
       const candidates = await tx.product.findMany({
         where: baseWhere,
-        select: { id: true },
+        select: { id: true, status: true, supplyTaxability: true },
       });
       if (candidates.length === 0) {
-        return { updated: 0 };
+        return { updated: 0, autoSuspended: 0 };
       }
       if (candidates.length > BULK_TAX_CONFIG_MAX_PRODUCTS) {
         throw new BadRequestAppException(
@@ -744,26 +870,59 @@ export class AdminProductsController {
         where: { id: { in: candidateIds } },
         data: updateData as any,
       });
+
+      // Resetting taxConfigVerified on a LIVE TAXABLE product leaves it
+      // purchasable but un-invoiceable in STRICT tax mode (checkout doesn't gate
+      // on attestation). Take those offline so the storefront dual-gate hides
+      // them until an admin re-attests. Re-activation via /status→ACTIVE re-runs
+      // the readiness gate, which now re-requires taxConfigVerified, closing the
+      // loop. Final taxability = the new value if supplied, else the current one.
+      const finalTaxability = (c: { supplyTaxability: string | null }) =>
+        dto.supplyTaxability !== undefined ? dto.supplyTaxability : c.supplyTaxability;
+      const toSuspend = candidates.filter(
+        (c) => c.status === 'ACTIVE' && finalTaxability(c) === 'TAXABLE',
+      );
+      if (toSuspend.length > 0) {
+        await tx.product.updateMany({
+          where: { id: { in: toSuspend.map((c) => c.id) } },
+          data: { status: 'SUSPENDED' },
+        });
+        await tx.productStatusHistory.createMany({
+          data: toSuspend.map((c) => ({
+            productId: c.id,
+            fromStatus: 'ACTIVE',
+            toStatus: 'SUSPENDED',
+            changedBy: adminId,
+            reason:
+              'Auto-suspended: tax config reset — re-verify tax config before re-activating',
+          })),
+        });
+      }
+
       await this.taxAttestation.recordBulkEdited({
         tx,
         productIds: candidateIds,
         actorId: adminId,
         actorRole: 'ADMIN',
       });
-      return { updated: candidateIds.length };
+      return { updated: candidateIds.length, autoSuspended: toSuspend.length };
     });
 
     this.logger.log(
       `Bulk tax-config update by admin ${adminId}: ` +
-        `${updated} products affected (attestation reset; verify-tax-config required per product)`,
+        `${updated} products affected (attestation reset; verify-tax-config required per product); ` +
+        `${autoSuspended} live TAXABLE product(s) auto-suspended pending re-attestation`,
     );
     return {
       success: true,
       message:
         `${updated} product(s) updated. ` +
         `taxConfigVerified has been reset — each product requires a follow-up ` +
-        `POST /admin/products/:productId/verify-tax-config attestation.`,
-      data: { updated },
+        `POST /admin/products/:productId/verify-tax-config attestation.` +
+        (autoSuspended > 0
+          ? ` ${autoSuspended} live taxable product(s) were auto-suspended and must be re-verified, then re-activated, before they return to the storefront.`
+          : ''),
+      data: { updated, autoSuspended },
     };
   }
 
@@ -974,6 +1133,7 @@ export class AdminProductsController {
       this.logger.warn(`Failed to emit catalog.listing.rejected event: ${err}`);
     }
 
+    await this.invalidateStorefront(product.slug);
     return { success: true, message: 'Product rejected', data: null };
   }
 
@@ -1022,19 +1182,36 @@ export class AdminProductsController {
       this.logger.warn(`Failed to emit catalog.listing.request_changes event: ${err}`);
     }
 
+    await this.invalidateStorefront(product.slug);
     return { success: true, message: 'Changes requested', data: null };
   }
 
   @Patch(':productId/status')
   @HttpCode(HttpStatus.OK)
   @Permissions('catalog.approve')
-  async updateStatus(@CurrentAdmin() adminId: string, @Param('productId') productId: string, @Body() dto: AdminUpdateProductStatusDto) {
+  async updateStatus(
+    @CurrentAdmin() adminId: string,
+    @Param('productId') productId: string,
+    @Body() dto: AdminUpdateProductStatusDto,
+    @Req() req?: any,
+  ) {
     const product = await this.productRepo.findByIdBasic(productId);
     if (!product) throw new NotFoundAppException('Product not found');
 
+    // First publish (DRAFT/SUBMITTED → ACTIVE) is intentionally NOT allowed
+    // here — it must go through /approve, which enforces the publish-readiness
+    // gate. This endpoint only handles non-publish status moves plus the
+    // re-activation of an already-approved product (handled below).
+    // 2026-06-13 — APPROVED (catalog-approved, never-live) may ONLY go to ACTIVE
+    // (super-admin make-live) or ARCHIVED. SUSPENDED was removed: suspending a
+    // not-yet-live product is meaningless AND it created a make-live bypass —
+    // APPROVED→SUSPENDED then the seller self-status SUSPENDED→ACTIVE resume (a
+    // bare, ungated write) put a product live with no tax gate and no super admin.
+    // Keeping SUSPENDED reachable only from ACTIVE means a SUSPENDED row is always
+    // previously-live.
     const allowedTransitions: Record<string, string[]> = {
-      DRAFT: ['ACTIVE', 'ARCHIVED'], SUBMITTED: ['ACTIVE', 'ARCHIVED'],
-      APPROVED: ['ACTIVE', 'SUSPENDED', 'ARCHIVED'], ACTIVE: ['SUSPENDED', 'ARCHIVED', 'DRAFT'],
+      DRAFT: ['ARCHIVED'], SUBMITTED: ['ARCHIVED'],
+      APPROVED: ['ACTIVE', 'ARCHIVED'], ACTIVE: ['SUSPENDED', 'ARCHIVED', 'DRAFT'],
       SUSPENDED: ['ACTIVE', 'ARCHIVED'], ARCHIVED: ['ACTIVE', 'DRAFT'],
       REJECTED: ['DRAFT'], CHANGES_REQUESTED: ['DRAFT'],
     };
@@ -1043,12 +1220,49 @@ export class AdminProductsController {
       throw new AppException(`Cannot transition from ${product.status} to ${dto.status}`, 'BAD_REQUEST');
     }
 
+    if (dto.status === 'ACTIVE') {
+      // 2026-06-13 — making a product live is SUPER_ADMIN-only (same gate as the
+      // dedicated PATCH :id/publish endpoint), so a seller admin can't bypass the
+      // make-live restriction via the status route. The tax/finance signoff that
+      // gates go-live is a super-admin competence.
+      if (!req?.user?.roles?.includes('SUPER_ADMIN')) {
+        throw new ForbiddenAppException(
+          'Only a super admin can make a product live.',
+          'MAKE_LIVE_SUPER_ADMIN_ONLY',
+        );
+      }
+      // Re-activation must re-pass the publish-readiness + tax-attestation gate
+      // and re-activate DRAFT variants. The bare status write skipped all of it,
+      // so a previously-approved product whose data or attestation had drifted
+      // (e.g. a bulk HSN/GST reset that cleared taxConfigVerified) could return
+      // to a fully purchasable state un-validated. Only an already-APPROVED
+      // product can be re-activated here; first publish goes through /publish.
+      if (product.moderationStatus !== 'APPROVED') {
+        throw new AppException(
+          'Only an approved product can be set ACTIVE — submit it for approval first.',
+          'BAD_REQUEST',
+        );
+      }
+      await this.productRepo.reactivateInTransaction(
+        productId,
+        [{
+          fromStatus: product.status, toStatus: 'ACTIVE', changedBy: adminId,
+          reason: dto.reason || 'Re-activated',
+        }],
+        { moderatorId: adminId },
+      );
+      this.logger.log(`Product ${productId} re-activated to ACTIVE by admin ${adminId}`);
+      await this.invalidateStorefront(product.slug);
+      return { success: true, message: 'Product status updated to ACTIVE', data: null };
+    }
+
     await this.productRepo.updateStatusInTransaction(productId, { status: dto.status as any }, {
       fromStatus: product.status, toStatus: dto.status, changedBy: adminId,
       reason: dto.reason || `Status changed to ${dto.status}`,
     });
 
     this.logger.log(`Product ${productId} status changed to ${dto.status} by admin ${adminId}`);
+    await this.invalidateStorefront(product.slug);
     return { success: true, message: `Product status updated to ${dto.status}`, data: null };
   }
 
@@ -1138,23 +1352,13 @@ export class AdminProductsController {
           });
           continue;
         }
-        await this.productRepo.approveInTransaction(
+        // 2026-06-13 — catalog-only approval (→ APPROVED, not live). Making the
+        // batch live is a separate SUPER_ADMIN make-live step after tax config.
+        await this.productRepo.catalogApproveInTransaction(
           productId,
-          [
-            { fromStatus: product.status, toStatus: 'APPROVED', changedBy: adminId, reason: 'Bulk approve' },
-            { fromStatus: 'APPROVED', toStatus: 'ACTIVE', changedBy: adminId, reason: 'Product activated after bulk approval' },
-          ],
+          [{ fromStatus: product.status, toStatus: 'APPROVED', changedBy: adminId, reason: 'Bulk catalog approve' }],
           { moderatorId: adminId },
         );
-        await this.eventBus
-          .publish({
-            eventName: 'catalog.listing.approved',
-            aggregate: 'Product',
-            aggregateId: productId,
-            occurredAt: new Date(),
-            payload: { productId, productTitle: product.title, sellerId: product.sellerId, adminId },
-          })
-          .catch(() => {});
         ok.push(productId);
       } catch (err) {
         failed.push({
@@ -1181,9 +1385,13 @@ export class AdminProductsController {
   async bulkReject(
     @CurrentAdmin() adminId: string,
     @Body() dto: { productIds: string[]; reason: string },
+    @Req() req?: any,
   ) {
     const ids = this.validateBulkIds(dto.productIds);
     const reason = this.validateBulkReason(dto.reason, 'reason');
+    // Same seller-type scoping bulk-approve enforces — a scoped admin can't
+    // mass-reject out-of-scope sellers' products (reported as not-found).
+    const inScopeIds = await this.computeInScopeIds(ids, req);
 
     const ok: string[] = [];
     const alreadyDone: string[] = [];
@@ -1191,6 +1399,10 @@ export class AdminProductsController {
 
     for (const productId of ids) {
       try {
+        if (inScopeIds && !inScopeIds.has(productId)) {
+          failed.push({ id: productId, reason: 'Product not found' });
+          continue;
+        }
         const product = await this.productRepo.findByIdBasic(productId);
         if (!product) {
           failed.push({ id: productId, reason: 'Product not found' });
@@ -1222,6 +1434,7 @@ export class AdminProductsController {
             payload: { productId, productTitle: product.title, sellerId: product.sellerId, reason, adminId },
           })
           .catch(() => {});
+        await this.invalidateStorefront(product.slug);
         ok.push(productId);
       } catch (err) {
         failed.push({
@@ -1248,9 +1461,12 @@ export class AdminProductsController {
   async bulkRequestChanges(
     @CurrentAdmin() adminId: string,
     @Body() dto: { productIds: string[]; note: string },
+    @Req() req?: any,
   ) {
     const ids = this.validateBulkIds(dto.productIds);
     const note = this.validateBulkReason(dto.note, 'note');
+    // Seller-type scoping (see bulkReject).
+    const inScopeIds = await this.computeInScopeIds(ids, req);
 
     const ok: string[] = [];
     const alreadyDone: string[] = [];
@@ -1258,6 +1474,10 @@ export class AdminProductsController {
 
     for (const productId of ids) {
       try {
+        if (inScopeIds && !inScopeIds.has(productId)) {
+          failed.push({ id: productId, reason: 'Product not found' });
+          continue;
+        }
         const product = await this.productRepo.findByIdBasic(productId);
         if (!product) {
           failed.push({ id: productId, reason: 'Product not found' });
@@ -1289,6 +1509,7 @@ export class AdminProductsController {
             payload: { productId, productTitle: product.title, sellerId: product.sellerId, note, adminId },
           })
           .catch(() => {});
+        await this.invalidateStorefront(product.slug);
         ok.push(productId);
       } catch (err) {
         failed.push({

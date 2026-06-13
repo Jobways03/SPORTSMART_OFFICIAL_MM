@@ -22,7 +22,6 @@ import { useWishlistToggle } from '@/components/ui/ProductCard';
 import { apiClient } from '@/lib/api-client';
 import { useSession } from '@/lib/auth-context';
 import { sanitizeProductHtml } from '@/lib/sanitize';
-import { PricingTiersStrip } from './_components/PricingTiersStrip';
 // Phase 193 — related products (#2) + back-in-stock capture (#15).
 import { RelatedProducts } from './_components/RelatedProducts';
 import { NotifyWhenAvailable } from './_components/NotifyWhenAvailable';
@@ -92,7 +91,7 @@ interface ProductDetail {
   brand: { id: string; name: string } | null;
   images: ProductImage[];
   variants: Variant[];
-  tags: { tag: string }[];
+  tags: { name: string; slug: string }[];
 }
 
 const COLOR_MAP: Record<string, string> = {
@@ -649,24 +648,6 @@ export default function ProductDetailPage() {
               </section>
             )}
 
-            {/* Story 3.5 / Phase 44 (2026-05-21) — volume pricing strip.
-                Now passes listUnitPrice from the selected-variant /
-                base-price source so the strip can render the effective
-                per-unit price next to each rung. currentQuantity stays
-                at 1 here because the PDP doesn't have a quantity
-                selector yet; the cart UI is where the customer changes
-                qty, and the strip re-renders on PDP revisit. */}
-            <PricingTiersStrip
-              productId={product.id}
-              variantId={selectedVariant?.id ?? null}
-              currentQuantity={1}
-              listUnitPrice={
-                currentPrice !== null && currentPrice !== undefined
-                  ? Number(currentPrice)
-                  : undefined
-              }
-            />
-
             {/* Specs */}
             <section className="mt-10">
               <h2 className="font-display text-h2 text-ink-900 mb-4">Product details</h2>
@@ -697,16 +678,19 @@ export default function ProductDetailPage() {
               </dl>
             </section>
 
-            {product.tags.length > 0 && (
+            {product.tags.filter((t) => t.name?.trim()).length > 0 && (
               <div className="mt-8 flex flex-wrap gap-2">
-                {product.tags.map((t, idx) => (
-                  <span
-                    key={`${t.tag}-${idx}`}
-                    className="inline-flex items-center h-7 px-3 border border-ink-300 text-caption text-ink-700"
-                  >
-                    {t.tag}
-                  </span>
-                ))}
+                {product.tags
+                  .filter((t) => t.name?.trim())
+                  .map((t, idx) => (
+                    <Link
+                      key={`${t.slug || t.name}-${idx}`}
+                      href={`/products?tag=${encodeURIComponent(t.name)}`}
+                      className="inline-flex items-center h-7 px-3 border border-ink-300 text-caption text-ink-700 transition-colors hover:border-ink-900 hover:text-ink-900"
+                    >
+                      {t.name}
+                    </Link>
+                  ))}
               </div>
             )}
           </div>

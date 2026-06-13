@@ -173,60 +173,67 @@ export default function SellersPage() {
   return (
     <div className="sellers-page">
       <div className="sellers-header">
-        <h1>
-          Sellers
-          {!loading && (
-            <span className="sellers-header-count">({pagination.total})</span>
-          )}
-        </h1>
-      </div>
-
-      {/* Filters */}
-      <div className="sellers-filters">
-        <div className="sellers-search">
-          <span className="sellers-search-icon">&#128269;</span>
-          <input
-            type="text"
-            placeholder="Search by name, email, phone, shop..."
-            value={search}
-            onChange={(e) => handleSearchChange(e.target.value)}
-          />
+        <div>
+          <h1>
+            Sellers
+            {!loading && (
+              <span className="sellers-count-pill">{pagination.total}</span>
+            )}
+          </h1>
+          <p className="sellers-subtitle">
+            Manage registered sellers — verification, access and account actions.
+          </p>
         </div>
-
-        <select
-          className="filter-select"
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-        >
-          <option value="">All Status</option>
-          <option value="ACTIVE">Active</option>
-          <option value="PENDING_APPROVAL">Pending Approval</option>
-          <option value="INACTIVE">Inactive</option>
-          <option value="SUSPENDED">Suspended</option>
-          <option value="DEACTIVATED">Deactivated</option>
-        </select>
-
-        <select
-          className="filter-select"
-          value={verificationFilter}
-          onChange={(e) => setVerificationFilter(e.target.value)}
-        >
-          <option value="">All Verification</option>
-          <option value="VERIFIED">Verified</option>
-          <option value="NOT_VERIFIED">Not Verified</option>
-          <option value="UNDER_REVIEW">Under Review</option>
-          <option value="REJECTED">Rejected</option>
-        </select>
-
-        {hasFilters && (
-          <button className="filter-clear-btn" onClick={clearFilters}>
-            Clear filters
-          </button>
-        )}
       </div>
 
       {/* Table */}
       <div className="sellers-table-wrap">
+        {/* Toolbar (search + filters) */}
+        <div className="sellers-toolbar">
+          <div className="sellers-search">
+            <span className="sellers-search-icon">&#128269;</span>
+            <input
+              type="text"
+              placeholder="Search by name, email, phone, shop..."
+              value={search}
+              onChange={(e) => handleSearchChange(e.target.value)}
+            />
+          </div>
+
+          <div className="sellers-toolbar-filters">
+            <select
+              className="filter-select"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              <option value="">All Status</option>
+              <option value="ACTIVE">Active</option>
+              <option value="PENDING_APPROVAL">Pending Approval</option>
+              <option value="INACTIVE">Inactive</option>
+              <option value="SUSPENDED">Suspended</option>
+              <option value="DEACTIVATED">Deactivated</option>
+            </select>
+
+            <select
+              className="filter-select"
+              value={verificationFilter}
+              onChange={(e) => setVerificationFilter(e.target.value)}
+            >
+              <option value="">All Verification</option>
+              <option value="VERIFIED">Verified</option>
+              <option value="NOT_VERIFIED">Not Verified</option>
+              <option value="UNDER_REVIEW">Under Review</option>
+              <option value="REJECTED">Rejected</option>
+            </select>
+
+            {hasFilters && (
+              <button className="filter-clear-btn" onClick={clearFilters}>
+                Clear filters
+              </button>
+            )}
+          </div>
+        </div>
+
         {loading ? (
           <div className="sellers-loading">Loading sellers...</div>
         ) : error ? (
@@ -263,9 +270,20 @@ export default function SellersPage() {
                 {sellers.map(seller => (
                   <tr key={seller.sellerId}>
                     <td>
-                      <div className="seller-name-cell">
-                        <span className="seller-name-primary">{seller.sellerName}</span>
-                        <span className="seller-name-shop">{seller.sellerShopName}</span>
+                      <div className="seller-cell">
+                        <div
+                          className="seller-avatar"
+                          style={{
+                            background: `hsl(${avatarHue(seller.sellerName)}, 60%, 92%)`,
+                            color: `hsl(${avatarHue(seller.sellerName)}, 45%, 35%)`,
+                          }}
+                        >
+                          {getInitials(seller.sellerName)}
+                        </div>
+                        <div className="seller-name-cell">
+                          <span className="seller-name-primary">{seller.sellerName}</span>
+                          <span className="seller-name-shop">{seller.sellerShopName}</span>
+                        </div>
                       </div>
                     </td>
                     <td>
@@ -376,6 +394,21 @@ export default function SellersPage() {
       )}
     </div>
   );
+}
+
+function getInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+function avatarHue(name: string): number {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) % 360;
+  }
+  return hash;
 }
 
 function generatePageNumbers(current: number, total: number): (number | string)[] {

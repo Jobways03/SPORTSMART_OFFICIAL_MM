@@ -54,7 +54,19 @@ export class PrismaProductRepository implements IProductRepository {
     const { page, limit, search, status, moderationStatus, categoryId, sellerId, hasSellers, allowedSellerTypes } = params;
 
     const where: any = { isDeleted: false };
-    if (status) where.status = status;
+    if (status) {
+      where.status = status;
+    } else {
+      // Hide never-submitted drafts from the default admin view. A product the
+      // seller created but hasn't yet submitted for review is DRAFT +
+      // moderationStatus PENDING and isn't the admin's concern until it enters
+      // the review pipeline. Submitting flips status to SUBMITTED (moderation
+      // stays PENDING), so submitted items still show; a DRAFT sent back from
+      // REJECTED/CHANGES_REQUESTED keeps its non-PENDING moderationStatus and
+      // also still shows. An explicit ?status=DRAFT overrides this so admins can
+      // still find/audit drafts when they choose to.
+      where.NOT = [{ status: 'DRAFT', moderationStatus: 'PENDING' }];
+    }
     if (moderationStatus) where.moderationStatus = moderationStatus;
     if (categoryId) where.categoryId = categoryId;
     if (sellerId) where.sellerId = sellerId;
@@ -218,11 +230,37 @@ export class PrismaProductRepository implements IProductRepository {
         category: true,
         brand: true,
         statusHistory: { orderBy: { createdAt: 'desc' } },
+        // Phase 39 — the seller edit form hydrates its Category-fields
+        // section from these rows (keyed by metafieldDefinitionId).
+        // Without this include the form silently rendered every
+        // metafield as empty even though values were persisted.
+        metafields: { include: { metafieldDefinition: true } },
       },
     });
   }
 
   async createInTransaction(
+    data: any,
+    tags?: string[],
+    seo?: any,
+    variants?: any[],
+    statusHistoryEntry?: any,
+  ): Promise<any> {
+    try {
+      return await this.createInTransactionUnsafe(data, tags, seo, variants, statusHistoryEntry);
+    } catch (err: any) {
+      // Map a unique-constraint violation (slug-collision race, or a duplicate
+      // variant SKU) to a clean 409 instead of leaking a Prisma 500.
+      if (err?.code === 'P2002') {
+        throw new ConflictAppException(
+          'A product with these details already exists (duplicate slug or SKU). Please retry.',
+        );
+      }
+      throw err;
+    }
+  }
+
+  private async createInTransactionUnsafe(
     data: any,
     tags?: string[],
     seo?: any,
@@ -388,92 +426,9 @@ export class PrismaProductRepository implements IProductRepository {
     // conflict that the controller can surface as 409.
     const eligible = MODERATION_REVIEW_STATES;
     await this.prisma.$transaction(async (tx) => {
-      // Phase 29 (2026-05-21) — publish-readiness check.
-      //
-      // Pre-Phase-29 approve was just a status stamp: a DRAFT row with
-      // only a title could be flipped to ACTIVE. Storefront then 500'd
-      // on null basePrice / rendered empty cards / GST invoices broke
-      // mid-checkout. The audit caller (admin or bulk) gets the
-      // BadRequestAppException with the missing-field list so the
-      // moderation UI can show what's blocking.
-      const readiness = await tx.product.findUnique({
-        where: { id: productId },
-        select: {
-          categoryId: true,
-          brandId: true,
-          basePrice: true,
-          taxConfigVerified: true,
-          supplyTaxability: true,
-          _count: { select: { images: true } },
-        },
-      });
-      if (!readiness) {
-        throw new NotFoundAppException('Product not found');
-      }
-
-      const missing: string[] = [];
-      if (!readiness.categoryId) missing.push('categoryId');
-      if (!readiness.brandId) missing.push('brandId');
-      if (readiness.basePrice == null) missing.push('basePrice');
-      if (readiness._count.images < 1) missing.push('at least one image');
-      if (
-        readiness.supplyTaxability === 'TAXABLE' &&
-        !readiness.taxConfigVerified
-      ) {
-        missing.push('taxConfigVerified');
-      }
-
-      // Required metafields for the product's category (with category-
-      // inheritance via the metafield repo). Inlined here so the
-      // readiness check stays atomic with the status flip.
-      if (readiness.categoryId) {
-        // Walk parent chain so a category inheriting required metafields
-        // from its root still enforces them at approval time.
-        const categoryIds: string[] = [];
-        let cursor: string | null = readiness.categoryId;
-        let safety = 0;
-        while (cursor && safety < 10) {
-          categoryIds.push(cursor);
-          const cat: { parentId: string | null } | null =
-            await tx.category.findUnique({
-              where: { id: cursor },
-              select: { parentId: true },
-            });
-          cursor = cat?.parentId ?? null;
-          safety += 1;
-        }
-
-        const requiredDefs = await tx.metafieldDefinition.findMany({
-          where: {
-            categoryId: { in: categoryIds },
-            isRequired: true,
-          },
-          select: { id: true, name: true },
-        });
-        if (requiredDefs.length > 0) {
-          const presentMetafields = await tx.productMetafield.findMany({
-            where: {
-              productId,
-              metafieldDefinitionId: { in: requiredDefs.map((d) => d.id) },
-            },
-            select: { metafieldDefinitionId: true },
-          });
-          const presentIds = new Set(
-            presentMetafields.map((m) => m.metafieldDefinitionId),
-          );
-          for (const def of requiredDefs) {
-            if (!presentIds.has(def.id)) {
-              missing.push(`metafield: ${def.name}`);
-            }
-          }
-        }
-      }
-
-      if (missing.length > 0) {
-        throw new BadRequestAppException(
-          `Cannot publish — missing: ${missing.join(', ')}`,
-        );
-      }
+      // Phase 29 (2026-05-21) — publish-readiness check (extracted to
+      // assertPublishReadyTx so the re-activation path enforces the same gate).
+      await this.assertPublishReadyTx(tx, productId);
 
       // Phase 31 — race-safe status-conditional update. updateMany so
       // the WHERE predicate is part of the same SQL UPDATE the DB
@@ -505,6 +460,182 @@ export class PrismaProductRepository implements IProductRepository {
       // accepts ACTIVE/OUT_OF_STOCK, so every such product failed add-to-cart
       // with "Variant not found or not available". Flip DRAFT → ACTIVE in the
       // same tx (DISABLED/ARCHIVED/OUT_OF_STOCK left untouched).
+      await tx.productVariant.updateMany({
+        where: { productId, isDeleted: false, status: 'DRAFT' },
+        data: { status: 'ACTIVE' },
+      });
+
+      for (const entry of historyEntries) {
+        await tx.productStatusHistory.create({ data: { productId, ...entry } });
+      }
+    });
+  }
+
+  /**
+   * Catalog-only approval (2026-06-13). Flips a review-state product
+   * (SUBMITTED/DRAFT/REJECTED/CHANGES_REQUESTED) → status='APPROVED',
+   * moderationStatus='APPROVED' — catalog content is signed off but the product
+   * is NOT live yet. Deliberately does NOT run assertPublishReadyTx (the tax /
+   * HSN gate) and does NOT activate variants: making it live is a separate
+   * SUPER_ADMIN step (reactivateInTransaction) that runs the full publish gate
+   * after the tax/finance team sets the HSN + tax config. Same race-safe CAS as
+   * approveInTransaction so two concurrent approvals can't both land.
+   */
+  async catalogApproveInTransaction(
+    productId: string,
+    historyEntries: any[],
+    moderator?: { moderatorId: string; reviewedAt?: Date },
+  ): Promise<void> {
+    const reviewedAt = moderator?.reviewedAt ?? new Date();
+    const eligible = MODERATION_REVIEW_STATES;
+    await this.prisma.$transaction(async (tx) => {
+      const res = await tx.product.updateMany({
+        where: { id: productId, status: { in: eligible } },
+        data: {
+          status: 'APPROVED',
+          moderationStatus: 'APPROVED',
+          moderationNote: null,
+          rejectionReason: null,
+          changeRequestNote: null,
+          moderatorId: moderator?.moderatorId ?? null,
+          reviewedAt,
+        },
+      });
+      if (res.count !== 1) {
+        throw new ConflictAppException(
+          'Product was modified concurrently — refresh and retry.',
+        );
+      }
+      for (const entry of historyEntries) {
+        await tx.productStatusHistory.create({ data: { productId, ...entry } });
+      }
+    });
+  }
+
+  /**
+   * Publish-readiness gate (extracted from approveInTransaction, Phase 29).
+   * Throws BadRequestAppException with the missing-field list if the product
+   * is not safe to make live: requires categoryId, brandId, basePrice, ≥1
+   * image, taxConfigVerified (for TAXABLE), and all required category
+   * metafields (with parent-chain inheritance). Runs inside the caller's tx so
+   * the check stays atomic with the status flip. Used by BOTH first-approval
+   * (approveInTransaction) and re-activation (reactivateInTransaction) so a
+   * product that drifted out of readiness (e.g. a bulk tax-config reset that
+   * cleared taxConfigVerified) cannot be silently re-published.
+   */
+  private async assertPublishReadyTx(tx: any, productId: string): Promise<void> {
+    const readiness = await tx.product.findUnique({
+      where: { id: productId },
+      select: {
+        categoryId: true,
+        brandId: true,
+        basePrice: true,
+        taxConfigVerified: true,
+        supplyTaxability: true,
+        _count: { select: { images: true } },
+      },
+    });
+    if (!readiness) {
+      throw new NotFoundAppException('Product not found');
+    }
+
+    const missing: string[] = [];
+    if (!readiness.categoryId) missing.push('categoryId');
+    if (!readiness.brandId) missing.push('brandId');
+    if (readiness.basePrice == null) missing.push('basePrice');
+    if (readiness._count.images < 1) missing.push('at least one image');
+    if (
+      readiness.supplyTaxability === 'TAXABLE' &&
+      !readiness.taxConfigVerified
+    ) {
+      missing.push('taxConfigVerified');
+    }
+
+    if (readiness.categoryId) {
+      // Walk the parent chain so a category inheriting required metafields
+      // from its root still enforces them at publish time.
+      const categoryIds: string[] = [];
+      let cursor: string | null = readiness.categoryId;
+      let safety = 0;
+      while (cursor && safety < 10) {
+        categoryIds.push(cursor);
+        const cat: { parentId: string | null } | null =
+          await tx.category.findUnique({
+            where: { id: cursor },
+            select: { parentId: true },
+          });
+        cursor = cat?.parentId ?? null;
+        safety += 1;
+      }
+
+      const requiredDefs = await tx.metafieldDefinition.findMany({
+        where: { categoryId: { in: categoryIds }, isRequired: true },
+        select: { id: true, name: true },
+      });
+      if (requiredDefs.length > 0) {
+        const presentMetafields = await tx.productMetafield.findMany({
+          where: {
+            productId,
+            metafieldDefinitionId: { in: requiredDefs.map((d: any) => d.id) },
+          },
+          select: { metafieldDefinitionId: true },
+        });
+        const presentIds = new Set(
+          presentMetafields.map((m: any) => m.metafieldDefinitionId),
+        );
+        for (const def of requiredDefs) {
+          if (!presentIds.has(def.id)) {
+            missing.push(`metafield: ${def.name}`);
+          }
+        }
+      }
+    }
+
+    if (missing.length > 0) {
+      throw new BadRequestAppException(
+        `Cannot publish — missing: ${missing.join(', ')}`,
+      );
+    }
+  }
+
+  /**
+   * Re-activate a previously-approved product (SUSPENDED / ARCHIVED / APPROVED
+   * → ACTIVE) via the admin status endpoint. Unlike the bare status write this
+   * re-runs the full publish-readiness + attestation gate and re-activates
+   * DRAFT variants — so a product whose data or tax attestation drifted since
+   * its original approval cannot return to a purchasable state without passing
+   * the gate again. The CAS predicate also requires moderationStatus=APPROVED,
+   * so a never-approved product can never reach ACTIVE through this path
+   * (first publish must go through approveInTransaction).
+   */
+  async reactivateInTransaction(
+    productId: string,
+    historyEntries: any[],
+    moderator?: { moderatorId: string; reviewedAt?: Date },
+  ): Promise<void> {
+    const reviewedAt = moderator?.reviewedAt ?? new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await this.assertPublishReadyTx(tx, productId);
+
+      const res = await tx.product.updateMany({
+        where: {
+          id: productId,
+          status: { in: ['SUSPENDED', 'ARCHIVED', 'APPROVED'] },
+          moderationStatus: 'APPROVED',
+        },
+        data: {
+          status: 'ACTIVE',
+          moderationStatus: 'APPROVED',
+          moderatorId: moderator?.moderatorId ?? null,
+          reviewedAt,
+        },
+      });
+      if (res.count !== 1) {
+        throw new ConflictAppException(
+          'Product was modified concurrently or is not eligible for re-activation — refresh and retry.',
+        );
+      }
+
       await tx.productVariant.updateMany({
         where: { productId, isDeleted: false, status: 'DRAFT' },
         data: { status: 'ACTIVE' },

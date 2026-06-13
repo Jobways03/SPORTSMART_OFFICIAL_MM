@@ -23,6 +23,7 @@ export {
   AdminOrderSellerScopeGuard,
   AdminReturnSellerScopeGuard,
   AdminProductSellerScopeGuard,
+  AdminMappingSellerScopeGuard,
 } from './entity-seller-scope.guard';
 // Phase 10 (PR 10.10) — step-up auth for destructive ops. Re-export
 // from core/step-up via the guards index so callers can pick up the

@@ -26,10 +26,9 @@ const CART_LINE_CAP = 50;
 export class CartService {
   constructor(
     @Inject(CART_REPOSITORY) private readonly cartRepo: CartRepository,
-    // Phase 44 (2026-05-21) — pricing-tier resolution. The cart no
-    // longer computes line price as raw variant.price / basePrice;
-    // it goes through the catalog facade so every line reflects the
-    // best-eligible ProductPricingTier (effective unit + snapshot).
+    // Phase 64 (2026-05-22) — the catalog facade powers the cart-level
+    // serviceability preview (checkCartServiceability). forwardRef
+    // breaks the pre-existing Catalog → Cart import cycle.
     @Inject(forwardRef(() => CatalogPublicFacade))
     private readonly catalog: CatalogPublicFacade,
   ) {}
@@ -55,20 +54,6 @@ export class CartService {
     // attempt to checkout something un-routable.
     const liveItems = cart.items;
 
-    // Phase 44 (2026-05-21) — batch-resolve pricing tiers up-front in
-    // one DB query so an N-item cart doesn't fire N separate tier
-    // lookups. Lines whose qty doesn't qualify return baseResult and
-    // pay the list price (current behaviour preserved for them).
-    const resolveInputs = liveItems.map((item) => ({
-      productId: item.productId,
-      variantId: item.variantId ?? null,
-      quantity: item.quantity,
-      listUnitPrice: item.variant
-        ? Number(item.variant.price)
-        : Number(item.product.basePrice ?? 0),
-    }));
-    const resolved = await this.catalog.resolveBatchUnitPrices(resolveInputs);
-
     // Phase 196 (#10) — one batched stock aggregate for the whole page
     // instead of N getAggregatedStock round-trips inside the map.
     const stockMap = await this.cartRepo.getAggregatedStockBatch(
@@ -82,9 +67,11 @@ export class CartService {
     // string the client should trust.
     let totalPaise = 0;
     const shaped = await Promise.all(
-      liveItems.map(async (item, idx) => {
-        const pricing = resolved[idx]!;
-        const unitPaise = Math.round(pricing.effectiveUnitPrice * 100);
+      liveItems.map(async (item) => {
+        const listUnitPrice = item.variant
+          ? Number(item.variant.price)
+          : Number(item.product.basePrice ?? 0);
+        const unitPaise = Math.round(listUnitPrice * 100);
         const lineTotalInPaise = unitPaise * item.quantity;
         const lineTotal = lineTotalInPaise / 100;
 
@@ -109,33 +96,15 @@ export class CartService {
         const availableStock =
           stockMap.get(`${item.productId}:${item.variantId ?? 'null'}`) ?? 0;
 
-        // Phase 44 — persist the tier snapshot on the row so checkout
-        // + order placement can read it without recomputing (and so
-        // refund/dispute review can prove the discount). Skip the
-        // write when nothing changed to avoid pointless updates.
-        const snapshotDrifted =
-          (item.appliedPricingTierId ?? null) !== (pricing.appliedTierId ?? null)
-          || Number(item.appliedListUnitPrice ?? -1) !== pricing.listUnitPrice;
-        if (snapshotDrifted) {
-          await this.cartRepo.updateCartItemPricingSnapshot(item.id, {
-            appliedPricingTierId: pricing.appliedTierId,
-            appliedDiscountPercent: pricing.appliedDiscountPercent,
-            appliedFixedUnitPrice: pricing.appliedFixedUnitPrice,
-            appliedListUnitPrice: pricing.listUnitPrice,
-          });
-        }
-
         // Phase 61 — price-drift detection (audit Gap #22). The
         // snapshot was taken in paise at add-time; compare against
-        // the freshly-resolved effective price (also in paise) so
-        // we surface a `priceChanged: true` flag the UI can show as
+        // the live list price (also in paise) so we surface a
+        // `priceChanged: true` flag the UI can show as
         // "Price updated since you added — review before checkout".
-        const effectivePriceInPaise = BigInt(
-          Math.round(pricing.effectiveUnitPrice * 100),
-        );
+        const livePriceInPaise = BigInt(unitPaise);
         const snapshot = item.unitPriceAtAddInPaise;
         const priceChanged =
-          snapshot !== null && snapshot !== undefined && snapshot !== effectivePriceInPaise;
+          snapshot !== null && snapshot !== undefined && snapshot !== livePriceInPaise;
 
         return {
           id: item.id,
@@ -154,10 +123,8 @@ export class CartService {
           sellerId: item.product.seller?.id ?? null,
           sellerName: item.product.seller?.sellerName ?? null,
           sellerShopName: item.product.seller?.sellerShopName ?? null,
-          unitPrice: pricing.effectiveUnitPrice,
-          listUnitPrice: pricing.listUnitPrice,
-          appliedPricingTierId: pricing.appliedTierId,
-          appliedDiscountPercent: pricing.appliedDiscountPercent,
+          unitPrice: listUnitPrice,
+          listUnitPrice,
           lineTotal,
           stock: availableStock,
           outOfStock: availableStock === 0,
@@ -273,19 +240,11 @@ export class CartService {
     // create branch (Gap #22).
     const availableStock = await this.cartRepo.getAggregatedStock(productId, variantId);
 
-    // Resolve unit price once for the price snapshot. We use the
-    // tier-resolved EFFECTIVE price (not raw list) so the snapshot
-    // reflects what the customer was actually quoted at add-time.
-    const resolved = await this.catalog.resolveBatchUnitPrices([
-      {
-        productId,
-        variantId: variantId ?? null,
-        quantity,
-        listUnitPrice: 0, // resolver pulls live list price internally
-      },
-    ]);
-    const unitPriceInPaiseSnapshot = BigInt(
-      Math.round((resolved[0]?.effectiveUnitPrice ?? 0) * 100),
+    // Read the live list price once for the add-time snapshot so the
+    // row reflects what the customer was actually quoted at add-time.
+    const unitPriceInPaiseSnapshot = await this.cartRepo.getListUnitPriceInPaise(
+      productId,
+      variantId ?? null,
     );
 
     const cart = await this.cartRepo.upsertCart(customerId);

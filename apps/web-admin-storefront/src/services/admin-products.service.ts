@@ -108,8 +108,18 @@ export const adminProductsService = {
     return apiClient(`/admin/products/${productId}`, { method: 'DELETE' });
   },
 
+  // Catalog approval (seller admin) — moves the product to APPROVED (catalog
+  // content signed off) but NOT live. A super admin then sets the HSN/tax config
+  // and calls makeLive.
   approveProduct(productId: string): Promise<ApiResponse> {
     return apiClient(`/admin/products/${productId}/approve`, { method: 'PATCH' });
+  },
+
+  // Make a catalog-approved product live (APPROVED → ACTIVE). SUPER_ADMIN only;
+  // runs the publish-readiness/tax gate server-side (requires taxConfigVerified
+  // for TAXABLE products).
+  makeLive(productId: string): Promise<ApiResponse> {
+    return apiClient(`/admin/products/${productId}/publish`, { method: 'PATCH' });
   },
 
   rejectProduct(productId: string, reason: string): Promise<ApiResponse> {

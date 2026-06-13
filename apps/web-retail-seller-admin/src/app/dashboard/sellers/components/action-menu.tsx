@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { SellerListItem } from '@/services/admin-sellers.service';
 
 interface ActionMenuProps {
@@ -27,17 +28,44 @@ export default function ActionMenu({
   onDelete,
 }: ActionMenuProps) {
   const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState<{ top: number; right: number } | null>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const dropdownRef = useRef<HTMLDivElement>(null);
 
+  // The list cards use overflow:hidden (to clip their rounded corners), which would
+  // also clip this menu on short/collapsed rows. Rendering it in a portal to <body>
+  // with fixed positioning escapes that clip so the full menu always shows.
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
+    if (!open) {
+      setCoords(null);
+      return;
+    }
+    const place = () => {
+      const btn = triggerRef.current;
+      if (!btn) return;
+      const r = btn.getBoundingClientRect();
+      const h = dropdownRef.current?.offsetHeight ?? 0;
+      const openUp = h > 0 && window.innerHeight - r.bottom < h + 12 && r.top > h + 12;
+      setCoords({
+        top: openUp ? r.top - h - 6 : r.bottom + 6,
+        right: window.innerWidth - r.right,
+      });
     };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, []);
+    place();
+    const onDocMouseDown = (e: MouseEvent) => {
+      const t = e.target as Node;
+      if (triggerRef.current?.contains(t) || dropdownRef.current?.contains(t)) return;
+      setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [open]);
 
   const canImpersonate = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole);
   const canDelete = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole);
@@ -48,52 +76,65 @@ export default function ActionMenu({
   };
 
   return (
-    <div className="action-menu-wrap" ref={ref}>
+    <div className="action-menu-wrap">
       <button
+        ref={triggerRef}
         className="action-menu-btn"
-        onClick={() => setOpen(!open)}
+        onClick={(e) => {
+          e.stopPropagation();
+          setOpen((o) => !o);
+        }}
         aria-label="Actions"
         aria-expanded={open}
       >
         &#8942;
       </button>
 
-      {open && (
-        <div className="action-menu-dropdown">
-          <button className="action-menu-item" onClick={() => handleAction(onView)}>
-            <span className="action-icon">&#128065;</span>
-            View Details
-          </button>
-          <button className="action-menu-item" onClick={() => handleAction(onEditStatus)}>
-            <span className="action-icon">&#9881;</span>
-            Change Status
-          </button>
-
-          <button className="action-menu-item" onClick={() => handleAction(onSendMessage)}>
-            <span className="action-icon">&#9993;</span>
-            Send Message
-          </button>
-          <button className="action-menu-item" onClick={() => handleAction(onChangePassword)}>
-            <span className="action-icon">&#128274;</span>
-            Change Password
-          </button>
-          {canImpersonate && seller.status === 'ACTIVE' && (
-            <button className="action-menu-item" onClick={() => handleAction(onImpersonate)}>
-              <span className="action-icon">&#128100;</span>
-              Impersonate
+      {open &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            className="action-menu-dropdown"
+            role="menu"
+            style={{
+              position: 'fixed',
+              top: coords?.top ?? -9999,
+              right: coords?.right ?? 0,
+              // Above the fixed navbar (z-index 100) and sidebar (90).
+              zIndex: 1000,
+              visibility: coords ? 'visible' : 'hidden',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button className="action-menu-item" role="menuitem" onClick={() => handleAction(onView)}>
+              View Details
             </button>
-          )}
-          {canDelete && (
-            <>
-              <div className="action-menu-divider" />
-              <button className="action-menu-item danger" onClick={() => handleAction(onDelete)}>
-                <span className="action-icon">&#128465;</span>
-                Delete Seller
+            <button className="action-menu-item" role="menuitem" onClick={() => handleAction(onEditStatus)}>
+              Change Status
+            </button>
+            <button className="action-menu-item" role="menuitem" onClick={() => handleAction(onSendMessage)}>
+              Send Message
+            </button>
+            <button className="action-menu-item" role="menuitem" onClick={() => handleAction(onChangePassword)}>
+              Change Password
+            </button>
+            {canImpersonate && seller.status === 'ACTIVE' && (
+              <button className="action-menu-item" role="menuitem" onClick={() => handleAction(onImpersonate)}>
+                Impersonate
               </button>
-            </>
-          )}
-        </div>
-      )}
+            )}
+            {canDelete && (
+              <>
+                <div className="action-menu-divider" />
+                <button className="action-menu-item danger" role="menuitem" onClick={() => handleAction(onDelete)}>
+                  Delete Seller
+                </button>
+              </>
+            )}
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }

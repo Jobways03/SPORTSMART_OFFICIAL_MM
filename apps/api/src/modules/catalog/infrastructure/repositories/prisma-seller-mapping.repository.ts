@@ -80,6 +80,12 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
   async findPendingPaginated(page: number, limit: number): Promise<{ mappings: any[]; total: number }> {
     const where = {
       approvalStatus: 'PENDING_APPROVAL' as const,
+      // Hide mappings whose product is a never-submitted draft (DRAFT +
+      // moderationStatus PENDING) — consistent with the admin product list.
+      // A seller's pending mapping shouldn't enter the approval queue (or the
+      // sidebar badge count) until they submit the product for review; once
+      // submitted the product leaves DRAFT and its mappings reappear here.
+      product: { NOT: { status: 'DRAFT' as const, moderationStatus: 'PENDING' as const } },
       // Exclude mappings for soft-deleted variants
       OR: [
         { variantId: null },
@@ -105,6 +111,20 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
 
   async findById(mappingId: string): Promise<any | null> {
     return this.prisma.sellerProductMapping.findUnique({ where: { id: mappingId } });
+  }
+
+  async findSellerScopeByIds(
+    mappingIds: string[],
+  ): Promise<Array<{ id: string; sellerType: string | null }>> {
+    if (mappingIds.length === 0) return [];
+    const rows = await this.prisma.sellerProductMapping.findMany({
+      where: { id: { in: mappingIds } },
+      select: { id: true, seller: { select: { sellerType: true } } },
+    });
+    return rows.map((r: any) => ({
+      id: r.id,
+      sellerType: r.seller?.sellerType ?? null,
+    }));
   }
 
   async update(mappingId: string, data: any): Promise<any> {
@@ -318,8 +338,13 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
     // until the expiry sweep cleared them. The CAS flip + per-row
     // transaction mirrors the expiry-sweep pattern so a concurrent
     // expiry doesn't double-count.
+    // Only release cart-level holds (orderId IS NULL). A RESERVED hold that is
+    // already attached to a placed order belongs to that order's lifecycle —
+    // it will be CONFIRMED on payment or released on order cancel/expiry.
+    // Releasing it here (on a mapping stop/pause) would free stock the order
+    // still expects, letting another customer grab it → oversell.
     const reservations = await this.prisma.stockReservation.findMany({
-      where: { mappingId, status: 'RESERVED' },
+      where: { mappingId, status: 'RESERVED', orderId: null },
       select: {
         id: true,
         quantity: true,
@@ -419,13 +444,40 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
   }
 
   async findBySellerForProduct(sellerId: string, productId: string): Promise<any[]> {
+    // Exclude soft-deleted rows — a deleted variant mapping must NOT count as
+    // "already mapped", otherwise the re-map fan-out skips it forever and the
+    // seller sees a misleading "already mapped all variants" conflict.
     return this.prisma.sellerProductMapping.findMany({
-      where: { sellerId, productId },
+      where: { sellerId, productId, deletedAt: null },
       select: { id: true, variantId: true },
     });
   }
 
   async create(data: any): Promise<any> {
+    // Restore-on-remap: a soft-deleted mapping still occupies the
+    // (sellerId, productId, variantId) unique slot, so a plain insert would
+    // throw P2002. If a soft-deleted row exists at that key, restore it with
+    // the new data instead — this is the only way to re-map a variant the
+    // seller previously removed. A LIVE duplicate falls through to create() and
+    // surfaces the genuine "already mapped" P2002 the callers handle.
+    const existing = await this.prisma.sellerProductMapping.findFirst({
+      where: {
+        sellerId: data.sellerId,
+        productId: data.productId,
+        variantId: data.variantId ?? null,
+      },
+      select: { id: true, deletedAt: true },
+    });
+    if (existing?.deletedAt) {
+      return this.prisma.sellerProductMapping.update({
+        where: { id: existing.id },
+        data: { ...data, deletedAt: null },
+        include: {
+          product: { select: { id: true, title: true, productCode: true } },
+          variant: { select: { id: true, sku: true, price: true } },
+        },
+      });
+    }
     return this.prisma.sellerProductMapping.create({
       data,
       include: {
@@ -443,13 +495,34 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
     const exec = async (db: Prisma.TransactionClient) => {
       const results = [];
       for (const d of data) {
-        const mapping = await db.sellerProductMapping.create({
-          data: d,
-          include: {
-            product: { select: { id: true, title: true, productCode: true } },
-            variant: { select: { id: true, sku: true, price: true } },
+        // Restore-on-remap (same as create()): a soft-deleted row still occupies
+        // the (sellerId,productId,variantId) unique slot, so a plain create in
+        // the fan-out would throw P2002 and permanently block re-mapping a
+        // previously-removed variant. Restore it instead when present.
+        const existing = await db.sellerProductMapping.findFirst({
+          where: {
+            sellerId: d.sellerId,
+            productId: d.productId,
+            variantId: d.variantId ?? null,
           },
+          select: { id: true, deletedAt: true },
         });
+        const mapping = existing?.deletedAt
+          ? await db.sellerProductMapping.update({
+              where: { id: existing.id },
+              data: { ...d, deletedAt: null },
+              include: {
+                product: { select: { id: true, title: true, productCode: true } },
+                variant: { select: { id: true, sku: true, price: true } },
+              },
+            })
+          : await db.sellerProductMapping.create({
+              data: d,
+              include: {
+                product: { select: { id: true, title: true, productCode: true } },
+                variant: { select: { id: true, sku: true, price: true } },
+              },
+            });
         results.push(mapping);
       }
       return results;

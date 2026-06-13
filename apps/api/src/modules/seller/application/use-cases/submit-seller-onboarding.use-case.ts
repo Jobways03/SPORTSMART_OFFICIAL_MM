@@ -12,6 +12,7 @@ import {
   SellerRepository,
   SELLER_REPOSITORY,
 } from '../../domain/repositories/seller.repository.interface';
+import { computeProfileCompletion } from '../../../../core/utils';
 
 interface SubmitSellerOnboardingInput {
   sellerId: string;
@@ -20,6 +21,12 @@ interface SubmitSellerOnboardingInput {
   // type stays as a union of the three legal values so a malformed
   // client can't sneak through.
   gstRegistrationType: 'REGULAR' | 'COMPOSITION' | 'CASUAL';
+  entityType:
+    | 'PUBLIC_LIMITED'
+    | 'PRIVATE_LIMITED'
+    | 'SOLE_PROPRIETORSHIP'
+    | 'GENERAL_PARTNERSHIP'
+    | 'LLP';
   gstin: string;
   gstStateCode: string;
   panNumber: string;
@@ -96,6 +103,12 @@ export class SubmitSellerOnboardingUseCase {
       // a post-reject cooldown (M9). The column is stamped by the
       // admin reject use-case.
       kycReviewedAt: true,
+      // For an honest completion % (not a hardcoded 100): KYC fills the
+      // address/contact/descriptions, while logo/image/policy come from the
+      // existing row and still count toward the total.
+      sellerPolicy: true,
+      sellerProfileImageUrl: true,
+      sellerShopLogoUrl: true,
     });
 
     if (!seller || (seller as any).isDeleted) {
@@ -195,12 +208,30 @@ export class SubmitSellerOnboardingUseCase {
     const panLast4 = input.panNumber.slice(-4);
     const now = new Date();
 
+    // Honest completion: merge the KYC fields onto the existing row (which
+    // carries the logo/image/policy) so the % reflects what's actually filled,
+    // instead of jumping to 100 the moment KYC is submitted.
+    const { profileCompletionPercentage, isProfileCompleted } =
+      computeProfileCompletion({
+        ...(seller as any),
+        storeAddress: input.storeAddress,
+        city: input.city,
+        state: input.state,
+        country: input.country,
+        sellerZipCode: input.sellerZipCode,
+        sellerContactCountryCode: input.sellerContactCountryCode ?? null,
+        sellerContactNumber: input.sellerContactNumber ?? null,
+        shortStoreDescription: input.shortStoreDescription ?? null,
+        detailedStoreDescription: input.detailedStoreDescription ?? null,
+      } as any);
+
     let updated: { id: string; verificationStatus: string; isProfileCompleted: boolean };
     try {
       updated = await this.sellerRepo.updateSellerSelect(
         sellerId,
         {
           legalBusinessName: input.legalBusinessName,
+          entityType: input.entityType,
           gstRegistrationType: input.gstRegistrationType,
           gstin: input.gstin,
           gstStateCode: input.gstStateCode,
@@ -221,8 +252,8 @@ export class SubmitSellerOnboardingUseCase {
           // Clear stale rejection state on resubmit.
           kycRejectionReason: null,
           gstVerificationNotes: null,
-          isProfileCompleted: true,
-          profileCompletionPercentage: 100,
+          isProfileCompleted,
+          profileCompletionPercentage,
           lastProfileUpdatedAt: now,
           kycConfirmedAccurateAt: now,
         },

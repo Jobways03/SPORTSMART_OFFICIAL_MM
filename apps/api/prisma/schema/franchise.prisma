@@ -7,6 +7,9 @@ model FranchisePartner {
   franchiseCode      String                      @unique @map("franchise_code")
   ownerName          String                      @map("owner_name")
   businessName       String                      @map("business_name")
+  /// Legal entity type (company / partnership / proprietorship), captured at
+  /// KYC submit. Nullable for rows created before this field existed.
+  entityType         BusinessEntityType?         @map("entity_type")
   email              String                      @unique
   phoneNumber        String                      @unique @map("phone_number")
   passwordHash       String                      @map("password_hash")

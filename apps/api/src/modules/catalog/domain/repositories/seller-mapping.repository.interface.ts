@@ -16,6 +16,11 @@ export interface ISellerMappingRepository {
   findAllPaginated(params: SellerMappingListParams): Promise<{ mappings: any[]; total: number }>;
   findPendingPaginated(page: number, limit: number): Promise<{ mappings: any[]; total: number }>;
   findById(mappingId: string): Promise<any | null>;
+  /** Resolve each mapping's owning seller type — used for bulk seller-type
+   *  scope filtering on the admin bulk approve/stop endpoints. */
+  findSellerScopeByIds(
+    mappingIds: string[],
+  ): Promise<Array<{ id: string; sellerType: string | null }>>;
   update(mappingId: string, data: any): Promise<any>;
   /**
    * Phase 56 (2026-05-22) — lifecycle transitions stamp who + when.

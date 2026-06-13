@@ -1,4 +1,5 @@
 import {
+  Allow,
   IsArray,
   IsBoolean,
   IsEnum,
@@ -37,6 +38,7 @@ import { CreateVariantInlineDto, ProductSeoDto } from './create-product.dto';
  */
 export class SellerCreateProductDto {
   @IsString()
+  @MaxLength(255)
   title!: string;
 
   @IsOptional()
@@ -49,10 +51,12 @@ export class SellerCreateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(1024)
   shortDescription?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(50000)
   description?: string;
 
   @IsBoolean()
@@ -206,6 +210,10 @@ export class SellerMetafieldValueDto {
 
   // Value shape is type-dependent (string / number / boolean / array /
   // object / null). MetafieldValidationService.validateValue does the
-  // type checking — keeping this loose at the DTO layer.
+  // type checking — keeping this loose at the DTO layer. @Allow() is
+  // required so the global ValidationPipe (whitelist +
+  // forbidNonWhitelisted) does not reject this otherwise-undecorated
+  // property as "should not exist".
+  @Allow()
   value?: unknown;
 }

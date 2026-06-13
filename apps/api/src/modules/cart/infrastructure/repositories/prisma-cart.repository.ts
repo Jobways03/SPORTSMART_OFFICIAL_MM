@@ -90,30 +90,9 @@ export class PrismaCartRepository implements CartRepository {
       },
     });
     if (!cart) return [];
-    // Phase 44 (2026-05-21) — use tier-adjusted unit price for the
-    // tax preview. Pre-Phase-44 this computed GST against the raw
-    // variant.price / basePrice, which over-charged GST on every
-    // cart line where a pricing tier applied. The cart service now
-    // writes the resolved effective price as `appliedListUnitPrice`
-    // when no tier qualified, and the discount/fixed columns when a
-    // tier did qualify. We reconstruct the effective price the same
-    // way the resolver does.
     return cart.items.map((it) => {
       const listPrice = it.variant?.price ?? it.product.basePrice;
-      let effectivePrice = Number(listPrice ?? 0);
-
-      if (it.appliedFixedUnitPrice !== null) {
-        effectivePrice = Number(it.appliedFixedUnitPrice);
-      } else if (it.appliedDiscountPercent !== null) {
-        const pct = Number(it.appliedDiscountPercent);
-        const baseList =
-          it.appliedListUnitPrice !== null
-            ? Number(it.appliedListUnitPrice)
-            : effectivePrice;
-        effectivePrice = Math.round(baseList * (1 - pct / 100) * 100) / 100;
-      }
-
-      const unitPriceInPaise = BigInt(Math.round(effectivePrice * 100));
+      const unitPriceInPaise = BigInt(Math.round(Number(listPrice ?? 0) * 100));
       return {
         productId: it.productId,
         variantId: it.variantId,
@@ -395,10 +374,11 @@ export class PrismaCartRepository implements CartRepository {
         // UX (user re-finds an item and adds it; they expect it to
         // appear in the active cart, not stay parked).
         //
-        // Phase 61 — refresh the price snapshot when re-adding to a
-        // previously-cleared row, but preserve the snapshot when an
-        // ACTIVE row is incremented. The drift-detection semantics
-        // are "first add wins" for the snapshot.
+        // Phase 61 — the price snapshot is NOT touched on this branch:
+        // drift-detection semantics are strictly "first add wins"
+        // (only the create branch below writes unitPriceAtAddInPaise),
+        // so increments and saved-for-later snap-backs keep comparing
+        // against the original add-time price.
         await tx.cartItem.update({
           where: { id: existing.id },
           data: {
@@ -478,29 +458,26 @@ export class PrismaCartRepository implements CartRepository {
   }
 
   /**
-   * Phase 44 (2026-05-21) — persist the resolved pricing-tier snapshot.
-   * Called by CartService whenever the resolved tier drifts from what's
-   * already on the row (qty change, tier activated/deactivated, etc).
-   * NULL clears the snapshot when no tier qualifies.
+   * Live list unit price in paise — variant.price when a variant is
+   * given, product.basePrice otherwise. Used by the cart service for
+   * the add-time price snapshot (audit Gap #22).
    */
-  async updateCartItemPricingSnapshot(
-    itemId: string,
-    snapshot: {
-      appliedPricingTierId: string | null;
-      appliedDiscountPercent: number | null;
-      appliedFixedUnitPrice: number | null;
-      appliedListUnitPrice: number | null;
-    },
-  ): Promise<void> {
-    await this.prisma.cartItem.update({
-      where: { id: itemId },
-      data: {
-        appliedPricingTierId: snapshot.appliedPricingTierId,
-        appliedDiscountPercent: snapshot.appliedDiscountPercent,
-        appliedFixedUnitPrice: snapshot.appliedFixedUnitPrice,
-        appliedListUnitPrice: snapshot.appliedListUnitPrice,
-      },
+  async getListUnitPriceInPaise(
+    productId: string,
+    variantId: string | null,
+  ): Promise<bigint> {
+    if (variantId) {
+      const variant = await this.prisma.productVariant.findUnique({
+        where: { id: variantId },
+        select: { price: true },
+      });
+      return BigInt(Math.round(Number(variant?.price ?? 0) * 100));
+    }
+    const product = await this.prisma.product.findUnique({
+      where: { id: productId },
+      select: { basePrice: true },
     });
+    return BigInt(Math.round(Number(product?.basePrice ?? 0) * 100));
   }
 
   /**

@@ -41,6 +41,8 @@ function ProductsContent({ initialData }: { initialData?: InitialData }) {
   const sportParam = searchParams.get('sport') || '';
   const brandSlugParam = searchParams.get('brand') || '';
   const collectionSlugParam = searchParams.get('collection') || '';
+  // Product tag filter — set by the PDP tag chips (/products?tag=<name>).
+  const tagParam = searchParams.get('tag') || '';
   const rawSearch = searchParams.get('search') || '';
   // Phase 192 (#4) — `sport` is now a real backend attribute (with a title
   // fallback for unclassified rows), so it's sent as its own param instead
@@ -77,6 +79,7 @@ function ProductsContent({ initialData }: { initialData?: InitialData }) {
     const params = new URLSearchParams();
     if (searchQuery) params.set('search', searchQuery);
     if (sportParam) params.set('sport', sportParam);
+    if (tagParam) params.set('tag', tagParam);
     if (categoryId) params.set('categoryId', categoryId);
     if (brandId) params.set('brandId', brandId);
     const s = overrides?.sort ?? sortBy;
@@ -106,6 +109,7 @@ function ProductsContent({ initialData }: { initialData?: InitialData }) {
     params.set('page', String(currentPage));
     if (searchQuery) params.set('search', searchQuery);
     if (sportParam) params.set('sport', sportParam);
+    if (tagParam) params.set('tag', tagParam);
     if (categoryId) params.set('categoryId', categoryId);
     if (brandId) params.set('brandId', brandId);
     if (brandSlugParam) params.set('brand', brandSlugParam);

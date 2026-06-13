@@ -276,8 +276,10 @@ const router = useRouter();
         <div className="variant-detail-left">
           {/* Variant Image */}
           <div className="form-card">
-            <div className="form-card-title">VARIANT IMAGE</div>
-            <p className="variant-detail-hint">Edit variant image here</p>
+            <div className="form-card-head">
+              <div className="form-card-title">Variant image</div>
+              <div className="form-card-subtitle">Photos shown for this specific variant.</div>
+            </div>
 
             {(() => {
               const colorOv = (currentVariant.optionValues || []).find((ov: any) => {
@@ -347,8 +349,10 @@ const router = useRouter();
 
           {/* Variant List Sidebar */}
           <div className="form-card">
-            <div className="form-card-title">VARIANTS</div>
-            <p className="variant-detail-hint">Click on variant to edit its details.</p>
+            <div className="form-card-head">
+              <div className="form-card-title">Variants</div>
+              <div className="form-card-subtitle">Switch between this product&apos;s variants.</div>
+            </div>
             <div className="variant-sidebar-list">
               {allVariants.map(v => {
                 const isActive = v.id === variantId;
@@ -376,8 +380,10 @@ const router = useRouter();
         <div className="variant-detail-right">
           {/* Options / Variant Title */}
           <div className="form-card">
-            <div className="form-card-title">VARIANT INFO</div>
-            <p className="variant-detail-hint">Variant identification</p>
+            <div className="form-card-head">
+              <div className="form-card-title">Variant info</div>
+              <div className="form-card-subtitle">The options that define this variant.</div>
+            </div>
             {(currentVariant.optionValues || []).length > 0 ? (
               (currentVariant.optionValues || []).map((ov: any, idx: number) => {
                 const flat = ov.optionValue
@@ -412,8 +418,10 @@ const router = useRouter();
 
           {/* Pricing Details */}
           <div className="form-card">
-            <div className="form-card-title">PRICING DETAILS</div>
-            <p className="variant-detail-hint">Edit pricing details here</p>
+            <div className="form-card-head">
+              <div className="form-card-title">Pricing details</div>
+              <div className="form-card-subtitle">Price, compare-at, and cost price.</div>
+            </div>
             <div className="form-group">
               <label className="form-label">Price <span className="required">*</span></label>
               <div className="input-with-prefix">
@@ -463,8 +471,10 @@ const router = useRouter();
 
           {/* Inventory Details */}
           <div className="form-card">
-            <div className="form-card-title">INVENTORY DETAILS</div>
-            <p className="variant-detail-hint">Edit inventory details here</p>
+            <div className="form-card-head">
+              <div className="form-card-title">Inventory details</div>
+              <div className="form-card-subtitle">SKU, barcode, and stock quantity.</div>
+            </div>
             <div className="form-group">
               <label className="form-label">SKU</label>
               <input
@@ -504,8 +514,10 @@ const router = useRouter();
 
           {/* Shipping Details */}
           <div className="form-card">
-            <div className="form-card-title">SHIPPING DETAILS</div>
-            <p className="variant-detail-hint">Edit shipping details here</p>
+            <div className="form-card-head">
+              <div className="form-card-title">Shipping details</div>
+              <div className="form-card-subtitle">Weight and dimensions for this variant.</div>
+            </div>
             <div className="form-group">
               <label className="form-label">Weight Unit</label>
               <select

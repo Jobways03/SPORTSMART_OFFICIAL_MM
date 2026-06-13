@@ -14,24 +14,50 @@
 }
 
 .franchises-header h1 {
-  font-size: 22px;
+  font-size: 24px;
   font-weight: 700;
+  letter-spacing: -0.02em;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.franchises-header-count {
-  font-size: 13px;
+.franchises-count-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #2563eb;
+  background: rgba(37, 99, 235, 0.1);
+  border-radius: 100px;
+}
+
+.franchises-subtitle {
+  margin-top: 6px;
+  font-size: 13.5px;
   color: var(--color-text-secondary);
-  font-weight: 400;
-  margin-left: 8px;
 }
 
-/* ===== Filters Bar ===== */
-.franchises-filters {
+/* ===== Toolbar (search + filters, inside the table card) ===== */
+.franchises-toolbar {
   display: flex;
   gap: 12px;
-  margin-bottom: 20px;
+  padding: 16px;
+  border-bottom: 1px solid #e5e7eb;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.franchises-toolbar-filters {
+  margin-left: auto;
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .franchises-search {
@@ -73,6 +99,7 @@
   border: 1px solid #e5e7eb;
   border-radius: 12px;
   overflow: visible;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.04), 0 1px 2px rgba(16, 24, 40, 0.03);
 }
 
 .franchises-table-wrap > table thead tr:first-child th:first-child {
@@ -115,21 +142,43 @@
 }
 
 .franchises-table td {
-  padding: 14px 16px;
+  padding: 15px 16px;
   border-bottom: 1px solid #f3f4f6;
   vertical-align: middle;
 }
 
 .franchises-table tbody tr {
   cursor: pointer;
+  transition: background 0.12s ease;
 }
 
 .franchises-table tbody tr:hover {
-  background: #fafafa;
+  background: #f8fafc;
 }
 
 .franchises-table tbody tr:last-child td {
   border-bottom: none;
+}
+
+/* Franchise cell (avatar tile + name) */
+.franchise-cell {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.franchise-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+  user-select: none;
 }
 
 /* Franchise name cell */
@@ -206,6 +255,21 @@
   text-transform: uppercase;
   letter-spacing: 0.3px;
   white-space: nowrap;
+}
+
+/* Leading status dot — inherits the badge's text color */
+.status-badge::before,
+.verification-badge::before {
+  content: '';
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-right: 6px;
+  vertical-align: middle;
+  position: relative;
+  top: -1px;
 }
 
 .status-badge.pending {
@@ -302,54 +366,72 @@
 }
 
 .action-menu-btn {
-  background: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: #fff;
   border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 16px;
+  border-radius: 8px;
+  font-size: 17px;
   cursor: pointer;
   color: var(--color-text-secondary);
   line-height: 1;
-  transition: all 0.15s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .action-menu-btn:hover {
   background: var(--color-bg-page);
   color: var(--color-text);
+  border-color: #cbd5e1;
 }
 
 .action-menu-dropdown {
   position: absolute;
-  top: calc(100% + 4px);
+  top: calc(100% + 6px);
   right: 0;
   background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 8px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+  border: 1px solid #eceef1;
+  border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.13), 0 2px 6px rgba(16, 24, 40, 0.05);
   min-width: 200px;
   padding: 6px;
   z-index: 50;
+  transform-origin: top right;
+  animation: action-menu-in 0.13s ease-out;
+}
+
+@keyframes action-menu-in {
+  from { opacity: 0; transform: scale(0.97) translateY(-4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
 }
 
 .action-menu-item {
   display: flex;
   align-items: center;
-  gap: 10px;
   width: 100%;
-  padding: 9px 12px;
+  padding: 10px 12px;
   font-size: 13px;
-  color: var(--color-text);
+  font-weight: 500;
+  color: #374151;
   background: none;
   border: none;
-  border-radius: 6px;
+  border-radius: 8px;
   cursor: pointer;
   text-decoration: none;
-  transition: background 0.15s;
+  transition: background 0.13s, color 0.13s;
   text-align: left;
+}
+
+.action-menu-item + .action-menu-item {
+  margin-top: 1px;
 }
 
 .action-menu-item:hover {
   background: var(--color-bg-page);
+  color: var(--color-text);
   text-decoration: none;
 }
 
@@ -359,19 +441,13 @@
 
 .action-menu-item.danger:hover {
   background: var(--color-error-bg);
+  color: var(--color-error);
 }
 
 .action-menu-divider {
   height: 1px;
-  background: #e5e7eb;
-  margin: 4px 0;
-}
-
-.action-menu-item .action-icon {
-  font-size: 15px;
-  width: 20px;
-  text-align: center;
-  flex-shrink: 0;
+  background: #eef0f3;
+  margin: 6px;
 }
 
 /* ===== Pagination ===== */
@@ -571,29 +647,80 @@
 }
 
 .sidebar-action-btn {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 9px;
   width: 100%;
   text-align: left;
-  padding: 9px 12px;
-  margin-bottom: 6px;
+  padding: 10px 12px;
+  margin-bottom: 7px;
   font-size: 13px;
-  font-weight: 500;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius);
+  font-weight: 600;
+  line-height: 1;
+  border: 1px solid #e5e7eb;
+  border-radius: 9px;
   background: #fff;
-  color: var(--color-text);
+  color: #374151;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.16s ease;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.04);
 }
 
 .sidebar-action-btn:hover {
-  background: var(--color-bg-page);
-  border-color: var(--color-primary);
-  color: var(--color-primary);
+  background: #f9fafb;
+  border-color: #cbd5e1;
+  color: #111827;
+  box-shadow: 0 3px 8px rgba(16, 24, 40, 0.08);
+  transform: translateY(-1px);
+}
+
+.sidebar-action-btn:active {
+  transform: translateY(0);
+}
+
+.sidebar-action-btn:focus-visible {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
 }
 
 .sidebar-action-btn:last-child {
   margin-bottom: 0;
+}
+
+.sidebar-action-btn__icon {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  color: #6b7280;
+  transition: color 0.16s ease;
+}
+
+.sidebar-action-btn:hover .sidebar-action-btn__icon {
+  color: #2563eb;
+}
+
+.sidebar-action-btn__icon svg {
+  width: 100%;
+  height: 100%;
+}
+
+/* Danger — Delete Franchise */
+.sidebar-action-btn--danger {
+  color: #dc2626;
+  border-color: #fecaca;
+}
+
+.sidebar-action-btn--danger:hover {
+  background: #fef2f2;
+  border-color: #fca5a5;
+  color: #dc2626;
+  box-shadow: 0 3px 8px rgba(220, 38, 38, 0.12);
+}
+
+.sidebar-action-btn--danger .sidebar-action-btn__icon,
+.sidebar-action-btn--danger:hover .sidebar-action-btn__icon {
+  color: #dc2626;
 }
 
 /* Tabs */
@@ -855,9 +982,13 @@
     display: none;
   }
 
-  .franchises-filters {
+  .franchises-toolbar {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .franchises-toolbar-filters {
+    margin-left: 0;
   }
 
   .franchises-search {
