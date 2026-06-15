@@ -292,6 +292,7 @@ export function AccountScreen() {
               iconColor={C.sageDeep}
               onPress={() => nav.navigate('EditProfile')}
             />
+            {/* Commented out per request:
             <Row
               testID="row-invoices"
               icon={FileText}
@@ -300,7 +301,7 @@ export function AccountScreen() {
               tint={C.surfaceCoral}
               iconColor={C.sageDeep}
               onPress={() => nav.navigate('Invoices')}
-            />
+            /> */}
             <Row
               icon={KeyRound}
               label="Change password"
@@ -342,6 +343,7 @@ export function AccountScreen() {
               iconColor={C.sageDeep}
               onPress={() => {}}
             />
+            {/* Commented out per request:
             <Row
               testID="row-privacy"
               icon={ShieldCheck}
@@ -350,7 +352,7 @@ export function AccountScreen() {
               tint={C.surfaceCoral}
               iconColor={C.sageDeep}
               onPress={() => nav.navigate('PrivacyConsent')}
-            />
+            /> */}
             <Row
               icon={Info}
               label="About"

@@ -350,23 +350,6 @@ export class ShippingLabelPdfService {
       rule();
     }
 
-    // ── Products ────────────────────────────────────────────
-    block('ITEMS', 'Helvetica-Bold', 8, '#666', { gap: 2 });
-    doc.font('Helvetica').fontSize(9).fillColor('#000');
-    for (const p of s.products.slice(0, 6)) {
-      const left = `${p.quantity} x ${p.name}`;
-      const right = `Rs.${p.unitPrice}`;
-      const h = doc.heightOfString(left, { width: CW - 60 });
-      doc.text(left, M, y, { width: CW - 60 });
-      doc.text(right, M, y, { width: CW, align: 'right' });
-      y += h + 2;
-    }
-    if (s.products.length > 6) {
-      block(`+ ${s.products.length - 6} more item(s)`, 'Helvetica-Oblique', 8, '#666', { gap: 2 });
-    }
-    block(`Weight: ${s.weightKg} kg`, 'Helvetica', 8, '#333', { gap: 4 });
-    rule();
-
     // ── Return address ──────────────────────────────────────
     block('RETURN TO', 'Helvetica-Bold', 8, '#666', { gap: 1 });
     block(

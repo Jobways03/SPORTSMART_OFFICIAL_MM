@@ -1622,7 +1622,28 @@ export class OrdersService {
     // The refund amount is the sub-order's subTotalInPaise. COD
     // orders + unpaid orders are no-ops. Idempotency key keyed on
     // the sub-order so a retry doesn't double-refund.
-    const subTotalInPaise = (subOrder as any).subTotalInPaise as bigint | undefined;
+    //
+    // Robustness: the paise sibling can be 0 / unpopulated on some
+    // order-creation paths (e.g. admin-created orders) even though the
+    // amount is genuinely paid. Relying on subTotalInPaise alone silently
+    // skipped the refund, leaving a paid-then-cancelled customer un-refunded.
+    // Fall back to the canonical order-item paise (unitPriceInPaise × qty,
+    // already loaded via findSubOrderByIdWithItems) so a real refund still fires.
+    let subTotalInPaise = (subOrder as any).subTotalInPaise as bigint | undefined;
+    if (!subTotalInPaise || subTotalInPaise <= 0n) {
+      const derived = ((subOrder.items ?? []) as any[]).reduce(
+        (sum: bigint, it: any) =>
+          sum + BigInt(it.unitPriceInPaise ?? 0) * BigInt(it.quantity ?? 0),
+        0n,
+      );
+      if (derived > 0n) {
+        this.logger.warn(
+          `Sub-order ${subOrderId} cancel: subTotalInPaise was ${subTotalInPaise ?? 'null'}; ` +
+            `derived ₹${(Number(derived) / 100).toFixed(2)} from items so the refund is not skipped.`,
+        );
+        subTotalInPaise = derived;
+      }
+    }
     if (
       masterCtx.paymentStatus === 'PAID' &&
       masterCtx.paymentMethod === 'ONLINE' &&
@@ -1639,11 +1660,13 @@ export class OrdersService {
           masterOrderId,
           amountInPaise: subTotalInPaise,
           baseIdempotencyKey: `cancel-sub-order:${subOrderId}`,
-          // Phase 258 — cancel-to-wallet window is BEFORE SHIPMENT. If this
-          // sub-order had NOT shipped yet, return the amount to the wallet as
-          // store credit. A force-cancel of already-shipped goods falls back to
-          // the normal wallet+gateway split (reverse the gateway portion).
-          forceFullWallet: !['SHIPPED', 'DELIVERED', 'FULFILLED'].includes(
+          // Refund policy: ALWAYS to wallet (store credit) — never reversed to
+          // the card/gateway — for both pre- and post-shipment cancels.
+          forceFullWallet: true,
+          // Approval gated by SHIP STATUS: a pre-shipment cancel auto-credits
+          // the wallet instantly (no approval); a post-shipment force-cancel
+          // still routes to Finance → Refund Approvals before crediting.
+          requiresApproval: ['SHIPPED', 'DELIVERED', 'FULFILLED'].includes(
             previousFulfillmentStatus as string,
           ),
         });

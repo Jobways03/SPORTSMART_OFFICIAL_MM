@@ -127,8 +127,9 @@ const SECTIONS: AccountSection[] = [
     cards: [
       { href: '/account/profile', title: 'My Profile', desc: 'Manage personal details and password', tint: 'blue', icon: ICONS.user },
       { href: '/account/addresses', title: 'My Addresses', desc: 'Add and edit shipping addresses', tint: 'emerald', icon: ICONS.mapPin },
-      { href: '/account/tax-profiles', title: 'GST Tax Profiles', desc: 'Save GSTINs for business invoices at checkout', tint: 'violet', icon: ICONS.receipt },
-      { href: '/account/notifications', title: 'Notifications', desc: 'Choose what we contact you about', tint: 'orange', icon: ICONS.bell },
+      // Commented out per request:
+      // { href: '/account/tax-profiles', title: 'GST Tax Profiles', desc: 'Save GSTINs for business invoices at checkout', tint: 'violet', icon: ICONS.receipt },
+      // { href: '/account/notifications', title: 'Notifications', desc: 'Choose what we contact you about', tint: 'orange', icon: ICONS.bell },
     ],
   },
   {
@@ -137,7 +138,8 @@ const SECTIONS: AccountSection[] = [
       { href: '/orders', title: 'My Orders', desc: 'Track orders and view history', tint: 'amber', icon: ICONS.package },
       { href: '/returns', title: 'My Returns', desc: 'View and manage return requests', tint: 'violet', icon: ICONS.rotate },
       { href: '/account/wishlist', title: 'My Wishlist', desc: 'Products you saved to buy later', tint: 'rose', icon: ICONS.heart },
-      { href: '/account/invoices', title: 'My Invoices', desc: 'Download GST invoices and tax documents', tint: 'blue', icon: ICONS.fileText },
+      // Commented out per request:
+      // { href: '/account/invoices', title: 'My Invoices', desc: 'Download GST invoices and tax documents', tint: 'blue', icon: ICONS.fileText },
     ],
   },
   {
@@ -147,6 +149,8 @@ const SECTIONS: AccountSection[] = [
       { href: '/account/support', title: 'Help & Support', desc: 'Open and track support tickets', tint: 'rose', icon: ICONS.support },
     ],
   },
+  // Privacy & Security section — commented out per request
+  /*
   {
     label: 'Privacy & Security',
     cards: [
@@ -155,6 +159,7 @@ const SECTIONS: AccountSection[] = [
       { href: '/account/access-history', title: 'Sign-in Activity', desc: 'See recent logins and devices on your account', tint: 'amber', icon: ICONS.clock },
     ],
   },
+  */
 ];
 
 function formatMemberSince(iso?: string): string | null {

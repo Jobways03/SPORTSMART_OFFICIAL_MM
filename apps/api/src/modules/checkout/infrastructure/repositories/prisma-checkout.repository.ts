@@ -787,7 +787,11 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
         );
 
         const subOrder = await tx.subOrder.create({
-          data: {
+          // Dual-write the paise sibling (subTotalInPaise) like the legacy path
+          // below. Pre-fix this "modern" path wrote only the Decimal subTotal,
+          // leaving subTotalInPaise=0 — which silently skipped the cancel→refund
+          // (it guards on subTotalInPaise > 0). applyPaise derives it from subTotal.
+          data: this.moneyDualWrite.applyPaise('subOrder', {
             masterOrderId: masterOrder.id,
             sellerId: group.nodeType === 'SELLER' ? group.nodeId : null,
             franchiseId: group.nodeType === 'FRANCHISE' ? group.nodeId : null,
@@ -805,7 +809,7 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
             acceptDeadlineAt,
             commissionRateSnapshot: group.commissionRateSnapshot ?? null,
             items: { create: orderItemsData },
-          },
+          }),
         });
 
         createdSubOrders.push({

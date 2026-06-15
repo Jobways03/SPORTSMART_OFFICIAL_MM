@@ -177,6 +177,13 @@ export class RefundInstructionService {
      * single leg, used for pre-acceptance cancels/rejections.
      */
     forceFullWallet?: boolean;
+    /**
+     * Override the amount/method approval-threshold gate. The cancel flow sets
+     * this to gate approval by SHIP STATUS (pre-ship = auto-credit, post-ship =
+     * finance approval) — both legs are WALLET, so the per-method threshold
+     * can't distinguish them. When undefined, the threshold logic applies.
+     */
+    requiresApproval?: boolean;
   }): Promise<RefundInstruction[]> {
     const legs = await this.splitCalculator.calculateSplit({
       masterOrderId: args.masterOrderId,
@@ -206,10 +213,9 @@ export class RefundInstructionService {
         continue;
       }
 
-      const requiresApproval = this.amountRequiresApproval(
-        Number(leg.amountInPaise),
-        leg.method,
-      );
+      const requiresApproval =
+        args.requiresApproval ??
+        this.amountRequiresApproval(Number(leg.amountInPaise), leg.method);
 
       try {
         const row = await this.prisma.refundInstruction.create({

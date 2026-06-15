@@ -93,9 +93,25 @@ export class PrismaUserRepository implements UserRepository {
     // (2026-05-21) — phoneVerified column dropped; phone-change
     // no longer needs to reset a verification flag since the
     // platform doesn't gate any flow on phone verification.
+    //
+    // Only reset emailVerified when the email ACTUALLY changes. The client
+    // sends the (unchanged) email on every profile save — e.g. a phone-only
+    // edit — so resetting on `email !== undefined` alone spuriously
+    // un-verifies a previously-verified email. Compare against the stored
+    // value (trimmed, case-insensitive) and reset only on a real change.
     const updates: any = { ...data };
     if (data.email !== undefined) {
-      updates.emailVerified = false;
+      const current = await this.prisma.user.findUnique({
+        where: { id },
+        select: { email: true },
+      });
+      const emailChanged =
+        !current ||
+        (current.email ?? '').trim().toLowerCase() !==
+          data.email.trim().toLowerCase();
+      if (emailChanged) {
+        updates.emailVerified = false;
+      }
     }
     const user = await this.prisma.user.update({
       where: { id },

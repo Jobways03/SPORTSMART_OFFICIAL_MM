@@ -561,7 +561,7 @@ export default function AdminReturnDetailPage() {
   const totalReturnQty = data.items.reduce((s, it) => s + (it.quantity ?? 0), 0);
 
   return (
-    <div style={{ padding: '24px 32px', maxWidth: 1200, margin: '0 auto', background: '#f8fafc', minHeight: 'calc(100vh - 56px)' }}>
+    <div style={{ padding: '24px 32px', maxWidth: 1320, margin: '0 auto', background: '#f8fafc', minHeight: 'calc(100vh - 56px)' }}>
       <div style={{ marginBottom: 16 }}>
         <Link href="/dashboard/returns" style={{ color: '#6b7280', fontSize: 13, textDecoration: 'none' }}>
           ← Back to Returns
@@ -827,38 +827,64 @@ export default function AdminReturnDetailPage() {
                     <div key={`expected-${it.id}`} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                       <div
                         style={{
-                          fontSize: 10,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: 5,
+                          fontSize: 11,
                           fontWeight: 700,
-                          color: '#065f46',
+                          color: '#047857',
                           textTransform: 'uppercase',
                           letterSpacing: '0.04em',
                         }}
                       >
-                        📦 Product as sold
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                          <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+                          <path d="m3.3 7 8.7 5 8.7-5" />
+                          <path d="M12 22V12" />
+                        </svg>
+                        Product as sold
                       </div>
                       <div
                         style={{
-                          width: 120,
-                          height: 120,
+                          width: 128,
+                          height: 128,
                           borderRadius: 10,
                           overflow: 'hidden',
-                          border: '2px solid #10b981',
-                          background: '#ecfdf5',
+                          border: '1px solid #d1fae5',
+                          boxShadow: 'inset 0 0 0 1px #ecfdf5',
+                          background: '#f3f4f6',
                           position: 'relative',
                         }}
                         title={it.orderItem.productTitle ?? 'Product image'}
                       >
+                        <div
+                          style={{
+                            position: 'absolute',
+                            inset: 0,
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            color: '#9ca3af',
+                          }}
+                        >
+                          <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <rect x="3" y="3" width="18" height="18" rx="2" />
+                            <circle cx="8.5" cy="8.5" r="1.5" />
+                            <path d="m21 15-5-5L5 21" />
+                          </svg>
+                        </div>
                         <img
                           src={it.orderItem.imageUrl}
                           alt={it.orderItem.productTitle ?? 'Product'}
-                          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                          onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                          style={{ position: 'relative', width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                         />
                       </div>
                       <div
                         style={{
-                          fontSize: 10,
-                          color: '#065f46',
-                          maxWidth: 120,
+                          fontSize: 11,
+                          color: '#047857',
+                          maxWidth: 128,
                           overflow: 'hidden',
                           textOverflow: 'ellipsis',
                           whiteSpace: 'nowrap',
@@ -873,32 +899,41 @@ export default function AdminReturnDetailPage() {
                   <div key={ev.id} style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
                     <div
                       style={{
-                        fontSize: 10,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 5,
+                        fontSize: 11,
                         fontWeight: 700,
-                        color: '#3730a3',
+                        color: '#4338ca',
                         textTransform: 'uppercase',
                         letterSpacing: '0.04em',
                       }}
                     >
-                      📸 Customer claim
+                      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3Z" />
+                        <circle cx="12" cy="13" r="3" />
+                      </svg>
+                      Customer claim
                     </div>
                     <button
                       onClick={() => { setGalleryIdx(i); setGalleryOpen(true); }}
                       style={{
-                        width: 120,
-                        height: 120,
+                        width: 128,
+                        height: 128,
                         borderRadius: 10,
                         overflow: 'hidden',
-                        border: '2px solid #6366f1',
+                        border: '1px solid #c7d2fe',
+                        boxShadow: 'inset 0 0 0 1px #eef2ff',
                         padding: 0,
                         cursor: 'pointer',
-                        background: '#eef2ff',
+                        background: '#f3f4f6',
                       }}
                       title={`Open photo ${i + 1} in full view`}
                     >
                       <img
                         src={ev.fileUrl}
                         alt={`Customer evidence ${i + 1}`}
+                        onError={(e) => { e.currentTarget.style.display = 'none'; }}
                         style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                       />
                     </button>
@@ -1199,7 +1234,10 @@ export default function AdminReturnDetailPage() {
             <span>Seller Response</span>
             <span
               style={{
-                padding: '2px 10px',
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 5,
+                padding: '3px 10px',
                 borderRadius: 999,
                 background:
                   data.sellerResponseStatus === 'CONTESTED'
@@ -1213,84 +1251,162 @@ export default function AdminReturnDetailPage() {
                 fontWeight: 700,
               }}
             >
-              {data.sellerResponseStatus === 'CONTESTED'
-                ? 'Contested'
-                : 'Accepted'}
+              {data.sellerResponseStatus === 'CONTESTED' ? (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+              ) : (
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M20 6 9 17l-5-5" />
+                </svg>
+              )}
+              {data.sellerResponseStatus === 'CONTESTED' ? 'Contested' : 'Accepted'}
             </span>
           </div>
           <div style={{ padding: 16 }}>
-            <div
-              style={{
-                fontSize: 11,
-                fontWeight: 700,
-                color: '#6b7280',
-                textTransform: 'uppercase',
-                letterSpacing: '0.04em',
-                marginBottom: 4,
-              }}
-            >
-              Responded At
-            </div>
-            <div
-              style={{
-                fontSize: 13,
-                color: '#111827',
-                marginBottom: 12,
-              }}
-            >
+            {/* The seller's statement is the primary content — render it as a
+                quote with a status-coloured accent, not an input-looking box. */}
+            {data.sellerResponseNotes ? (
+              <blockquote
+                style={{
+                  margin: 0,
+                  background: '#f9fafb',
+                  border: '1px solid #eef0f2',
+                  borderLeft: `3px solid ${
+                    data.sellerResponseStatus === 'CONTESTED' ? '#dc2626' : '#16a34a'
+                  }`,
+                  borderRadius: 8,
+                  padding: '12px 14px',
+                  fontSize: 14,
+                  lineHeight: 1.55,
+                  color: '#1f2937',
+                  whiteSpace: 'pre-wrap',
+                }}
+              >
+                {data.sellerResponseNotes}
+              </blockquote>
+            ) : (
+              <div style={{ fontSize: 13, color: '#9ca3af', fontStyle: 'italic' }}>
+                The seller responded without leaving a note.
+              </div>
+            )}
+
+            {/* Secondary metadata — small + muted, not competing with the note. */}
+            <div style={{ marginTop: 10, fontSize: 12, color: '#6b7280' }}>
+              Responded{' '}
               {data.sellerRespondedAt
                 ? new Date(data.sellerRespondedAt).toLocaleString()
                 : '—'}
             </div>
-            {data.sellerResponseNotes && (
-              <>
-                <div
-                  style={{
-                    fontSize: 11,
-                    fontWeight: 700,
-                    color: '#6b7280',
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.04em',
-                    marginBottom: 4,
-                  }}
-                >
-                  Seller Notes
-                </div>
-                <div
-                  style={{
-                    fontSize: 13,
-                    color: '#111827',
-                    lineHeight: 1.5,
-                    background: '#fafbfc',
-                    border: '1px solid #e5e7eb',
-                    borderRadius: 8,
-                    padding: '10px 12px',
-                    whiteSpace: 'pre-wrap',
-                  }}
-                >
-                  {data.sellerResponseNotes}
-                </div>
-              </>
-            )}
+
+            {/* Actionable advisory for a contested claim — icon + tint so it
+                reads as a callout and doesn't rely on colour alone. */}
             {data.sellerResponseStatus === 'CONTESTED' && (
               <div
                 style={{
-                  marginTop: 12,
-                  fontSize: 12,
-                  color: '#6b7280',
-                  fontStyle: 'italic',
+                  marginTop: 14,
+                  display: 'flex',
+                  gap: 10,
+                  padding: '10px 12px',
+                  background: '#fef2f2',
+                  border: '1px solid #fecaca',
+                  borderRadius: 8,
                 }}
               >
-                Seller is contesting the customer&rsquo;s claim. Compare the
-                seller&rsquo;s notes and pre-ship photos against the
-                customer&rsquo;s evidence before issuing a QC decision.
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#dc2626" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0, marginTop: 1 }} aria-hidden="true">
+                  <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
+                  <line x1="12" y1="9" x2="12" y2="13" />
+                  <line x1="12" y1="17" x2="12.01" y2="17" />
+                </svg>
+                <div style={{ fontSize: 13, color: '#7f1d1d', lineHeight: 1.5 }}>
+                  The seller is contesting this claim. Compare their notes and
+                  pre-ship photos against the customer&rsquo;s evidence before
+                  issuing a QC decision.
+                </div>
               </div>
             )}
           </div>
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20 }}>
+      {/* Lifecycle progress — full-width horizontal stepper. Reads at a glance
+          across the top instead of a tall vertical list squeezed into the side
+          rail (which left the column beside it empty). */}
+      {(() => {
+        const historyByStatus = new Map<string, string>();
+        for (const h of [...(data.statusHistory ?? [])].sort(
+          (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+        )) {
+          if (!historyByStatus.has(h.toStatus)) historyByStatus.set(h.toStatus, h.createdAt);
+        }
+        const milestones: Array<{ label: string; at?: string | null }> = [
+          { label: 'Created', at: data.createdAt },
+          { label: 'Approved', at: historyByStatus.get('APPROVED') },
+          { label: 'Rejected', at: historyByStatus.get('REJECTED') },
+          { label: 'Pickup Scheduled', at: data.pickupScheduledAt ?? historyByStatus.get('PICKUP_SCHEDULED') },
+          { label: 'In Transit', at: historyByStatus.get('IN_TRANSIT') },
+          { label: 'Received', at: data.receivedAt ?? historyByStatus.get('RECEIVED') },
+          { label: 'QC Completed', at: historyByStatus.get('QC_APPROVED') ?? historyByStatus.get('QC_REJECTED') ?? historyByStatus.get('PARTIALLY_APPROVED') },
+          { label: 'Refund Processing', at: historyByStatus.get('REFUND_PROCESSING') },
+          { label: 'Refunded', at: data.refundProcessedAt ?? historyByStatus.get('REFUNDED') },
+          { label: 'Completed', at: historyByStatus.get('COMPLETED') },
+          { label: 'Closed', at: data.closedAt },
+        ].filter((m) => m.at);
+        if (milestones.length === 0) return null;
+        return (
+          <div style={{ ...cardStyleV2, marginBottom: 20 }}>
+            <div style={cardHeaderV2}>Progress</div>
+            <div style={{ padding: '22px 24px', overflowX: 'auto' }}>
+              <div style={{ display: 'flex', alignItems: 'flex-start', minWidth: 'min-content' }}>
+                {milestones.map((m, i) => {
+                  const isLast = i === milestones.length - 1;
+                  return (
+                    <div
+                      key={m.label}
+                      style={{ flex: '1 0 116px', position: 'relative', textAlign: 'center', paddingInline: 4 }}
+                    >
+                      {!isLast && (
+                        <div
+                          style={{
+                            position: 'absolute',
+                            top: 6,
+                            left: '50%',
+                            right: '-50%',
+                            height: 2,
+                            background: '#10b981',
+                            zIndex: 0,
+                          }}
+                        />
+                      )}
+                      <div
+                        style={{
+                          position: 'relative',
+                          width: 14,
+                          height: 14,
+                          borderRadius: '50%',
+                          background: isLast ? '#2563eb' : '#10b981',
+                          margin: '0 auto',
+                          border: '2px solid #fff',
+                          boxShadow: '0 0 0 2px #e5e7eb',
+                          zIndex: 1,
+                        }}
+                      />
+                      <div style={{ fontSize: 12, fontWeight: 600, color: '#111827', marginTop: 10 }}>
+                        {m.label}
+                      </div>
+                      <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>{fmtDT(m.at)}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1.8fr) minmax(320px, 1fr)', gap: 20, alignItems: 'start' }}>
         {/* Left: Items */}
         <div style={cardStyleV2}>
           <div style={cardHeaderV2}>
@@ -1317,32 +1433,49 @@ export default function AdminReturnDetailPage() {
                     borderTop: idx === 0 ? 'none' : '1px solid #f3f4f6',
                   }}
                 >
-                  {it.orderItem?.imageUrl ? (
-                    <img
-                      src={it.orderItem.imageUrl}
-                      alt=""
-                      style={{
-                        width: 84,
-                        height: 84,
-                        borderRadius: 10,
-                        objectFit: 'cover',
-                        background: '#f3f4f6',
-                        border: '1px solid #e5e7eb',
-                        flexShrink: 0,
-                      }}
-                    />
-                  ) : (
+                  <div style={{ position: 'relative', width: 84, height: 84, flexShrink: 0 }}>
+                    {/* Placeholder sits behind the image; the <img> covers it
+                        when it loads and hides itself onError — so a missing or
+                        broken URL degrades to this glyph, never the browser's
+                        broken-image icon. */}
                     <div
                       style={{
-                        width: 84,
-                        height: 84,
+                        position: 'absolute',
+                        inset: 0,
                         borderRadius: 10,
                         background: '#f3f4f6',
                         border: '1px solid #e5e7eb',
-                        flexShrink: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        color: '#9ca3af',
                       }}
-                    />
-                  )}
+                    >
+                      <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <circle cx="8.5" cy="8.5" r="1.5" />
+                        <path d="m21 15-5-5L5 21" />
+                      </svg>
+                    </div>
+                    {it.orderItem?.imageUrl && (
+                      <img
+                        src={it.orderItem.imageUrl}
+                        alt={it.orderItem?.productTitle ?? 'Returned item'}
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                        }}
+                        style={{
+                          position: 'relative',
+                          display: 'block',
+                          width: 84,
+                          height: 84,
+                          borderRadius: 10,
+                          objectFit: 'cover',
+                          border: '1px solid #e5e7eb',
+                        }}
+                      />
+                    )}
+                  </div>
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 12 }}>
                       <div style={{ fontWeight: 600, fontSize: 15, color: '#111827' }}>
@@ -1446,10 +1579,8 @@ export default function AdminReturnDetailPage() {
               <div
                 style={{
                   ...cardStyleV2,
-                  background: refunded
-                    ? 'linear-gradient(135deg, #d1fae5 0%, #a7f3d0 100%)'
-                    : 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
-                  border: refunded ? '1px solid #34d399' : '1px solid #bae6fd',
+                  background: refunded ? '#ecfdf5' : '#f0f9ff',
+                  border: refunded ? '1px solid #6ee7b7' : '1px solid #bae6fd',
                   padding: 20,
                 }}
               >
@@ -1532,76 +1663,6 @@ export default function AdminReturnDetailPage() {
                   <div style={{ fontSize: 12, color: '#6b7280' }}>{data.customer.phone}</div>
                 )}
               </div>
-            </div>
-          </div>
-
-          <div style={cardStyleV2}>
-            <div style={cardHeaderV2}>Timeline</div>
-            <div style={{ padding: 16 }}>
-              {(() => {
-                const historyByStatus = new Map<string, string>();
-                for (const h of [...(data.statusHistory ?? [])].sort(
-                  (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-                )) {
-                  if (!historyByStatus.has(h.toStatus)) {
-                    historyByStatus.set(h.toStatus, h.createdAt);
-                  }
-                }
-
-                const milestones: Array<{ label: string; at?: string | null }> = [
-                  { label: 'Created', at: data.createdAt },
-                  { label: 'Approved', at: historyByStatus.get('APPROVED') },
-                  { label: 'Rejected', at: historyByStatus.get('REJECTED') },
-                  { label: 'Pickup Scheduled', at: data.pickupScheduledAt ?? historyByStatus.get('PICKUP_SCHEDULED') },
-                  { label: 'In Transit', at: historyByStatus.get('IN_TRANSIT') },
-                  { label: 'Received', at: data.receivedAt ?? historyByStatus.get('RECEIVED') },
-                  { label: 'QC Completed', at: historyByStatus.get('QC_APPROVED') ?? historyByStatus.get('QC_REJECTED') ?? historyByStatus.get('PARTIALLY_APPROVED') },
-                  { label: 'Refund Processing', at: historyByStatus.get('REFUND_PROCESSING') },
-                  { label: 'Refunded', at: data.refundProcessedAt ?? historyByStatus.get('REFUNDED') },
-                  { label: 'Completed', at: historyByStatus.get('COMPLETED') },
-                  { label: 'Closed', at: data.closedAt },
-                ].filter((m) => m.at);
-
-                if (milestones.length === 0) {
-                  return <div style={{ color: '#9ca3af', fontSize: 12 }}>No timeline events yet.</div>;
-                }
-                return (
-                  <div style={{ position: 'relative', paddingLeft: 20 }}>
-                    <div
-                      style={{
-                        position: 'absolute',
-                        left: 5,
-                        top: 6,
-                        bottom: 6,
-                        width: 2,
-                        background: '#e5e7eb',
-                      }}
-                    />
-                    {milestones.map((m, i) => (
-                      <div
-                        key={m.label}
-                        style={{ position: 'relative', paddingBottom: i === milestones.length - 1 ? 0 : 14 }}
-                      >
-                        <div
-                          style={{
-                            position: 'absolute',
-                            left: -20,
-                            top: 3,
-                            width: 12,
-                            height: 12,
-                            borderRadius: '50%',
-                            background: i === milestones.length - 1 ? '#2563eb' : '#10b981',
-                            border: '2px solid #fff',
-                            boxShadow: '0 0 0 2px #e5e7eb',
-                          }}
-                        />
-                        <div style={{ fontSize: 12, fontWeight: 600, color: '#111827' }}>{m.label}</div>
-                        <div style={{ fontSize: 11, color: '#6b7280' }}>{fmtDT(m.at)}</div>
-                      </div>
-                    ))}
-                  </div>
-                );
-              })()}
             </div>
           </div>
 
@@ -2394,9 +2455,14 @@ export default function AdminReturnDetailPage() {
             </div>
           )}
 
-          <div style={{ marginBottom: 16 }}>
-            <CaseTimeline caseKind="return" caseId={data.id} refreshKey={data.updatedAt} />
-          </div>
+        </div>
+      </div>
+
+      {/* Activity & audit logs — full width below the two-column grid so the
+          detailed timelines use the whole row instead of stacking in the narrow
+          right rail (which otherwise left the page bottom-left empty). */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: 20, marginTop: 20, alignItems: 'start' }}>
+        <CaseTimeline caseKind="return" caseId={data.id} refreshKey={data.updatedAt} />
 
           {data.statusHistory && data.statusHistory.length > 0 && (
             <div style={cardStyleV2}>
@@ -2488,7 +2554,6 @@ export default function AdminReturnDetailPage() {
               </div>
             </div>
           )}
-        </div>
       </div>
     </div>
   );
