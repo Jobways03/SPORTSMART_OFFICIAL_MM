@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
+import { validateAmount } from '@/lib/validators';
 
 interface CommissionSettings {
   id: string;
@@ -54,6 +55,47 @@ export default function CommissionSettingsPage() {
   }, []);
 
   const handleSave = async () => {
+    // Primary value: a percentage (0-100) for percentage types, otherwise a
+    // fixed money amount; the second value follows the same rule for combos.
+    const primaryIsPct = commissionType === 'PERCENTAGE' || commissionType === 'PERCENTAGE_PLUS_FIXED';
+    const secondIsPct = commissionType === 'FIXED_PLUS_PERCENTAGE';
+    const isComboType = commissionType === 'PERCENTAGE_PLUS_FIXED' || commissionType === 'FIXED_PLUS_PERCENTAGE';
+
+    const primaryError = validateAmount(commissionValue, {
+      min: 0,
+      max: primaryIsPct ? 100 : 10_000_000,
+      decimals: 2,
+      label: primaryIsPct ? 'Commission percentage' : 'Commission amount',
+    });
+    if (primaryError) {
+      setMessage({ text: primaryError, type: 'error' });
+      return;
+    }
+    if (isComboType) {
+      const secondError = validateAmount(secondCommissionValue, {
+        min: 0,
+        max: secondIsPct ? 100 : 10_000_000,
+        decimals: 2,
+        label: secondIsPct ? 'Second commission percentage' : 'Second commission amount',
+      });
+      if (secondError) {
+        setMessage({ text: secondError, type: 'error' });
+        return;
+      }
+    }
+    if (enableMaxCommission) {
+      const maxError = validateAmount(maxCommissionAmount, {
+        min: 0,
+        max: 10_000_000,
+        decimals: 2,
+        label: 'Maximum commission amount',
+      });
+      if (maxError) {
+        setMessage({ text: maxError, type: 'error' });
+        return;
+      }
+    }
+
     setSaving(true);
     setMessage(null);
     try {

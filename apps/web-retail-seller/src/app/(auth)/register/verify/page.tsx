@@ -14,7 +14,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { sellerAuthService } from '@/services/auth.service';
 import { ApiError } from '@/lib/api-client';
-import { validateOtp } from '@/lib/validators';
+import { validateOtp, validateEmail } from '@/lib/validators';
 import { CaptchaWidget } from '@/components/CaptchaWidget';
 import '../register.css';
 
@@ -120,8 +120,9 @@ function VerifyRegistrationOtpForm() {
       setOtpError(error);
       return;
     }
-    if (!email) {
-      setServerError('Please enter the email you registered with.');
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setServerError(emailError);
       return;
     }
     if (CAPTCHA_REQUIRED && !captchaToken) {
@@ -164,8 +165,9 @@ function VerifyRegistrationOtpForm() {
     setServerError('');
     setStatusMessage('');
     setWarningMessage('');
-    if (!email) {
-      setServerError('Please enter the email you registered with.');
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setServerError(emailError);
       return;
     }
     if (CAPTCHA_REQUIRED && !captchaToken) {

@@ -9,7 +9,7 @@ import {
   OwnBrandWarehouse,
   inr,
 } from '@/services/admin-nova.service';
-import { validateAmount } from '@/lib/validators';
+import { validateAmount, validateBusinessName } from '@/lib/validators';
 
 interface LineItem {
   productId: string;
@@ -53,7 +53,8 @@ export default function NewProcurementPage() {
     e.preventDefault();
     setError('');
     if (!warehouseId) return setError('Pick a warehouse');
-    if (!supplierName.trim()) return setError('Supplier name is required');
+    const supplierErr = validateBusinessName(supplierName, 'Supplier name');
+    if (supplierErr) return setError(supplierErr);
     if (items.length === 0) return setError('Add at least one line item');
     for (const [i, it] of items.entries()) {
       if (!it.productId.trim()) return setError(`Line ${i + 1}: product UUID is required`);

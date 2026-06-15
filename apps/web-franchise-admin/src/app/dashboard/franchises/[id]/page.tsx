@@ -18,6 +18,7 @@ import {
   validatePAN,
   validateIndianMobile,
   validateRequiredName,
+  validatePersonName,
   validatePincode,
 } from '@/lib/validators';
 import FranchiseStatusModal from '../components/franchise-status-modal';
@@ -276,7 +277,7 @@ export default function AdminFranchiseDetailPage() {
     const pincode = (editForm.pincode ?? '').trim();
     const warehousePincode = (editForm.warehousePincode ?? '').trim();
     const validationError =
-      validateRequiredName(editForm.ownerName ?? '', 'Owner name') ||
+      validatePersonName(editForm.ownerName ?? '', 'Owner name') ||
       validateRequiredName(editForm.businessName ?? '', 'Business name') ||
       validateIndianMobile(editForm.phoneNumber ?? '') ||
       (gst ? validateGSTIN(gst) : null) ||

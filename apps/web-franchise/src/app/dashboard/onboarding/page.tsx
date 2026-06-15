@@ -18,7 +18,7 @@ import { useRouter } from 'next/navigation';
 import { apiClient, ApiError } from '@/lib/api-client';
 import { franchiseProfileService, FranchiseProfile } from '@/services/profile.service';
 import { PincodeFields } from '@sportsmart/ui';
-import { validatePincode } from '@/lib/validators';
+import { validatePincode, validatePersonName } from '@/lib/validators';
 import './franchise-onboarding.css';
 
 type GstType = 'REGULAR' | 'COMPOSITION' | 'CASUAL';
@@ -214,9 +214,12 @@ export default function FranchiseOnboardingPage() {
       const whPinError = validatePincode(form.warehousePincode);
       if (whPinError) next.warehousePincode = whPinError;
     }
-    if (form.bankAccountHolderName.trim().length < 2) {
-      next.bankAccountHolderName = 'Account holder name is required';
-    }
+    // Account holder is a PERSON name — alphabets only (no digits/specials).
+    const holderError = validatePersonName(
+      form.bankAccountHolderName,
+      'Account holder name',
+    );
+    if (holderError) next.bankAccountHolderName = holderError;
     if (!ACCOUNT_RE.test(form.bankAccountNumber.replace(/\s+/g, ''))) {
       next.bankAccountNumber = 'Account number must be 9–18 digits';
     }

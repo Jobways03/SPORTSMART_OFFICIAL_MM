@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { FranchiseListItem, adminFranchisesService } from '@/services/admin-franchises.service';
 import { ApiError } from '@/lib/api-client';
+import { validatePersonName } from '@/lib/validators';
 import '../../sellers/components/modal.css';
 
 interface Props {
@@ -30,7 +31,8 @@ export default function EditBankModal({ franchise, initial, onClose, onSuccess }
 
   const acctValid = ACCOUNT_RE.test(accountNumber.replace(/\s+/g, ''));
   const ifscValid = IFSC_RE.test(ifscCode.trim().toUpperCase());
-  const holderValid = accountHolderName.trim().length >= 2;
+  const holderError = validatePersonName(accountHolderName, 'Account holder name');
+  const holderValid = holderError === null;
   const bankValid = bankName.trim().length > 0;
   const canSubmit = acctValid && ifscValid && holderValid && bankValid;
 
@@ -92,6 +94,9 @@ export default function EditBankModal({ franchise, initial, onClose, onSuccess }
               onChange={(e) => setAccountHolderName(e.target.value)}
               placeholder="As per bank records"
             />
+            {accountHolderName && holderError && (
+              <span className="field-error">{holderError}</span>
+            )}
           </div>
 
           <div className="modal-form-group">

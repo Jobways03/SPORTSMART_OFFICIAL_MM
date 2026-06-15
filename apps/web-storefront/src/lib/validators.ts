@@ -4,6 +4,9 @@ export interface FieldError {
 }
 
 const NAME_REGEX = /^[a-zA-Z][a-zA-Z\s]*$/;
+// Person-name rule: must start with a letter; allow only letters, spaces,
+// period, apostrophe, hyphen. NO digits, NO other special characters.
+const PERSON_NAME_REGEX = /^[A-Za-z][A-Za-z .'-]*$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const HAS_UPPERCASE = /[A-Z]/;
 const HAS_LOWERCASE = /[a-z]/;
@@ -24,6 +27,22 @@ export function validateLastName(value: string): string | null {
   if (!trimmed) return 'Last name is required';
   if (trimmed.length > 50) return 'Last name must not exceed 50 characters';
   if (!NAME_REGEX.test(trimmed)) return 'Last name must contain only letters';
+  return null;
+}
+
+/**
+ * Strict person-name validator (alphabets-only). Use for any human-name
+ * field — fullName, ownerName, accountHolderName, contactName, nominee, etc.
+ * Allows letters, spaces, period, apostrophe and hyphen; rejects digits and
+ * every other special character. Business / shop / brand names must NOT use
+ * this — they legitimately contain digits and `&` (use validateText there).
+ */
+export function validatePersonName(value: string, label = 'Name'): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return `${label} is required`;
+  if (trimmed.length < 2) return `${label} is too short`;
+  if (trimmed.length > 50) return `${label} is too long`;
+  if (!PERSON_NAME_REGEX.test(trimmed)) return `${label} must contain only letters`;
   return null;
 }
 

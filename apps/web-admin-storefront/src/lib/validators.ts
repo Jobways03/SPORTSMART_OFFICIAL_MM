@@ -49,6 +49,52 @@ export function validateAmount(
   return null;
 }
 
+// PERSON name: must start with a letter; allows only letters, spaces, period,
+// apostrophe and hyphen — NO digits and NO other special characters
+// (@ # $ % ^ & * _ + = etc.). Length 2-50. Use for every PERSON name field
+// (account holder, customer, staff, nominee, contact person, author, etc.).
+// Business / shop / brand names must NOT use this — they legitimately contain
+// digits and "&" (see validateBusinessName).
+const PERSON_NAME_REGEX = /^[A-Za-z][A-Za-z .'-]*$/;
+export function validatePersonName(
+  value: string | null | undefined,
+  label = 'Name',
+): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return `${label} is required`;
+  if (trimmed.length < 2) return `${label} is too short`;
+  if (trimmed.length > 50) return `${label} is too long`;
+  if (!PERSON_NAME_REGEX.test(trimmed)) return `${label} must contain only letters`;
+  return null;
+}
+
+// BUSINESS / shop / store / brand name: permissive — digits and "&" are
+// legitimately allowed. Must start with a letter or digit. Length 2-150.
+const BUSINESS_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9 .,'&()\-/]*$/;
+export function validateBusinessName(
+  value: string | null | undefined,
+  label = 'Business name',
+): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return `${label} is required`;
+  if (trimmed.length < 2) return `${label} must be at least 2 characters`;
+  if (trimmed.length > 150) return `${label} must not exceed 150 characters`;
+  if (!BUSINESS_NAME_REGEX.test(trimmed)) return `${label} contains invalid characters`;
+  return null;
+}
+
+// Email — trimmed, no spaces, RFC-ish local@domain.tld, max 255 chars.
+// Signature + regex kept identical to the seller/franchise/affiliate apps.
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export function validateEmail(value: string | null | undefined): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return 'Email is required';
+  if (trimmed.includes(' ')) return 'Email must not contain spaces';
+  if (!EMAIL_REGEX.test(trimmed)) return 'Please enter a valid email address';
+  if (trimmed.length > 255) return 'Email is too long';
+  return null;
+}
+
 export function validatePincode(value: string | null | undefined): string | null {
   const v = (value ?? '').trim();
   return /^[1-9][0-9]{5}$/.test(v) ? null : 'Enter a valid 6-digit pincode';

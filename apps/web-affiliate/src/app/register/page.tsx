@@ -8,7 +8,7 @@ import {
   validateEmail,
   validateIndianMobile,
   validatePassword,
-  validateText,
+  validatePersonName,
 } from '@/lib/validators';
 import { CaptchaWidget } from '@/components/CaptchaWidget';
 
@@ -63,8 +63,8 @@ export default function RegisterPage() {
     // Field-level validation — browser `required`/`pattern` is bypassable, so
     // enforce the real formats here before the API call.
     const fieldError =
-      validateText(form.firstName, { label: 'First name', min: 1, max: 64 }) ||
-      validateText(form.lastName, { label: 'Last name', min: 1, max: 64 }) ||
+      validatePersonName(form.firstName, 'First name') ||
+      validatePersonName(form.lastName, 'Last name') ||
       validateEmail(form.email) ||
       validateIndianMobile(form.phone) ||
       validatePassword(form.password);

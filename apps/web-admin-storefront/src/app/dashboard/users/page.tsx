@@ -12,6 +12,11 @@ import {
   CreateAdminUserPayload,
 } from '@/services/admin-users.service';
 import { adminRolesService, RoleSummary } from '@/services/admin-roles.service';
+import {
+  validatePersonName,
+  validateEmail,
+  validateStrongPassword,
+} from '@/lib/validators';
 
 export default function AdminUsersPage() {
   return (
@@ -548,9 +553,12 @@ function CreateAdminModal({
 
   const submit = async () => {
     setErr('');
-    if (!name.trim()) return setErr('Name is required');
-    if (!email.trim()) return setErr('Email is required');
-    if (password.length < 8) return setErr('Password must be at least 8 characters');
+    const nameErr = validatePersonName(name, 'Name');
+    if (nameErr) return setErr(nameErr);
+    const emailErr = validateEmail(email);
+    if (emailErr) return setErr(emailErr);
+    const passwordErr = validateStrongPassword(password);
+    if (passwordErr) return setErr(passwordErr);
     setSubmitting(true);
     try {
       const payload: CreateAdminUserPayload = {
@@ -661,6 +669,8 @@ function EditAdminModal({
 
   const submit = async () => {
     setErr('');
+    const nameErr = validatePersonName(name, 'Name');
+    if (nameErr) return setErr(nameErr);
     setSubmitting(true);
     try {
       // Update profile fields.

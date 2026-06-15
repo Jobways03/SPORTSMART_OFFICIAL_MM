@@ -16,6 +16,22 @@ export function validateOwnerName(value: string): string | null {
   return null;
 }
 
+// Strict person-name rule: alphabets only. Must start with a letter and may
+// contain only letters, spaces, periods, apostrophes and hyphens — NO digits
+// and NO other special characters (@ # $ % ^ & * _ + = etc.). Length 2-50.
+// Use for every PERSON name field (account holder, customer, staff, nominee,
+// contact person, etc.). Business / shop / brand names must NOT use this —
+// they legitimately contain digits and "&" (see validateBusinessName).
+const PERSON_NAME_REGEX = /^[A-Za-z][A-Za-z .'-]*$/;
+export function validatePersonName(value: string, label = 'Name'): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return `${label} is required`;
+  if (trimmed.length < 2) return `${label} is too short`;
+  if (trimmed.length > 50) return `${label} is too long`;
+  if (!PERSON_NAME_REGEX.test(trimmed)) return `${label} must contain only letters`;
+  return null;
+}
+
 export function validateBusinessName(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return 'Business name is required';

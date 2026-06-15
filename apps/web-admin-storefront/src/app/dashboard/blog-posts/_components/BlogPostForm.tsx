@@ -8,6 +8,7 @@ import {
   type BlogPost,
   type BlogPostStatus,
 } from '@/services/admin-blog-posts.service';
+import { validatePersonName } from '@/lib/validators';
 
 interface Props {
   /** Existing post for edit mode; null for create mode. */
@@ -45,6 +46,14 @@ export default function BlogPostForm({ initial }: Props) {
     if (!title.trim()) {
       setErr('Title is required');
       return;
+    }
+    // Author is optional, but when present it is a PERSON name (alphabets only).
+    if (author.trim()) {
+      const authorErr = validatePersonName(author, 'Author');
+      if (authorErr) {
+        setErr(authorErr);
+        return;
+      }
     }
     setSaving(true);
     try {

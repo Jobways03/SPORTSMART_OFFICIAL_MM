@@ -120,6 +120,22 @@ export function getPasswordStrength(value: string) {
 const PINCODE_REGEX = /^[1-9][0-9]{5}$/;
 const INDIAN_MOBILE_REGEX = /^[6-9]\d{9}$/;
 
+// Person-name fields (account holder, nominee, contact person, etc.) accept
+// ALPHABETS ONLY — must start with a letter; allow letters, spaces, period,
+// apostrophe and hyphen. NO digits, NO other special characters. Business /
+// shop / brand names are NOT person names and stay permissive elsewhere.
+const PERSON_NAME_REGEX = /^[A-Za-z][A-Za-z .'-]*$/;
+
+/** Strict person-name: alphabets only (no digits / specials), length 2-50. */
+export function validatePersonName(value: string, label = 'Name'): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return `${label} is required`;
+  if (!PERSON_NAME_REGEX.test(trimmed)) return `${label} must contain only letters`;
+  if (trimmed.length < 2) return `${label} is too short`;
+  if (trimmed.length > 50) return `${label} is too long`;
+  return null;
+}
+
 /** Strict 6-digit Indian PIN code (no leading zero). */
 export function validatePincode(value: string): string | null {
   const trimmed = (value ?? '').trim();

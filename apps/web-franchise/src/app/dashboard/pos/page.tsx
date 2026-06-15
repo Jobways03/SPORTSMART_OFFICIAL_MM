@@ -19,7 +19,11 @@ import {
   CatalogMapping,
 } from '@/services/catalog.service';
 import { ApiError } from '@/lib/api-client';
-import { validateAmount, validateIndianMobile } from '@/lib/validators';
+import {
+  validateAmount,
+  validateIndianMobile,
+  validatePersonName,
+} from '@/lib/validators';
 import {
   mountBarcodeScanner,
   openCashDrawer,
@@ -372,6 +376,17 @@ if (cart.length === 0) {
       }
       if (line.unitPrice <= 0) {
         void notify(`Unit price must be greater than 0 for ${line.title}`);
+        return;
+      }
+    }
+
+    // Customer name is optional, but if entered it is a PERSON name and must
+    // be alphabets only (no digits / special characters).
+    const trimmedName = customerName.trim();
+    if (trimmedName) {
+      const nameError = validatePersonName(trimmedName, 'Customer name');
+      if (nameError) {
+        void notify(nameError);
         return;
       }
     }

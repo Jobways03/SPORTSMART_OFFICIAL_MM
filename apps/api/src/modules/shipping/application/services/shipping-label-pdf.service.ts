@@ -288,101 +288,120 @@ export class ShippingLabelPdfService {
       y += h + (opts.gap ?? 2);
     };
 
-    // ── Header ──────────────────────────────────────────────
-    doc.font('Helvetica-Bold').fontSize(14).fillColor('#0b1f3a').text('SPORTSMART', M, y);
+    // ── Outer frame ─────────────────────────────────────────
+    const FX = 6;
+    doc
+      .roundedRect(FX, FX, PAGE_W - FX * 2, PAGE_H - FX * 2, 7)
+      .lineWidth(1.2)
+      .strokeColor('#0b1f3a')
+      .stroke();
+
+    // ── Header (brand + courier) + accent bar ───────────────
+    doc.font('Helvetica-Bold').fontSize(15).fillColor('#0b1f3a').text('SPORTSMART', M, y);
     doc
       .font('Helvetica-Bold')
-      .fontSize(10)
-      .fillColor('#111')
-      .text(courier, M, y + 3, { width: CW, align: 'right' });
-    y += 22;
-    rule();
+      .fontSize(9)
+      .fillColor('#0b1f3a')
+      .text((courier || 'Delhivery').toUpperCase(), M, y + 4, {
+        width: CW,
+        align: 'right',
+      });
+    y += 21;
+    doc.rect(M, y, CW, 2.2).fill('#0b1f3a');
+    y += 10;
 
-    // ── AWB barcode ─────────────────────────────────────────
-    const bcW = 220;
-    const bcH = 40;
+    // ── AWB barcode (carrier scan target) ───────────────────
+    const bcW = 232;
+    const bcH = 44;
     drawBarcode(awbSvg, (PAGE_W - bcW) / 2, y, bcW, bcH);
-    y += bcH + 1;
-    block(awb, 'Helvetica-Bold', 12, '#000', { align: 'center', gap: 4 });
-    rule();
+    y += bcH + 2;
+    block(awb, 'Helvetica-Bold', 13, '#000', { align: 'center', gap: 8 });
 
-    // ── Payment + destination pin ───────────────────────────
+    // ── Payment + destination PIN band (filled) ─────────────
     const payLine =
       s.paymentMode === 'cod'
         ? `COD  Rs.${s.codAmount ?? s.totalAmount}`
         : 'PREPAID';
-    doc.font('Helvetica-Bold').fontSize(12).fillColor('#000').text(payLine, M, y);
+    const bandH = 24;
+    doc.rect(M, y, CW, bandH).fill('#0b1f3a');
+    doc.font('Helvetica-Bold').fontSize(12).fillColor('#ffffff').text(payLine, M + 9, y + 7);
     doc
-      .font('Helvetica')
-      .fontSize(9)
-      .fillColor('#333')
-      .text(`Dest PIN ${s.shipping.pincode}`, M, y + 2, {
-        width: CW,
-        align: 'right',
-      });
-    y += 18;
-    rule();
+      .font('Helvetica-Bold')
+      .fontSize(10)
+      .fillColor('#ffffff')
+      .text(`PIN ${s.shipping.pincode}`, M, y + 8, { width: CW - 9, align: 'right' });
+    y += bandH + 11;
 
-    // ── Ship to ─────────────────────────────────────────────
-    block('SHIP TO', 'Helvetica-Bold', 8, '#666', { gap: 1 });
-    block(s.shipping.name, 'Helvetica-Bold', 11, '#000', { gap: 1 });
+    // ── Ship to (dominant, boxed) ───────────────────────────
     const dropAddr = [s.shipping.line1, s.shipping.line2]
       .filter(Boolean)
       .join(', ');
-    block(dropAddr, 'Helvetica', 9, '#000', { gap: 1 });
-    block(
-      `${s.shipping.city}, ${s.shipping.state} - ${s.shipping.pincode}`,
-      'Helvetica',
-      9,
-      '#000',
-      { gap: 1 },
-    );
-    block(`Ph: ${s.shipping.phone}`, 'Helvetica', 9, '#000', { gap: 4 });
-    rule();
+    const shipTop = y;
+    const PAD = 9;
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(8)
+      .fillColor('#0b1f3a')
+      .text('DELIVER TO', M + PAD, y + 7, { characterSpacing: 0.6 });
+    y += 21;
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(13)
+      .fillColor('#000')
+      .text(s.shipping.name, M + PAD, y, { width: CW - PAD * 2 });
+    y += doc.heightOfString(s.shipping.name, { width: CW - PAD * 2 }) + 3;
+    const shipBody = `${dropAddr}\n${s.shipping.city}, ${s.shipping.state} - ${s.shipping.pincode}\nPh: ${s.shipping.phone}`;
+    doc
+      .font('Helvetica')
+      .fontSize(9.5)
+      .fillColor('#222')
+      .text(shipBody, M + PAD, y, { width: CW - PAD * 2, lineGap: 2.5 });
+    y += doc.heightOfString(shipBody, { width: CW - PAD * 2, lineGap: 2.5 }) + 9;
+    doc.roundedRect(M, shipTop, CW, y - shipTop, 5).lineWidth(1.1).strokeColor('#0b1f3a').stroke();
+    y += 13;
 
-    // ── Seller (from) ───────────────────────────────────────
+    // ── From (seller) ───────────────────────────────────────
     if (s.sellerName || s.sellerAddress) {
-      block('SELLER', 'Helvetica-Bold', 8, '#666', { gap: 1 });
+      block('FROM (SELLER)', 'Helvetica-Bold', 8, '#94a3b8', { gap: 2 });
       if (s.sellerName) block(s.sellerName, 'Helvetica-Bold', 10, '#000', { gap: 1 });
-      if (s.sellerAddress) block(s.sellerAddress, 'Helvetica', 8, '#333', { gap: 1 });
-      if (s.sellerGstin) block(`GSTIN: ${s.sellerGstin}`, 'Helvetica', 8, '#333', { gap: 4 });
-      else y += 2;
+      if (s.sellerAddress) block(s.sellerAddress, 'Helvetica', 8.5, '#333', { gap: 1 });
+      if (s.sellerGstin) block(`GSTIN: ${s.sellerGstin}`, 'Helvetica', 8, '#333', { gap: 6 });
+      else y += 4;
       rule();
     }
 
-    // ── Products ────────────────────────────────────────────
-    block('ITEMS', 'Helvetica-Bold', 8, '#666', { gap: 2 });
-    doc.font('Helvetica').fontSize(9).fillColor('#000');
-    for (const p of s.products.slice(0, 6)) {
-      const left = `${p.quantity} x ${p.name}`;
-      const right = `Rs.${p.unitPrice}`;
-      const h = doc.heightOfString(left, { width: CW - 60 });
-      doc.text(left, M, y, { width: CW - 60 });
-      doc.text(right, M, y, { width: CW, align: 'right' });
-      y += h + 2;
-    }
-    if (s.products.length > 6) {
-      block(`+ ${s.products.length - 6} more item(s)`, 'Helvetica-Oblique', 8, '#666', { gap: 2 });
-    }
-    block(`Weight: ${s.weightKg} kg`, 'Helvetica', 8, '#333', { gap: 4 });
-    rule();
-
     // ── Return address ──────────────────────────────────────
-    block('RETURN TO', 'Helvetica-Bold', 8, '#666', { gap: 1 });
+    block('RETURN TO', 'Helvetica-Bold', 8, '#94a3b8', { gap: 2 });
     block(
       s.sellerAddress || s.sellerName || 'Pickup warehouse',
       'Helvetica',
-      8,
+      8.5,
       '#333',
-      { gap: 6 },
+      { gap: 4 },
     );
 
-    // ── Order-ref barcode (own row, no overlap) ─────────────
-    const refBcW = 200;
-    const refBcH = 30;
-    drawBarcode(refSvg, (PAGE_W - refBcW) / 2, y, refBcW, refBcH);
-    y += refBcH + 1;
-    block(orderRef, 'Helvetica', 9, '#000', { align: 'center' });
+    // ── Order-ref barcode + footer (anchored near the bottom) ─
+    const footerY = PAGE_H - 30;
+    const refBcW = 210;
+    const refBcH = 32;
+    const refY = Math.max(y + 6, footerY - refBcH - 16);
+    drawBarcode(refSvg, (PAGE_W - refBcW) / 2, refY, refBcW, refBcH);
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(9)
+      .fillColor('#000')
+      .text(orderRef, M, refY + refBcH + 1, { width: CW, align: 'center' });
+    doc.moveTo(M, footerY).lineTo(PAGE_W - M, footerY).lineWidth(0.6).strokeColor('#cbd5e1').stroke();
+    doc
+      .font('Helvetica')
+      .fontSize(7.5)
+      .fillColor('#64748b')
+      .text(
+        `SportSmart Logistics  ·  ${courier || 'Delhivery'}  ·  Handle with care`,
+        M,
+        footerY + 5,
+        { width: CW, align: 'center' },
+      );
 
     doc.end();
     return done;

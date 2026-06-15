@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { apiClient } from '@/lib/api-client';
-import { validatePincode } from '@/lib/validators';
+import { validatePincode, validatePersonName, validateIndianMobile } from '@/lib/validators';
 
 /**
  * Phase 4 Delhivery wiring (2026-06-02) — Delhivery operations console.
@@ -217,8 +217,16 @@ export default function DelhiveryToolsPage() {
         actionLabel="Update"
         fields={[
           { name: 'awb', label: 'AWB', required: true },
-          { name: 'consigneeName', label: 'Consignee name' },
-          { name: 'consigneePhone', label: 'Consignee phone' },
+          {
+            name: 'consigneeName',
+            label: 'Consignee name',
+            validate: (v) => validatePersonName(v, 'Consignee name'),
+          },
+          {
+            name: 'consigneePhone',
+            label: 'Consignee phone',
+            validate: validateIndianMobile,
+          },
           { name: 'consigneeAddress', label: 'Consignee address', wide: true },
           { name: 'weightGrams', label: 'Weight (g)' },
         ]}

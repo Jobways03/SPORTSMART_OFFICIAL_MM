@@ -313,7 +313,8 @@ export default function CheckoutPage() {
         return '';
       case 'postalCode':
         if (!v) return 'Pincode is required';
-        if (!/^\d{6}$/.test(v)) return 'Pincode must be 6 digits';
+        // Canonical rule: 6 digits, first digit 1-9 (no leading zero).
+        if (!/^[1-9][0-9]{5}$/.test(v)) return 'Enter a valid 6-digit pincode';
         return '';
       case 'city':
         if (!v) return 'City is required';
