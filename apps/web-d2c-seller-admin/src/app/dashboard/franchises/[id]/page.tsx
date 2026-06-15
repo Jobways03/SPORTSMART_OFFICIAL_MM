@@ -13,6 +13,20 @@ import {
 } from '@/services/admin-franchises.service';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
+import {
+  validatePersonName,
+  validateIndianMobile,
+  validateGSTIN,
+  validatePAN,
+  validatePincode,
+  validateText,
+} from '@/lib/validators';
+import {
+  validateProfileShopName,
+  validateCity,
+  validateState,
+  validateCountry,
+} from '@/lib/profile-validators';
 import FranchiseStatusModal from '../components/franchise-status-modal';
 import FranchiseVerificationModal from '../components/franchise-verification-modal';
 import FranchiseCommissionModal from '../components/franchise-commission-modal';
@@ -132,7 +146,61 @@ export default function AdminFranchiseDetailPage() {
     });
   };
 
+  const validateEditForm = (): string | null => {
+    // Owner name — ALPHABETS ONLY (person name).
+    const ownerErr = validatePersonName(editForm.ownerName ?? '', 'Owner name');
+    if (ownerErr) return ownerErr;
+    // Business name — permissive (digits + & allowed).
+    const bizErr = validateProfileShopName(editForm.businessName ?? '');
+    if (bizErr) return bizErr;
+    // Phone — Indian mobile.
+    if ((editForm.phoneNumber ?? '').trim()) {
+      const phoneErr = validateIndianMobile(editForm.phoneNumber);
+      if (phoneErr) return phoneErr;
+    }
+    // GST / PAN — optional, but must be well-formed when present.
+    if ((editForm.gstNumber ?? '').trim()) {
+      const gstErr = validateGSTIN(editForm.gstNumber);
+      if (gstErr) return gstErr;
+    }
+    if ((editForm.panNumber ?? '').trim()) {
+      const panErr = validatePAN(editForm.panNumber);
+      if (panErr) return panErr;
+    }
+    // Location fields — validate when present.
+    if ((editForm.address ?? '').trim()) {
+      const addrErr = validateText(editForm.address, { min: 5, max: 500, label: 'Address' });
+      if (addrErr) return addrErr;
+    }
+    if ((editForm.pincode ?? '').trim()) {
+      const pinErr = validatePincode(editForm.pincode);
+      if (pinErr) return pinErr;
+    }
+    if ((editForm.city ?? '').trim()) {
+      const cityErr = validateCity(editForm.city);
+      if (cityErr) return cityErr;
+    }
+    if ((editForm.state ?? '').trim()) {
+      const stateErr = validateState(editForm.state);
+      if (stateErr) return stateErr;
+    }
+    if ((editForm.country ?? '').trim()) {
+      const countryErr = validateCountry(editForm.country);
+      if (countryErr) return countryErr;
+    }
+    if ((editForm.warehousePincode ?? '').trim()) {
+      const whPinErr = validatePincode(editForm.warehousePincode);
+      if (whPinErr) return whPinErr;
+    }
+    return null;
+  };
+
   const handleEditSave = async () => {if (!franchise) return;
+    const validationError = validateEditForm();
+    if (validationError) {
+      void notify(validationError);
+      return;
+    }
     setEditSaving(true);
     try {
       await adminFranchisesService.editFranchise(franchise.id, editForm);

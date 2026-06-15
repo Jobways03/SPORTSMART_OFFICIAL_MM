@@ -23,7 +23,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
 import { PincodeFields } from '@sportsmart/ui';
-import { validatePincode, validateText } from '@/lib/validators';
+import { validatePincode, validateText, validatePersonName } from '@/lib/validators';
 import './onboarding.css';
 
 // Phase 26 GST — policy change (2026-05-18): UNREGISTERED is no longer
@@ -330,8 +330,13 @@ export default function SellerOnboardingPage() {
       errs.push('Store state is required.');
     if (validatePincode(form.sellerZipCode))
       errs.push('Store zip code must be a valid 6-digit pincode.');
-    if (form.bankAccountHolderName.trim().length < 2)
-      errs.push('Bank account holder name is required.');
+    // Account holder name is a PERSON NAME — alphabets only (no digits,
+    // no special characters beyond space / period / apostrophe / hyphen).
+    const holderNameErr = validatePersonName(
+      form.bankAccountHolderName,
+      'Bank account holder name',
+    );
+    if (holderNameErr) errs.push(`${holderNameErr}.`);
     if (!ACCOUNT_RE.test(form.bankAccountNumber.replace(/\s+/g, '')))
       errs.push('Bank account number must be 9–18 digits.');
     if (!IFSC_RE.test(form.bankIfscCode.trim().toUpperCase()))

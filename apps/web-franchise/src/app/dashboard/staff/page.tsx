@@ -14,6 +14,7 @@ import {
   validateEmail,
   validatePassword,
   validateIndianMobile,
+  validatePersonName,
 } from '@/lib/validators';
 
 const ASSIGNABLE_ROLES: FranchiseStaffRole[] = [
@@ -405,7 +406,9 @@ function AddStaffModal({
   const [isSaving, setIsSaving] = useState(false);
 
   const submit = async () => {
-if (!form.name.trim()) return void notify('Name is required');
+    // Staff name is a PERSON name — alphabets only (no digits/specials).
+    const nameError = validatePersonName(form.name, 'Name');
+    if (nameError) return void notify(nameError);
     const emailError = validateEmail(form.email);
     if (emailError) return void notify(emailError);
     // Phone is optional, but if provided it must be a valid Indian mobile.
@@ -547,7 +550,9 @@ function EditStaffModal({
   const [isSaving, setIsSaving] = useState(false);
 
   const submit = async () => {
-if (!form.name?.trim()) return void notify('Name is required');
+    // Staff name is a PERSON name — alphabets only (no digits/specials).
+    const nameError = validatePersonName(form.name ?? '', 'Name');
+    if (nameError) return void notify(nameError);
     // Phone is optional, but if provided it must be a valid Indian mobile.
     if (form.phone?.trim()) {
       const phoneError = validateIndianMobile(form.phone.trim());
@@ -557,7 +562,7 @@ if (!form.name?.trim()) return void notify('Name is required');
     setIsSaving(true);
     try {
       await franchiseStaffService.updateStaff(staff.id, {
-        name: form.name.trim(),
+        name: (form.name ?? '').trim(),
         phone: form.phone?.trim() || undefined,
         role: form.role,
         isActive: form.isActive,

@@ -54,6 +54,31 @@ export function validateAmount(
   return null;
 }
 
+// ── Person name (alphabets only) ───────────────────────────────────────────
+
+/**
+ * Strict person-name rule shared across the suite: must start with a letter and
+ * contain only letters, spaces, periods, apostrophes, and hyphens. No digits and
+ * no other special characters. Length 2-50. Use this for human-name fields
+ * (firstName, lastName, fullName, ownerName, accountHolderName, contactPerson,
+ * customerName, staffName, nominee, …). For shop / business / brand names — which
+ * legitimately allow digits and `&` — use the permissive profile-validators
+ * instead (validateProfileShopName), NOT this one.
+ */
+const PERSON_NAME_REGEX = /^[A-Za-z][A-Za-z .'-]*$/;
+
+export function validatePersonName(
+  value: string,
+  label = 'Name',
+): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return `${label} is required`;
+  if (!PERSON_NAME_REGEX.test(trimmed)) return `${label} must contain only letters`;
+  if (trimmed.length < 2) return `${label} is too short`;
+  if (trimmed.length > 50) return `${label} is too long`;
+  return null;
+}
+
 // ── Indian statutory identifiers ────────────────────────────────────────────
 
 const PINCODE_REGEX = /^[1-9][0-9]{5}$/;

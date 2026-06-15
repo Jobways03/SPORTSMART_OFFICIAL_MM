@@ -204,9 +204,13 @@ export default function CreateProductPage() {
     if (!form.hasVariants) {
       if (!form.basePrice || isNaN(Number(form.basePrice)) || Number(form.basePrice) <= 0) {
         errs.basePrice = 'Price is required and must be greater than 0';
+      } else if ((form.basePrice.split('.')[1] ?? '').length > 2) {
+        errs.basePrice = 'Price can have at most 2 decimal places';
       }
       if (form.baseStock === '' || isNaN(Number(form.baseStock)) || Number(form.baseStock) < 0) {
         errs.baseStock = 'Stock is required and must be 0 or more';
+      } else if (!Number.isInteger(Number(form.baseStock))) {
+        errs.baseStock = 'Stock must be a whole number';
       }
     }
     setErrors(errs);

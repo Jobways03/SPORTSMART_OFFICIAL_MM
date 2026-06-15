@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { apiClient } from '@/lib/api-client';
+import { validateEmail } from '@/lib/validators';
 
 /**
  * Phase 193 (#15) — "Notify me when back in stock" capture, shown on the PDP
@@ -16,6 +17,13 @@ export function NotifyWhenAvailable({ slug }: { slug: string }) {
 
   const submit = async () => {
     if (!email.trim()) return;
+    // Validate the address format before hitting the API — a malformed email
+    // ("abc") would otherwise pass the bare non-empty check above.
+    const emailError = validateEmail(email);
+    if (emailError) {
+      setError(emailError);
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {

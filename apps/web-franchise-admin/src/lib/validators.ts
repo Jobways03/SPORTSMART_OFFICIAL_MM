@@ -9,6 +9,9 @@ const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const PINCODE_REGEX = /^[1-9][0-9]{5}$/;
 const INDIAN_MOBILE_REGEX = /^[6-9]\d{9}$/;
 const NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9 .,'&()\-/]*$/;
+// Person name — must start with a letter; letters, spaces, period,
+// apostrophe and hyphen only. NO digits, NO other special characters.
+const PERSON_NAME_REGEX = /^[A-Za-z][A-Za-z .'-]*$/;
 
 /** GSTIN — 15 chars: 2-digit state + 10-char PAN + entity + Z + checksum. */
 export function validateGSTIN(value: string): string | null {
@@ -41,6 +44,26 @@ export function validatePincode(value: string): string | null {
   const trimmed = (value ?? '').trim();
   if (!trimmed) return 'Pincode is required';
   if (!PINCODE_REGEX.test(trimmed)) return 'Enter a valid 6-digit pincode';
+  return null;
+}
+
+/**
+ * Person name (owner / account holder / consignee / contact, etc.) —
+ * ALPHABETS ONLY. Must start with a letter; allows letters, spaces,
+ * period, apostrophe and hyphen. Rejects digits and every other special
+ * character. Length 2-50. Use this for human names; use
+ * `validateRequiredName` for business / shop / brand labels where digits
+ * and `&` are legitimate.
+ */
+export function validatePersonName(
+  value: string,
+  label = 'Name',
+): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return `${label} is required`;
+  if (trimmed.length < 2) return `${label} is too short`;
+  if (trimmed.length > 50) return `${label} is too long`;
+  if (!PERSON_NAME_REGEX.test(trimmed)) return `${label} must contain only letters`;
   return null;
 }
 

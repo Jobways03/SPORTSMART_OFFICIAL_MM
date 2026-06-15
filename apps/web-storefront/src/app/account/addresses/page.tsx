@@ -16,6 +16,7 @@ import { ApiError } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
 import {
   validateText,
+  validatePersonName,
   validateIndianMobile,
   validatePincode,
 } from '@/lib/validators';
@@ -209,7 +210,9 @@ export default function AddressesPage() {
   };
 
   const validateForm = (): string | null => {
-    const fullNameError = validateText(form.fullName, { label: 'Full name', max: 100 });
+    // Recipient is a PERSON name — alphabets only (letters/space/.'-), no
+    // digits or other specials. (Was a length-only validateText before.)
+    const fullNameError = validatePersonName(form.fullName, 'Full name');
     if (fullNameError) return fullNameError;
 
     if (!form.phone.trim()) return 'Phone is required.';
@@ -463,6 +466,7 @@ export default function AddressesPage() {
                     type="text"
                     className="profile-input"
                     value={form.fullName}
+                    maxLength={50}
                     onChange={(e) => setForm({ ...form, fullName: e.target.value })}
                     required
                   />

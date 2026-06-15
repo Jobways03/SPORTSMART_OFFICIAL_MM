@@ -156,6 +156,29 @@ export function validateUploadFile(
   return null;
 }
 
+/**
+ * Person name — ALPHABETS ONLY. Must start with a letter; allows only
+ * letters, spaces, period, apostrophe and hyphen. NO digits and NO other
+ * special characters. Length 2-50.
+ *
+ * Use this for firstName / lastName / fullName / ownerName /
+ * accountHolderName / contactName / nominee and similar human-name fields.
+ * Do NOT use it for business / shop / brand names (those legitimately allow
+ * digits and `&`) — use a permissive validator there instead.
+ */
+const PERSON_NAME_REGEX = /^[A-Za-z][A-Za-z .'-]*$/;
+export function validatePersonName(
+  value: string,
+  label = 'Name',
+): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return `${label} is required`;
+  if (!PERSON_NAME_REGEX.test(trimmed)) return `${label} must contain only letters`;
+  if (trimmed.length < 2) return `${label} is too short`;
+  if (trimmed.length > 50) return `${label} is too long`;
+  return null;
+}
+
 interface TextOptions {
   min?: number;
   max?: number;

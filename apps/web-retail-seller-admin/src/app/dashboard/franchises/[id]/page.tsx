@@ -17,6 +17,7 @@ import {
   validatePAN,
   validatePincode,
   validateIndianMobile,
+  validatePersonName,
 } from '@/lib/validators';
 import FranchiseStatusModal from '../components/franchise-status-modal';
 import FranchiseVerificationModal from '../components/franchise-verification-modal';
@@ -138,6 +139,12 @@ export default function AdminFranchiseDetailPage() {
   };
 
   const handleEditSave = async () => {if (!franchise) return;
+    // Owner name is a person name — alphabets only (no digits / special chars).
+    const ownerName = (editForm.ownerName || '').trim();
+    if (ownerName) {
+      const ownerError = validatePersonName(ownerName, 'Owner name');
+      if (ownerError) { void notify(ownerError); return; }
+    }
     // Field-level checks for the statutory / contact identifiers. Each is
     // optional, so only validate when the operator has actually entered one.
     const gst = (editForm.gstNumber || '').trim();

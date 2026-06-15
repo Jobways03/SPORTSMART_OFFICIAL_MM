@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { sellerProductService } from '@/services/product.service';
 import { ApiError } from '@/lib/api-client';
 import { sellerAuthService } from '@/services/auth.service';
+import { validatePincode } from '@/lib/validators';
 import '../../products/product-form.css';
 import '../../products/products.css';
 
@@ -323,6 +324,15 @@ export default function MyProductsPage() {
     if (!editForm.stockQty || Number(editForm.stockQty) < 0) {
       setEditError('Stock quantity is required and must be 0 or more.');
       return;
+    }
+    // Pickup pincode is optional, but if supplied it must be a valid
+    // 6-digit Indian pincode (mirrors the backend mapping DTO).
+    if (editForm.pickupPincode.trim()) {
+      const pincodeErr = validatePincode(editForm.pickupPincode);
+      if (pincodeErr) {
+        setEditError(pincodeErr);
+        return;
+      }
     }
     setEditLoading(true);
     setEditError('');

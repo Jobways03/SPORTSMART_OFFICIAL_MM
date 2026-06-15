@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { adminAuthService } from '@/services/admin-auth.service';
 import { ApiError } from '@/lib/api-client';
+import { validateEmail } from '@/lib/validators';
 import '../login/login.css';
 
 /**
@@ -34,8 +35,9 @@ export default function AdminForgotPasswordPage() {
     e.preventDefault();
     setError('');
     const trimmed = email.trim().toLowerCase();
-    if (!trimmed) {
-      setError('Enter your admin email address.');
+    const emailErr = validateEmail(trimmed);
+    if (emailErr) {
+      setError(emailErr);
       return;
     }
     setLoading(true);

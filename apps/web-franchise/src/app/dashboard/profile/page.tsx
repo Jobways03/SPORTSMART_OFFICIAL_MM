@@ -9,7 +9,7 @@ import {
 } from '@/services/profile.service';
 import { useModal, PincodeFields } from '@sportsmart/ui';
 import { apiClient, ApiError } from '@/lib/api-client';
-import { validatePassword } from '@/lib/validators';
+import { validatePassword, validateOwnerName } from '@/lib/validators';
 
 type PincodeData = {
   district: string;
@@ -345,9 +345,12 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
           return 'Pincode must be 6 digits and cannot start with 0';
         return '';
       case 'ownerName':
+        // Owner name is a PERSON name — alphabets only (no digits AND no
+        // special characters like @ # $ etc.). The keystroke sanitizer below
+        // strips digits but still lets specials through, so the strict
+        // alphabets-only check is enforced here at validate time.
         if (!trimmed) return '';
-        if (/[0-9]/.test(trimmed)) return 'Owner name cannot contain digits';
-        return '';
+        return validateOwnerName(trimmed) ?? '';
       case 'businessName':
         // Business names commonly include digits (e.g. "3M", "7-Eleven", "Demo1"),
         // so we don't reject them here. Length cap is enforced by the input's

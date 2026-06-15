@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { sellerProductService } from '@/services/product.service';
 import { apiClient, ApiError } from '@/lib/api-client';
 import { sellerAuthService } from '@/services/auth.service';
+import { validatePincode } from '@/lib/validators';
 import '../products/product-form.css';
 import '../products/products.css';
 
@@ -219,6 +220,16 @@ export default function BrowseCatalogPage() {
     } else {
       if (!mapForm.stockQty || Number(mapForm.stockQty) < 0) {
         setMapError('Stock quantity is required and must be 0 or more.');
+        return;
+      }
+    }
+
+    // Pickup pincode is optional, but if supplied it must be a valid
+    // 6-digit Indian pincode (mirrors the backend mapping DTO).
+    if (mapForm.pickupPincode.trim()) {
+      const pincodeErr = validatePincode(mapForm.pickupPincode);
+      if (pincodeErr) {
+        setMapError(pincodeErr);
         return;
       }
     }

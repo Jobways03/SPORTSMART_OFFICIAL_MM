@@ -22,6 +22,7 @@ import { useWishlistToggle } from '@/components/ui/ProductCard';
 import { apiClient } from '@/lib/api-client';
 import { useSession } from '@/lib/auth-context';
 import { sanitizeProductHtml } from '@/lib/sanitize';
+import { validatePincode } from '@/lib/validators';
 // Phase 193 — related products (#2) + back-in-stock capture (#15).
 import { RelatedProducts } from './_components/RelatedProducts';
 import { NotifyWhenAvailable } from './_components/NotifyWhenAvailable';
@@ -221,8 +222,10 @@ export default function ProductDetailPage() {
 
   const handleCheckPincode = async () => {
     if (!product) return;
-    if (!/^\d{6}$/.test(pincode)) {
-      setPincodeError('Enter a valid 6-digit pincode');
+    // Canonical pincode rule: 6 digits, first digit 1-9 (no leading zero).
+    const pincodeErr = validatePincode(pincode);
+    if (pincodeErr) {
+      setPincodeError(pincodeErr);
       setPincodeResult(null);
       return;
     }

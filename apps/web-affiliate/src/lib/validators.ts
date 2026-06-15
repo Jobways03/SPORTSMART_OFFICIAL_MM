@@ -39,6 +39,20 @@ export function validateAccountHolderName(value: string): string | null {
   return null;
 }
 
+/**
+ * Person name — ALPHABETS ONLY (first/last/full/owner/contact names, etc.).
+ * Must start with a letter; allows only letters, spaces, period, apostrophe,
+ * and hyphen. NO digits, NO other special characters. Length 2–50.
+ */
+export function validatePersonName(value: string, label = 'Name'): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return `${label} is required`;
+  if (trimmed.length < 2) return `${label} is too short`;
+  if (trimmed.length > 50) return `${label} is too long`;
+  if (!NAME_REGEX.test(trimmed)) return `${label} must contain only letters`;
+  return null;
+}
+
 /** UPI VPA — handle@psp. */
 export function validateUPI(value: string): string | null {
   const trimmed = (value ?? '').trim();

@@ -15,7 +15,7 @@ import { ApiError } from '@/lib/api-client';
 type Tab = 'health' | 'preview';
 
 const HEALTH_REFRESH_MS = 30_000;
-const PINCODE_RE = /^[0-9]{6}$/;
+const PINCODE_RE = /^[1-9][0-9]{5}$/;
 
 const fmtAgo = (iso: string) => {
   try {
@@ -375,7 +375,7 @@ function PreviewTab() {
     setError('');
     setResult(null);
     if (!PINCODE_RE.test(pincode.trim())) {
-      setError('Pincode must be 6 digits.');
+      setError('Enter a valid 6-digit pincode.');
       return;
     }
     if (validRows.length === 0) {
