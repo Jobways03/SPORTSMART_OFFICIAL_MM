@@ -49,6 +49,7 @@ export class UpdateSellerProfileDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   locality?: string;
 
   @IsOptional()
@@ -89,15 +90,23 @@ export class UpdateSellerProfileDto {
   })
   sellerZipCode?: string;
 
+  // Rich-text (HTML) fields. The AUTHORITATIVE length limit is enforced in
+  // UpdateSellerProfileUseCase on the SANITISED PLAIN TEXT (short=500,
+  // detailed=10000, policy=10000). These @MaxLength caps bound the RAW HTML
+  // payload only and must stay comfortably ABOVE the plain-text limit (HTML
+  // markup inflates length) so valid content is never rejected at the DTO.
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   shortStoreDescription?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(50000)
   detailedStoreDescription?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(50000)
   sellerPolicy?: string;
 }

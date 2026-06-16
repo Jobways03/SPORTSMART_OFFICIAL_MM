@@ -297,7 +297,8 @@ export default function ProfilePage() {
                   type="text"
                   className="profile-input"
                   value={firstName}
-                  onChange={(e) => setFirstName(e.target.value)}
+                  maxLength={50}
+                  onChange={(e) => setFirstName(e.target.value.replace(/[^A-Za-z .'-]/g, ''))}
                   required
                 />
               </div>
@@ -309,7 +310,8 @@ export default function ProfilePage() {
                   type="text"
                   className="profile-input"
                   value={lastName}
-                  onChange={(e) => setLastName(e.target.value)}
+                  maxLength={50}
+                  onChange={(e) => setLastName(e.target.value.replace(/[^A-Za-z .'-]/g, ''))}
                   required
                 />
               </div>
@@ -358,9 +360,18 @@ export default function ProfilePage() {
                   id="phone"
                   type="tel"
                   className="profile-input"
-                  placeholder="+91XXXXXXXXXX"
+                  placeholder="10-digit mobile starting 6-9"
                   value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
+                  inputMode="numeric"
+                  maxLength={10}
+                  onChange={(e) => {
+                    // Indian mobile — digits only, drop a pasted 91 country
+                    // code, refuse leading 0-5, cap at 10.
+                    let next = e.target.value.replace(/\D/g, '');
+                    if (next.startsWith('91') && next.length > 10) next = next.slice(2);
+                    next = next.replace(/^[0-5]+/, '');
+                    setPhone(next.slice(0, 10));
+                  }}
                 />
                 <div className="profile-field-helper">
                   Used for delivery updates and one-time passwords.

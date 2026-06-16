@@ -8,6 +8,12 @@ import {
   TicketActorType,
 } from '@/services/admin-support.service';
 import { ApiError } from '@/lib/api-client';
+import { validateBusinessName } from '@/lib/validators';
+
+// Ticket-category names are BUSINESS-style labels — letters AND digits
+// plus a few punctuation marks are legitimate (e.g. "Orders & Shipping").
+const filterCategoryName = (v: string) =>
+  v.replace(/[^A-Za-z0-9 &.,\-/()']/g, '').slice(0, 150);
 
 const SCOPE_OPTIONS: Array<TicketActorType | ''> = [
   '',
@@ -329,6 +335,7 @@ function CategoryForm({
   busy: boolean;
 }) {
   const [name, setName] = useState(initial?.name ?? '');
+  const [nameError, setNameError] = useState<string | null>(null);
   const [description, setDescription] = useState(initial?.description ?? '');
   const [scopedTo, setScopedTo] = useState<TicketActorType | ''>(
     initial?.scopedTo ?? '',
@@ -337,7 +344,13 @@ function CategoryForm({
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name.trim()) return;
+    // Category name is a BUSINESS-style label (letters + digits allowed).
+    const nameErr = validateBusinessName(name, 'Name');
+    if (nameErr) {
+      setNameError(nameErr);
+      return;
+    }
+    setNameError(null);
     onSave({
       name: name.trim(),
       description: description.trim(),
@@ -366,11 +379,15 @@ function CategoryForm({
         <input
           type="text"
           value={name}
-          onChange={(e) => setName(e.target.value)}
+          maxLength={150}
+          onChange={(e) => { setName(filterCategoryName(e.target.value)); if (nameError) setNameError(null); }}
           required
           autoFocus={initial === null}
           style={inp}
         />
+        {nameError && (
+          <div style={{ color: '#dc2626', fontSize: 12, marginTop: 4 }}>{nameError}</div>
+        )}
         <input
           type="text"
           placeholder="Description (optional)"

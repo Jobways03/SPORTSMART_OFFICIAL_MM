@@ -56,6 +56,10 @@ export class RegisterAffiliateDto {
     typeof value === 'string' ? value.trim() : value,
   )
   @Length(1, 100)
+  @Matches(/^[A-Za-z][A-Za-z .'-]*$/, {
+    message:
+      'First name must contain only letters, spaces, periods, apostrophes or hyphens',
+  })
   firstName!: string;
 
   @IsString()
@@ -63,6 +67,10 @@ export class RegisterAffiliateDto {
     typeof value === 'string' ? value.trim() : value,
   )
   @Length(1, 100)
+  @Matches(/^[A-Za-z][A-Za-z .'-]*$/, {
+    message:
+      'Last name must contain only letters, spaces, periods, apostrophes or hyphens',
+  })
   lastName!: string;
 
   @IsString()

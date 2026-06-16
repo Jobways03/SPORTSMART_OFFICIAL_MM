@@ -11,7 +11,7 @@ import {
 } from '@/services/product.service';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
-import { validateAmount, validateUploadFile } from '@/lib/validators';
+import { validateAmount, validateUploadFile, filterAmount, filterInteger } from '@/lib/validators';
 import '../../../product-form.css';
 
 export default function VariantDetailPage() {
@@ -443,7 +443,7 @@ const router = useRouter();
                   type="number"
                   className="form-input"
                   value={form.price}
-                  onChange={e => setForm(prev => ({ ...prev, price: e.target.value }))}
+                  onChange={e => setForm(prev => ({ ...prev, price: filterAmount(e.target.value) }))}
                   placeholder="0.00"
                   min="0"
                   step="0.01"
@@ -458,7 +458,7 @@ const router = useRouter();
                   type="number"
                   className="form-input"
                   value={form.compareAtPrice}
-                  onChange={e => setForm(prev => ({ ...prev, compareAtPrice: e.target.value }))}
+                  onChange={e => setForm(prev => ({ ...prev, compareAtPrice: filterAmount(e.target.value) }))}
                   placeholder="0.00"
                   min="0"
                   step="0.01"
@@ -473,7 +473,7 @@ const router = useRouter();
                   type="number"
                   className="form-input"
                   value={form.costPrice}
-                  onChange={e => setForm(prev => ({ ...prev, costPrice: e.target.value }))}
+                  onChange={e => setForm(prev => ({ ...prev, costPrice: filterAmount(e.target.value) }))}
                   placeholder="0.00"
                   min="0"
                   step="0.01"
@@ -517,7 +517,7 @@ const router = useRouter();
                 type="number"
                 className="form-input"
                 value={form.stock}
-                onChange={e => setForm(prev => ({ ...prev, stock: e.target.value }))}
+                onChange={e => setForm(prev => ({ ...prev, stock: filterInteger(e.target.value) }))}
                 placeholder="0"
                 min="0"
                 step="1"
@@ -549,7 +549,7 @@ const router = useRouter();
                 type="number"
                 className="form-input"
                 value={form.weight}
-                onChange={e => setForm(prev => ({ ...prev, weight: e.target.value }))}
+                onChange={e => setForm(prev => ({ ...prev, weight: filterAmount(e.target.value) }))}
                 placeholder="0"
                 min="0"
                 step="0.01"
@@ -563,7 +563,7 @@ const router = useRouter();
                   className="form-input"
                   style={{ flex: 1 }}
                   value={form.length}
-                  onChange={e => setForm(prev => ({ ...prev, length: e.target.value }))}
+                  onChange={e => setForm(prev => ({ ...prev, length: filterAmount(e.target.value) }))}
                   placeholder="L"
                   min="0"
                   step="0.1"
@@ -574,7 +574,7 @@ const router = useRouter();
                   className="form-input"
                   style={{ flex: 1 }}
                   value={form.width}
-                  onChange={e => setForm(prev => ({ ...prev, width: e.target.value }))}
+                  onChange={e => setForm(prev => ({ ...prev, width: filterAmount(e.target.value) }))}
                   placeholder="W"
                   min="0"
                   step="0.1"
@@ -585,7 +585,7 @@ const router = useRouter();
                   className="form-input"
                   style={{ flex: 1 }}
                   value={form.height}
-                  onChange={e => setForm(prev => ({ ...prev, height: e.target.value }))}
+                  onChange={e => setForm(prev => ({ ...prev, height: filterAmount(e.target.value) }))}
                   placeholder="H"
                   min="0"
                   step="0.1"

@@ -71,15 +71,17 @@ export class SellerUpdateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   baseSku?: string;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(0)
   baseStock?: number;
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   baseBarcode?: string;
 
   @IsOptional()
@@ -89,6 +91,7 @@ export class SellerUpdateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   weightUnit?: string;
 
   @IsOptional()
@@ -108,14 +111,17 @@ export class SellerUpdateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   dimensionUnit?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   returnPolicy?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   warrantyInfo?: string;
 
   // Tax-config cluster (HSN, GST rate, supply taxability, cess, UQC, tax
@@ -126,6 +132,7 @@ export class SellerUpdateProductDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   tags?: string[];
 
   @IsOptional()

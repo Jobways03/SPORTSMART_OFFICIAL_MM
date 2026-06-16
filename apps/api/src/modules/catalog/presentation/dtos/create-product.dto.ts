@@ -19,18 +19,22 @@ import { SupplyTaxability } from '@prisma/client';
 export class ProductSeoDto {
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   metaTitle?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(1024)
   metaDescription?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(512)
   metaKeywords?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   handle?: string;
 }
 
@@ -51,10 +55,11 @@ export class CreateVariantInlineDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   sku?: string;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(0)
   stock?: number;
 
@@ -66,6 +71,7 @@ export class CreateVariantInlineDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @MaxLength(64, { each: true })
   optionValueIds?: string[];
 }
 
@@ -80,6 +86,11 @@ export class CreateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(150)
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9 &.,\-/()']*$/, {
+    message:
+      'categoryName must contain only letters, digits, spaces and & . , - / ( ) \'',
+  })
   categoryName?: string;
 
   @IsOptional()
@@ -88,6 +99,11 @@ export class CreateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(150)
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9 &.,\-/()']*$/, {
+    message:
+      'brandName must contain only letters, digits, spaces and & . , - / ( ) \'',
+  })
   brandName?: string;
 
   @IsOptional()
@@ -127,15 +143,17 @@ export class CreateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   baseSku?: string;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(0)
   baseStock?: number;
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   baseBarcode?: string;
 
   @IsOptional()
@@ -145,6 +163,7 @@ export class CreateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   weightUnit?: string;
 
   @IsOptional()
@@ -164,14 +183,17 @@ export class CreateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   dimensionUnit?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   returnPolicy?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   warrantyInfo?: string;
 
   // ─── Tax fields (Phase 1 GST) ──────────────────────────────────
@@ -186,6 +208,7 @@ export class CreateProductDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   tags?: string[];
 
   @IsOptional()

@@ -1,0 +1,27 @@
+{
+  "name": "@sportsmart/web-seller",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 4011",
+    "build": "next build",
+    "start": "next start --port 4011",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "next": "^15.5.14",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@sportsmart/eslint-config": "workspace:*",
+    "@sportsmart/tsconfig": "workspace:*",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.12",
+    "tailwindcss": "^3",
+    "typescript": "^5.6.0"
+  }
+}

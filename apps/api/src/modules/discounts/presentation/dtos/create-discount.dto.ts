@@ -129,10 +129,12 @@ export class CreateDiscountDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(40)
   startsAt?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(40)
   endsAt?: string;
 
   // Only DRAFT is honored from the client (a "Save as draft", #18); every

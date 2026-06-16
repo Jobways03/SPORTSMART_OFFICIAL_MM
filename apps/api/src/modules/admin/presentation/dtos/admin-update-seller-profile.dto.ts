@@ -49,6 +49,7 @@ export class AdminUpdateSellerProfileDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(150, { message: 'Locality must not exceed 150 characters' })
   locality?: string;
 
   @IsOptional()
@@ -89,15 +90,22 @@ export class AdminUpdateSellerProfileDto {
   })
   sellerZipCode?: string;
 
+  // Rich-text HTML — the real plain-text limit is enforced in the admin edit
+  // use-case (short=500, detailed/policy=10000). @MaxLength guards the RAW HTML
+  // payload only and stays above the plain-text limit so valid formatted
+  // content is never rejected at the DTO.
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   shortStoreDescription?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(50000)
   detailedStoreDescription?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(50000)
   sellerPolicy?: string;
 }

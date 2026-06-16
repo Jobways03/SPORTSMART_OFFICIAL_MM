@@ -10,7 +10,7 @@ import {
   ProductImage,
 } from '@/services/product.service';
 import { apiClient, ApiError } from '@/lib/api-client';
-import { validateAmount, validateUploadFile } from '@/lib/validators';
+import { validateAmount, validateUploadFile, filterAmount, filterInteger } from '@/lib/validators';
 import '../../product-form.css';
 import { RichTextEditor, useModal } from '@sportsmart/ui';
 // Phase 39 (2026-05-21) — category metafield form section + payload mapper.
@@ -1144,13 +1144,14 @@ const router = useRouter();
             type="checkbox"
             id="hasVariants"
             checked={form.hasVariants}
-            disabled
+            onChange={e => updateField('hasVariants', e.target.checked)}
+            disabled={!isEditable}
           />
           <label htmlFor="hasVariants">This product has variants</label>
           <span className="form-hint" style={{ marginLeft: 8 }}>
             {form.hasVariants
-              ? '(auto-enabled when variants are generated)'
-              : '(generate variants below to enable)'}
+              ? '(tick to manage sizes, colours & variants below)'
+              : '(tick if this product comes in multiple sizes or colours)'}
           </span>
         </div>
 
@@ -1170,7 +1171,7 @@ const router = useRouter();
                   type="number"
                   className="form-input"
                   value={form.basePrice}
-                  onChange={e => updateField('basePrice', e.target.value)}
+                  onChange={e => updateField('basePrice', filterAmount(e.target.value))}
                   placeholder="0.00"
                   min="0"
                   step="0.01"
@@ -1188,7 +1189,7 @@ const router = useRouter();
                   type="number"
                   className="form-input"
                   value={form.compareAtPrice}
-                  onChange={e => updateField('compareAtPrice', e.target.value)}
+                  onChange={e => updateField('compareAtPrice', filterAmount(e.target.value))}
                   placeholder="0.00"
                   min="0"
                   step="0.01"
@@ -1206,7 +1207,7 @@ const router = useRouter();
                   type="number"
                   className="form-input"
                   value={form.costPrice}
-                  onChange={e => updateField('costPrice', e.target.value)}
+                  onChange={e => updateField('costPrice', filterAmount(e.target.value))}
                   placeholder="0.00"
                   min="0"
                   step="0.01"
@@ -1239,7 +1240,7 @@ const router = useRouter();
                 type="number"
                 className="form-input"
                 value={form.baseStock}
-                onChange={e => updateField('baseStock', e.target.value)}
+                onChange={e => updateField('baseStock', filterInteger(e.target.value))}
                 placeholder="0"
                 min="0"
                 step="1"
@@ -1263,7 +1264,8 @@ const router = useRouter();
         )}
       </div>
 
-      {/* Variants Section */}
+      {/* Variants Section — only shown when this product is marked as having variants */}
+      {form.hasVariants && (
       <div className="form-card">
         <div className="form-card-head">
           <div className="form-card-title">Variants</div>
@@ -1520,6 +1522,7 @@ const router = useRouter();
           </div>
         )}
       </div>
+      )}
 
       {/* Images Section (edit only) */}
       <div className="form-card">
@@ -1635,7 +1638,7 @@ const router = useRouter();
                 className="form-input"
                 style={{ flex: 1 }}
                 value={form.weight}
-                onChange={e => updateField('weight', e.target.value)}
+                onChange={e => updateField('weight', filterAmount(e.target.value))}
                 placeholder="0"
                 min="0"
                 step="0.01"
@@ -1663,7 +1666,7 @@ const router = useRouter();
                 className="form-input"
                 style={{ flex: 1 }}
                 value={form.length}
-                onChange={e => updateField('length', e.target.value)}
+                onChange={e => updateField('length', filterAmount(e.target.value))}
                 placeholder="L"
                 min="0"
                 step="0.1"
@@ -1675,7 +1678,7 @@ const router = useRouter();
                 className="form-input"
                 style={{ flex: 1 }}
                 value={form.width}
-                onChange={e => updateField('width', e.target.value)}
+                onChange={e => updateField('width', filterAmount(e.target.value))}
                 placeholder="W"
                 min="0"
                 step="0.1"
@@ -1687,7 +1690,7 @@ const router = useRouter();
                 className="form-input"
                 style={{ flex: 1 }}
                 value={form.height}
-                onChange={e => updateField('height', e.target.value)}
+                onChange={e => updateField('height', filterAmount(e.target.value))}
                 placeholder="H"
                 min="0"
                 step="0.1"

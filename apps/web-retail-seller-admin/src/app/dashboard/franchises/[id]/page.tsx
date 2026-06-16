@@ -440,7 +440,7 @@ export default function AdminFranchiseDetailPage() {
                   <div className="info-grid">
                     <div className="form-group">
                       <label>Owner Name</label>
-                      <input value={editForm.ownerName || ''} onChange={e => setEditForm(p => ({ ...p, ownerName: e.target.value }))} />
+                      <input value={editForm.ownerName || ''} maxLength={100} onChange={e => setEditForm(p => ({ ...p, ownerName: e.target.value.replace(/[^A-Za-z .'-]/g, '') }))} />
                     </div>
                     <div className="form-group">
                       <label>Email</label>
@@ -448,7 +448,7 @@ export default function AdminFranchiseDetailPage() {
                     </div>
                     <div className="form-group">
                       <label>Phone</label>
-                      <input value={editForm.phoneNumber || ''} onChange={e => setEditForm(p => ({ ...p, phoneNumber: e.target.value }))} />
+                      <input value={editForm.phoneNumber || ''} inputMode="numeric" maxLength={10} onChange={e => setEditForm(p => ({ ...p, phoneNumber: e.target.value.replace(/\D/g, '').slice(0, 10) }))} />
                     </div>
                   </div>
                 ) : (
@@ -496,7 +496,7 @@ export default function AdminFranchiseDetailPage() {
                   <div className="info-grid">
                     <div className="form-group">
                       <label>Business Name</label>
-                      <input value={editForm.businessName || ''} onChange={e => setEditForm(p => ({ ...p, businessName: e.target.value }))} />
+                      <input value={editForm.businessName || ''} maxLength={150} onChange={e => setEditForm(p => ({ ...p, businessName: e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, '') }))} />
                     </div>
                     <div className="form-group">
                       <label>Franchise Code</label>
@@ -504,11 +504,11 @@ export default function AdminFranchiseDetailPage() {
                     </div>
                     <div className="form-group">
                       <label>GST Number</label>
-                      <input value={editForm.gstNumber || ''} onChange={e => setEditForm(p => ({ ...p, gstNumber: e.target.value }))} placeholder="Enter GST number" />
+                      <input value={editForm.gstNumber || ''} maxLength={15} onChange={e => setEditForm(p => ({ ...p, gstNumber: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 15) }))} placeholder="Enter GST number" />
                     </div>
                     <div className="form-group">
                       <label>PAN Number</label>
-                      <input value={editForm.panNumber || ''} onChange={e => setEditForm(p => ({ ...p, panNumber: e.target.value }))} placeholder="Enter PAN number" />
+                      <input value={editForm.panNumber || ''} maxLength={10} onChange={e => setEditForm(p => ({ ...p, panNumber: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) }))} placeholder="Enter PAN number" />
                     </div>
                   </div>
                 ) : (

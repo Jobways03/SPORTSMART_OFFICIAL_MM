@@ -7,6 +7,7 @@ import {
   adminDeliveryMethodsService,
   type SellerDeliveryMethodSettings,
 } from '@/services/admin-delivery-methods.service';
+import { validatePincode } from '@/lib/validators';
 
 export default function SellerDeliveryMethodsPage() {
   const params = useParams();
@@ -61,6 +62,16 @@ export default function SellerDeliveryMethodsPage() {
           .map((p) => p.trim())
           .filter(Boolean)
       : null;
+    // Each entry must be a valid 6-digit Indian pincode. Block the save
+    // and surface the first offending value rather than persisting junk.
+    if (pincodes) {
+      const bad = pincodes.find((p) => validatePincode(p) !== null);
+      if (bad) {
+        setActionError(`"${bad}" is not a valid 6-digit pincode`);
+        return;
+      }
+    }
+    setActionError(null);
     save({ selfDeliveryPincodes: pincodes });
   };
 
@@ -144,7 +155,9 @@ export default function SellerDeliveryMethodsPage() {
             </label>
             <textarea
               value={pincodeInput}
-              onChange={(e) => setPincodeInput(e.target.value)}
+              // Pincodes are digits-only; keep the list separators (comma,
+              // space, newline) but strip any other character as it's typed.
+              onChange={(e) => setPincodeInput(e.target.value.replace(/[^\d,\s]/g, ''))}
               onBlur={onPincodesBlur}
               placeholder="Comma-separated, e.g. 560001, 560002, ..."
               disabled={saving || !settings.selfDeliveryEnabled}

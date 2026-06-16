@@ -11,6 +11,22 @@
  * date/text primitives shared across the SportsMart admin apps.
  */
 
+/**
+ * onChange input filter for money / numeric-amount text fields (price,
+ * commission, fee). Keeps digits and a single decimal point — strips
+ * everything else as the user types or pastes. Pair with `validateAmount`
+ * on submit. Does NOT coerce to a number so an in-progress "12." stays put.
+ */
+export function filterMoneyInput(value: string): string {
+  // Drop every char except digits and dots, then collapse to one dot.
+  const cleaned = (value ?? '').replace(/[^0-9.]/g, '');
+  const firstDot = cleaned.indexOf('.');
+  if (firstDot === -1) return cleaned;
+  return (
+    cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, '')
+  );
+}
+
 interface AmountOptions {
   min?: number;
   max?: number;
@@ -177,6 +193,28 @@ export function validatePersonName(
   if (trimmed.length < 2) return `${label} is too short`;
   if (trimmed.length > 50) return `${label} is too long`;
   return null;
+}
+
+/**
+ * onChange input filter for a PERSON name (account holder, owner, contact,
+ * nominee). Letters only — keeps A-Z a-z, space, period, apostrophe and
+ * hyphen; strips digits and every other symbol. Pair with
+ * `validatePersonName` on submit.
+ */
+export function filterPersonNameInput(value: string): string {
+  return (value ?? '').replace(/[^A-Za-z .'-]/g, '');
+}
+
+/**
+ * onChange input filter for a BUSINESS / shop / brand / legal name. Unlike a
+ * person name this KEEPS digits — a business is legitimately "Store 24" — and
+ * allows the punctuation the shop-name submit validator accepts (space, dot,
+ * hyphen, ampersand, apostrophe). Kept in lock-step with
+ * `validateProfileShopName` so nothing the user can type would be rejected on
+ * submit.
+ */
+export function filterBusinessNameInput(value: string): string {
+  return (value ?? '').replace(/[^A-Za-z0-9 .\-&']/g, '');
 }
 
 interface TextOptions {

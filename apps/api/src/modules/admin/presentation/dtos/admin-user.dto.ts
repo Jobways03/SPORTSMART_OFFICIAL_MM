@@ -49,6 +49,10 @@ export class CreateAdminUserDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MinLength(1, { message: 'name is required' })
   @MaxLength(100, { message: 'name must not exceed 100 characters' })
+  @Matches(/^[A-Za-z][A-Za-z .'-]*$/, {
+    message:
+      'name must contain only letters, spaces, periods, apostrophes or hyphens',
+  })
   name!: string;
 
   @IsEmail({}, { message: 'email must be a valid email address' })
@@ -91,6 +95,10 @@ export class UpdateAdminUserDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @MinLength(1)
   @MaxLength(100)
+  @Matches(/^[A-Za-z][A-Za-z .'-]*$/, {
+    message:
+      'name must contain only letters, spaces, periods, apostrophes or hyphens',
+  })
   name?: string;
 
   @IsOptional()
@@ -105,10 +113,12 @@ export class UpdateAdminUserDto {
 export class AdminListQueryDto {
   @IsOptional()
   @IsString()
+  @MaxLength(10)
   page?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(10)
   limit?: string;
 
   @IsOptional()

@@ -259,7 +259,11 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
                 inputMode="text"
                 autoComplete="one-time-code"
                 value={code}
-                onChange={(e) => setCode(e.target.value)}
+                onChange={(e) =>
+                  // Accept a 6-digit OTP or an xxxxx-xxxxx backup code: keep
+                  // alphanumerics + the single separating hyphen, cap at 11.
+                  setCode(e.target.value.replace(/[^A-Za-z0-9-]/g, '').slice(0, 11))
+                }
                 placeholder="123456 or xxxxx-xxxxx"
                 autoFocus
                 disabled={submitting}

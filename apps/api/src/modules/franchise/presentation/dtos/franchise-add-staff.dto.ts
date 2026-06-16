@@ -12,6 +12,10 @@ export class FranchiseAddStaffDto {
   @IsNotEmpty()
   @IsString()
   @MaxLength(120)
+  @Matches(/^[A-Za-z][A-Za-z .'-]*$/, {
+    message:
+      'name must contain only letters, spaces, periods, apostrophes or hyphens',
+  })
   name!: string;
 
   @IsNotEmpty()

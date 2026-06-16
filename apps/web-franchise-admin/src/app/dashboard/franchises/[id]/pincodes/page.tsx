@@ -333,11 +333,10 @@ export default function FranchisePincodesPage() {
           </Field>
           <Field label={`Priority (${PRIORITY_MIN}-${PRIORITY_MAX})`}>
             <input
-              type="number"
-              min={PRIORITY_MIN}
-              max={PRIORITY_MAX}
+              type="text"
+              inputMode="numeric"
               value={singlePriority}
-              onChange={(e) => setSinglePriority(e.target.value)}
+              onChange={(e) => setSinglePriority(e.target.value.replace(/\D/g, ''))}
               disabled={addingSingle}
               style={inputStyle}
             />
@@ -383,11 +382,10 @@ export default function FranchisePincodesPage() {
           )}
           <Field label={`Priority (${PRIORITY_MIN}-${PRIORITY_MAX})`}>
             <input
-              type="number"
-              min={PRIORITY_MIN}
-              max={PRIORITY_MAX}
+              type="text"
+              inputMode="numeric"
               value={bulkPriority}
-              onChange={(e) => setBulkPriority(e.target.value)}
+              onChange={(e) => setBulkPriority(e.target.value.replace(/\D/g, ''))}
               disabled={addingBulk}
               style={inputStyle}
             />
@@ -518,11 +516,10 @@ export default function FranchisePincodesPage() {
                     <td style={{ padding: '10px 14px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <input
-                          type="number"
-                          min={PRIORITY_MIN}
-                          max={PRIORITY_MAX}
+                          type="text"
+                          inputMode="numeric"
                           value={draft}
-                          onChange={(e) => setDraft(row.id, e.target.value)}
+                          onChange={(e) => setDraft(row.id, e.target.value.replace(/\D/g, ''))}
                           disabled={busy || !row.isActive}
                           style={{ ...inputStyle, width: 80, marginBottom: 0 }}
                         />

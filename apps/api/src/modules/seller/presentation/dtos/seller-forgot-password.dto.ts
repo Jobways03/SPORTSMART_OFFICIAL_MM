@@ -1,4 +1,10 @@
-import { IsEmail, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+import {
+  IsEmail,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 import { Transform } from 'class-transformer';
 
 export class SellerForgotPasswordDto {
@@ -11,5 +17,6 @@ export class SellerForgotPasswordDto {
   // forgot-password form. Required when CAPTCHA_PROVIDER is set.
   @IsOptional()
   @IsString()
+  @MaxLength(4096)
   captchaToken?: string;
 }

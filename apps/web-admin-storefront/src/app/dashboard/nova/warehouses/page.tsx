@@ -8,7 +8,12 @@ import {
   OwnBrandWarehouse,
 } from '@/services/admin-nova.service';
 import { ApiError } from '@/lib/api-client';
-import { validatePincode, validateText } from '@/lib/validators';
+import { validatePincode, validateText, validateBusinessName } from '@/lib/validators';
+
+// Warehouse names are BUSINESS-style names — letters AND digits plus a few
+// punctuation marks are legitimate (e.g. "Mumbai Central Hub 2").
+const filterBusinessName = (v: string) =>
+  v.replace(/[^A-Za-z0-9 &.,\-/()']/g, '').slice(0, 150);
 
 interface WarehouseForm {
   code: string;
@@ -55,7 +60,9 @@ export default function NovaWarehousesPage() {
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    if (!form.code.trim() || !form.name.trim()) return setError('Code and name are required');
+    if (!form.code.trim()) return setError('Code is required');
+    const nameErr = validateBusinessName(form.name, 'Name');
+    if (nameErr) return setError(nameErr);
     // Address fields are required on a warehouse — stock can't be received
     // against an addressless hub.
     const addrErr = validateText(form.addressLine, { label: 'Address line', max: 200 });
@@ -151,7 +158,7 @@ export default function NovaWarehousesPage() {
               <input value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value })} placeholder="NV-WH-MUM-01" disabled={saving} style={input} />
             </Field>
             <Field label="Name">
-              <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Mumbai Central Hub" disabled={saving} style={input} />
+              <input value={form.name} maxLength={150} onChange={(e) => setForm({ ...form, name: filterBusinessName(e.target.value) })} placeholder="Mumbai Central Hub" disabled={saving} style={input} />
             </Field>
             <Field label="Address line">
               <input value={form.addressLine} onChange={(e) => setForm({ ...form, addressLine: e.target.value })} placeholder="123 Industrial Estate" disabled={saving} style={input} />

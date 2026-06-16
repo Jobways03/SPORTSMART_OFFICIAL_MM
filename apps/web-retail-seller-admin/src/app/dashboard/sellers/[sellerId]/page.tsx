@@ -619,6 +619,62 @@ export default function AdminSellerDetailPage() {
         <p>{seller.sellerShopName} &middot; {seller.email}</p>
       </div>
 
+      {/* KYC review callout — makes the approval path unmistakable. Account
+          status (Active/Inactive) is a SEPARATE control and does NOT approve
+          KYC; admins were conflating the two. Only shown to reviewers while the
+          seller is awaiting review. */}
+      {canReviewKyc && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 16,
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            padding: '14px 18px',
+            marginBottom: 16,
+            borderRadius: 10,
+            background: 'var(--color-warning-bg, #FFF7ED)',
+            border: '1px solid var(--color-warning, #F59E0B)',
+          }}
+        >
+          <div style={{ maxWidth: 680 }}>
+            <div
+              style={{
+                fontWeight: 700,
+                fontSize: 15,
+                color: 'var(--color-text, #1A1A1A)',
+                marginBottom: 2,
+              }}
+            >
+              KYC awaiting your review
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--color-text-secondary, #525A65)' }}>
+              This seller submitted KYC and cannot start selling until you approve it
+              here. Changing the <strong>account status</strong> (Active/Inactive) does{' '}
+              <strong>not</strong> approve KYC.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveModal('kyc')}
+            style={{
+              whiteSpace: 'nowrap',
+              padding: '10px 18px',
+              borderRadius: 8,
+              border: 'none',
+              background: 'var(--color-success, #16A34A)',
+              color: '#fff',
+              fontWeight: 600,
+              fontSize: 14,
+              cursor: 'pointer',
+            }}
+          >
+            Review &amp; Approve KYC
+          </button>
+        </div>
+      )}
+
       {/* Admin Actions */}
       <div className="sa-actions">
         {canReviewKyc && (
@@ -629,7 +685,7 @@ export default function AdminSellerDetailPage() {
             onClick={() => setActiveModal('kyc')}
           />
         )}
-        <ActionBtn label="Change Status" icon="status" onClick={() => setActiveModal('status')} />
+        <ActionBtn label="Account Status" icon="status" onClick={() => setActiveModal('status')} />
         <ActionBtn label="Send Message" icon="message" onClick={() => setActiveModal('message')} />
         <ActionBtn label="Change Password" icon="password" onClick={() => setActiveModal('password')} />
         {/* Logistics partners (courier registration). Carries the sellerId
@@ -757,8 +813,8 @@ export default function AdminSellerDetailPage() {
             <div className="profile-form-group">
               <label htmlFor="sellerName">Seller Name *</label>
               <input
-                id="sellerName" type="text" value={formData.sellerName}
-                onChange={e => updateField('sellerName', e.target.value)}
+                id="sellerName" type="text" value={formData.sellerName} maxLength={100}
+                onChange={e => updateField('sellerName', e.target.value.replace(/[^A-Za-z .'-]/g, ''))}
                 onBlur={() => handleBlur('sellerName')}
                 aria-invalid={!!errors.sellerName}
                 disabled={isSaving} placeholder="Seller name"
@@ -768,8 +824,8 @@ export default function AdminSellerDetailPage() {
             <div className="profile-form-group">
               <label htmlFor="sellerShopName">Shop Name *</label>
               <input
-                id="sellerShopName" type="text" value={formData.sellerShopName}
-                onChange={e => updateField('sellerShopName', e.target.value)}
+                id="sellerShopName" type="text" value={formData.sellerShopName} maxLength={150}
+                onChange={e => updateField('sellerShopName', e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, ''))}
                 onBlur={() => handleBlur('sellerShopName')}
                 aria-invalid={!!errors.sellerShopName}
                 disabled={isSaving} placeholder="Shop name"
@@ -793,8 +849,8 @@ export default function AdminSellerDetailPage() {
               </select>
               <input
                 id="sellerContactNumber" type="tel" inputMode="numeric"
-                value={formData.sellerContactNumber}
-                onChange={e => updateField('sellerContactNumber', e.target.value.replace(/\D/g, ''))}
+                value={formData.sellerContactNumber} maxLength={15}
+                onChange={e => updateField('sellerContactNumber', e.target.value.replace(/\D/g, '').slice(0, 15))}
                 onBlur={() => handleBlur('sellerContactNumber')}
                 aria-invalid={!!errors.sellerContactNumber}
                 disabled={isSaving} placeholder="Phone number"

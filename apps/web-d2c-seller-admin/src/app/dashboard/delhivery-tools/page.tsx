@@ -16,7 +16,14 @@ interface ToolField {
   label: string;
   required?: boolean;
   wide?: boolean;
+  /** Optional onChange input filter (e.g. digits-only for a pincode). */
+  filter?: (value: string) => string;
 }
+
+// Shared field input filters by semantic.
+const pincodeFilter = (v: string) => v.replace(/\D/g, '').slice(0, 6);
+const digitsFilter = (v: string) => v.replace(/\D/g, '');
+const mobileFilter = (v: string) => v.replace(/\D/g, '').slice(0, 10);
 
 function ToolCard({
   title,
@@ -65,7 +72,10 @@ function ToolCard({
             placeholder={f.label + (f.required ? ' *' : '')}
             value={values[f.name] ?? ''}
             onChange={(e) =>
-              setValues((v) => ({ ...v, [f.name]: e.target.value }))
+              setValues((v) => ({
+                ...v,
+                [f.name]: f.filter ? f.filter(e.target.value) : e.target.value,
+              }))
             }
             style={{ ...input, minWidth: f.wide ? 280 : 150 }}
           />
@@ -105,7 +115,7 @@ export default function DelhiveryToolsPage() {
         title="Pincode serviceability"
         desc="Is a destination pincode deliverable, and does it support COD / prepaid?"
         actionLabel="Check"
-        fields={[{ name: 'pincode', label: 'Pincode', required: true }]}
+        fields={[{ name: 'pincode', label: 'Pincode', required: true, filter: pincodeFilter }]}
         run={(v) => get(`/admin/delhivery/serviceability/${encodeURIComponent(v.pincode.trim())}`)}
       />
 
@@ -114,9 +124,9 @@ export default function DelhiveryToolsPage() {
         desc="Live cost quote between two pincodes. Mode S = Surface, E = Express."
         actionLabel="Calculate"
         fields={[
-          { name: 'origin', label: 'Origin pincode', required: true },
-          { name: 'destination', label: 'Destination pincode', required: true },
-          { name: 'weightGrams', label: 'Weight (g)', required: true },
+          { name: 'origin', label: 'Origin pincode', required: true, filter: pincodeFilter },
+          { name: 'destination', label: 'Destination pincode', required: true, filter: pincodeFilter },
+          { name: 'weightGrams', label: 'Weight (g)', required: true, filter: digitsFilter },
           { name: 'mode', label: 'Mode (S/E)' },
           { name: 'paymentType', label: 'Pre-paid / COD' },
         ]}
@@ -137,8 +147,8 @@ export default function DelhiveryToolsPage() {
         desc="Estimated delivery days between two pincodes. mot S = Surface, E = Express."
         actionLabel="Check"
         fields={[
-          { name: 'origin', label: 'Origin pincode', required: true },
-          { name: 'destination', label: 'Destination pincode', required: true },
+          { name: 'origin', label: 'Origin pincode', required: true, filter: pincodeFilter },
+          { name: 'destination', label: 'Destination pincode', required: true, filter: pincodeFilter },
           { name: 'mot', label: 'Mode (S/E)' },
         ]}
         run={(v) => {
@@ -155,7 +165,7 @@ export default function DelhiveryToolsPage() {
         title="Fetch waybills"
         desc="Reserve bulk AWB numbers from Delhivery (normally done automatically at booking)."
         actionLabel="Fetch"
-        fields={[{ name: 'count', label: 'Count' }]}
+        fields={[{ name: 'count', label: 'Count', filter: digitsFilter }]}
         run={(v) => get(`/admin/delhivery/waybill?count=${Number(v.count) || 1}`)}
       />
 
@@ -167,7 +177,7 @@ export default function DelhiveryToolsPage() {
           { name: 'warehouseName', label: 'Warehouse name', required: true, wide: true },
           { name: 'date', label: 'Date (YYYY-MM-DD)', required: true },
           { name: 'time', label: 'Time (HH:MM:SS)', required: true },
-          { name: 'expectedPackageCount', label: 'Package count', required: true },
+          { name: 'expectedPackageCount', label: 'Package count', required: true, filter: digitsFilter },
         ]}
         run={(v) =>
           post('/admin/delhivery/pickup', {
@@ -203,9 +213,9 @@ export default function DelhiveryToolsPage() {
         fields={[
           { name: 'awb', label: 'AWB', required: true },
           { name: 'consigneeName', label: 'Consignee name' },
-          { name: 'consigneePhone', label: 'Consignee phone' },
+          { name: 'consigneePhone', label: 'Consignee phone', filter: mobileFilter },
           { name: 'consigneeAddress', label: 'Consignee address', wide: true },
-          { name: 'weightGrams', label: 'Weight (g)' },
+          { name: 'weightGrams', label: 'Weight (g)', filter: digitsFilter },
         ]}
         run={(v) => {
           const changes: Record<string, unknown> = {};

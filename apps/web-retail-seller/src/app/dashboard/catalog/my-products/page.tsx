@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { sellerProductService } from '@/services/product.service';
 import { ApiError } from '@/lib/api-client';
 import { sellerAuthService } from '@/services/auth.service';
+import { validatePincode } from '@/lib/validators';
 import '../../products/product-form.css';
 import '../../products/products.css';
 
@@ -315,7 +316,13 @@ export default function MyProductsPage() {
   };
 
   const handleEditFormChange = (field: keyof EditFormData, value: string | boolean) => {
-    setEditForm(prev => ({ ...prev, [field]: value }));
+    // Pickup pincode is an Indian PIN — keep digits only, max 6, so a
+    // non-numeric paste can't reach state or the payload.
+    const next =
+      field === 'pickupPincode' && typeof value === 'string'
+        ? value.replace(/\D/g, '').slice(0, 6)
+        : value;
+    setEditForm(prev => ({ ...prev, [field]: next }));
   };
 
   const handleEditSubmit = async () => {
@@ -323,6 +330,15 @@ export default function MyProductsPage() {
     if (!editForm.stockQty || Number(editForm.stockQty) < 0) {
       setEditError('Stock quantity is required and must be 0 or more.');
       return;
+    }
+    // Pickup pincode is optional, but when provided it must be a valid
+    // 6-digit Indian PIN (mirrors the backend DTO).
+    if (editForm.pickupPincode.trim()) {
+      const pinErr = validatePincode(editForm.pickupPincode);
+      if (pinErr) {
+        setEditError(pinErr);
+        return;
+      }
     }
     setEditLoading(true);
     setEditError('');

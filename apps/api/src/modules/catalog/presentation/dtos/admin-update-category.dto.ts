@@ -30,6 +30,9 @@ export class AdminUpdateCategoryDto {
   @MinLength(1, { message: 'name cannot be empty' })
   @MaxLength(100)
   @Matches(/^[^<>]+$/, { message: 'name cannot contain < or >' })
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9 &.,\-/()']*$/, {
+    message: 'name contains invalid characters',
+  })
   name?: string;
 
   @IsOptional()

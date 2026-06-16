@@ -5,6 +5,13 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
 import { RichTextEditor } from '@sportsmart/ui';
+import { validateBusinessName } from '@/lib/validators';
+
+// Brand names are BUSINESS names — letters AND digits plus a handful of
+// punctuation are legitimate (e.g. "Adidas", "Li-Ning", "Bata 1895").
+// Strip only characters outside that set as the admin types/pastes.
+const filterBusinessName = (v: string) =>
+  v.replace(/[^A-Za-z0-9 &.,\-/()']/g, '').slice(0, 150);
 
 /* ── types ── */
 interface BrandProduct {
@@ -38,6 +45,7 @@ export default function BrandForm({ brandId }: { brandId?: string }) {
   const isEdit = !!brandId;
 
   const [name, setName] = useState('');
+  const [nameError, setNameError] = useState<string | null>(null);
   const [description, setDescription] = useState('');
   const [products, setProducts] = useState<BrandProduct[]>([]);
   const [saving, setSaving] = useState(false);
@@ -84,7 +92,14 @@ export default function BrandForm({ brandId }: { brandId?: string }) {
   }, [brandId]);
 
   const handleSave = async () => {
-    if (!name.trim()) return;
+    // Brand name is a BUSINESS name (letters + digits allowed). Validate
+    // on submit and surface the error inline before the API call.
+    const nameErr = validateBusinessName(name, 'Brand name');
+    if (nameErr) {
+      setNameError(nameErr);
+      return;
+    }
+    setNameError(null);
     setSaving(true);
     try {
       // Phase 35 (2026-05-21) — full payload incl. description + SEO.
@@ -282,10 +297,14 @@ export default function BrandForm({ brandId }: { brandId?: string }) {
             <input
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              maxLength={150}
+              onChange={(e) => { setName(filterBusinessName(e.target.value)); if (nameError) setNameError(null); }}
               placeholder="e.g., Nike, Adidas, Puma"
               style={input}
             />
+            {nameError && (
+              <div style={{ color: '#dc2626', fontSize: 12, marginTop: 6 }}>{nameError}</div>
+            )}
             <label style={{ ...label, marginTop: 18 }}>Description</label>
             <RichTextEditor
               value={description}

@@ -77,11 +77,20 @@ export default function CreateAdjustmentModal({ franchiseId, businessName, onClo
           <div className="modal-form-group">
             <label>Amount *</label>
             <input
-              type="number"
+              type="text"
+              inputMode="decimal"
               placeholder="Enter amount (positive or negative)"
               value={amount}
-              onChange={e => setAmount(e.target.value)}
-              step="0.01"
+              onChange={e =>
+                setAmount(
+                  // Signed money: allow an optional leading minus, digits and a
+                  // single decimal point (a negative adjustment is legitimate).
+                  e.target.value
+                    .replace(/[^0-9.-]/g, '')
+                    .replace(/(?!^)-/g, '')
+                    .replace(/(\..*)\./g, '$1'),
+                )
+              }
             />
           </div>
 

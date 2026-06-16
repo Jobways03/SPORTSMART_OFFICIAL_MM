@@ -11,12 +11,20 @@ export class AdminEditFranchiseProfileDto {
   @IsString()
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(100)
+  @Matches(/^[A-Za-z][A-Za-z .'-]*$/, {
+    message:
+      'Owner name must contain only letters, spaces, periods, apostrophes or hyphens',
+  })
   ownerName?: string;
 
   @IsOptional()
   @IsString()
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MaxLength(150)
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9 &.,\-/()']*$/, {
+    message:
+      'Business name may only contain letters, digits, spaces and & . , - / ( ) \'',
+  })
   businessName?: string;
 
   @IsOptional()

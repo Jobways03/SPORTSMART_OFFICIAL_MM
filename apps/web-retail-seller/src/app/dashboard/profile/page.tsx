@@ -1246,8 +1246,9 @@ export default function SellerProfilePage() {
               <input
                 id="sellerName"
                 type="text"
+                maxLength={100}
                 value={formData.sellerName}
-                onChange={e => updateField('sellerName', e.target.value)}
+                onChange={e => updateField('sellerName', e.target.value.replace(/[^A-Za-z .'-]/g, ''))}
                 onBlur={() => handleBlur('sellerName')}
                 aria-invalid={!!errors.sellerName}
                 aria-describedby={errors.sellerName ? 'sellerName-error' : undefined}
@@ -1266,8 +1267,9 @@ export default function SellerProfilePage() {
               <input
                 id="sellerShopName"
                 type="text"
+                maxLength={150}
                 value={formData.sellerShopName}
-                onChange={e => updateField('sellerShopName', e.target.value)}
+                onChange={e => updateField('sellerShopName', e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, ''))}
                 onBlur={() => handleBlur('sellerShopName')}
                 aria-invalid={!!errors.sellerShopName}
                 aria-describedby={errors.sellerShopName ? 'sellerShopName-error' : undefined}

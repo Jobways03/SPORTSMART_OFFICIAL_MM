@@ -91,7 +91,7 @@ export default function EditBankModal({ franchise, initial, onClose, onSuccess }
             <label>Account Holder Name *</label>
             <input
               value={accountHolderName}
-              onChange={(e) => setAccountHolderName(e.target.value)}
+              onChange={(e) => setAccountHolderName(e.target.value.replace(/[^A-Za-z .'-]/g, ''))}
               placeholder="As per bank records"
             />
             {accountHolderName && holderError && (
@@ -103,7 +103,7 @@ export default function EditBankModal({ franchise, initial, onClose, onSuccess }
             <label>Account Number *</label>
             <input
               value={accountNumber}
-              onChange={(e) => setAccountNumber(e.target.value)}
+              onChange={(e) => setAccountNumber(e.target.value.replace(/\D/g, '').slice(0, 18))}
               inputMode="numeric"
               placeholder={
                 initial?.accountLast4
@@ -120,7 +120,9 @@ export default function EditBankModal({ franchise, initial, onClose, onSuccess }
             <label>IFSC Code *</label>
             <input
               value={ifscCode}
-              onChange={(e) => setIfscCode(e.target.value.toUpperCase())}
+              onChange={(e) =>
+                setIfscCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11))
+              }
               placeholder="e.g. HDFC0001234"
             />
             {ifscCode && !ifscValid && (

@@ -18,6 +18,12 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { adminProductsService } from '../../../../services/admin-products.service';
 import { useModal } from '@sportsmart/ui';
+import { validateBusinessName } from '@/lib/validators';
+
+// Category names are BUSINESS-style names — letters AND digits plus a few
+// punctuation marks are legitimate (e.g. "Cricket Bats", "Size 2 Gloves").
+const filterCategoryName = (v: string) =>
+  v.replace(/[^A-Za-z0-9 &.,\-/()']/g, '').slice(0, 150);
 
 interface Category {
   id: string;
@@ -158,7 +164,8 @@ const [categories, setCategories] = useState<Category[]>([]);
 
   const handleSave = async () => {
     setError('');
-    if (!form.name.trim()) { setError('Name is required'); return; }
+    const nameErr = validateBusinessName(form.name, 'Name');
+    if (nameErr) { setError(nameErr); return; }
     // Phase 33 (2026-05-21) — payload now includes every schema field
     // the modal exposes. Pre-Phase-33 the create call sent only
     // {name, parentId, sortOrder} and silently dropped description /
@@ -376,9 +383,9 @@ const [categories, setCategories] = useState<Category[]>([]);
             <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
               <div>
                 <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', display: 'block', marginBottom: 4 }}>Name *</label>
-                <input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))}
+                <input value={form.name} onChange={(e) => setForm(f => ({ ...f, name: filterCategoryName(e.target.value) }))}
                   placeholder="e.g., Cricket Bats"
-                  maxLength={100}
+                  maxLength={150}
                   style={{ width: '100%', padding: '8px 12px', borderRadius: 6, border: '1px solid #d1d5db', fontSize: 13 }} />
               </div>
 

@@ -51,6 +51,10 @@ export class SubmitSellerOnboardingDto {
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MinLength(2, { message: 'Legal business name must be at least 2 characters' })
   @MaxLength(200, { message: 'Legal business name must not exceed 200 characters' })
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9 &.,\-/()']*$/, {
+    message:
+      'Legal business name must start with a letter or digit and contain only letters, digits, spaces, or & . , - / ( ) \'',
+  })
   legalBusinessName!: string;
 
   @IsEnum(GstRegistrationTypeDto, {
@@ -152,14 +156,18 @@ export class SubmitSellerOnboardingDto {
   @Matches(/^\d{10,15}$/, { message: 'Contact number must be 10-15 digits' })
   sellerContactNumber?: string;
 
+  // Rich-text HTML — the real plain-text limit is enforced in the onboarding
+  // use-case (short=500, detailed=10000). @MaxLength here guards the RAW HTML
+  // payload only and stays well above the plain-text limit so valid formatted
+  // content is never rejected at the DTO.
   @IsOptional()
   @IsString()
-  @MaxLength(300)
+  @MaxLength(5000)
   shortStoreDescription?: string;
 
   @IsOptional()
   @IsString()
-  @MaxLength(2000)
+  @MaxLength(50000)
   detailedStoreDescription?: string;
 
   // Confirmation flag the seller must tick — explicit consent that the

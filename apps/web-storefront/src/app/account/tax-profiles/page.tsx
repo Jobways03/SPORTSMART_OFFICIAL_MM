@@ -440,7 +440,10 @@ export default function TaxProfilesPage() {
                     className="profile-input"
                     value={form.gstin}
                     onChange={(e) =>
-                      setForm({ ...form, gstin: e.target.value.toUpperCase() })
+                      setForm({
+                        ...form,
+                        gstin: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 15),
+                      })
                     }
                     placeholder="27AAACR4849R1ZL"
                     maxLength={15}
@@ -465,7 +468,9 @@ export default function TaxProfilesPage() {
                     className="profile-input"
                     value={form.legalName}
                     onChange={(e) =>
-                      setForm({ ...form, legalName: e.target.value })
+                      // Business/legal name — keep letters, digits and the
+                      // common org punctuation (& . , - / ( ) '); strip the rest.
+                      setForm({ ...form, legalName: e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, '') })
                     }
                     placeholder="As registered on your GSTIN"
                     maxLength={200}

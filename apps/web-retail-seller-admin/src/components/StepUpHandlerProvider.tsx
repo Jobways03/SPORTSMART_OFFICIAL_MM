@@ -258,7 +258,14 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
                 inputMode="text"
                 autoComplete="one-time-code"
                 value={code}
-                onChange={(e) => setCode(e.target.value)}
+                onChange={(e) =>
+                  setCode(
+                    e.target.value
+                      .toUpperCase()
+                      .replace(/[^0-9A-Z-]/g, '')
+                      .slice(0, 16),
+                  )
+                }
                 placeholder="123456 or xxxxx-xxxxx"
                 autoFocus
                 disabled={submitting}

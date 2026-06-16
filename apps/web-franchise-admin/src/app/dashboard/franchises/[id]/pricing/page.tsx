@@ -286,11 +286,17 @@ export default function FranchisePricingPage() {
                       <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <span style={{ color: '#6b7280' }}>&#8377;</span>
                         <input
-                          type="number"
-                          min={0}
-                          step={0.01}
+                          type="text"
+                          inputMode="decimal"
                           value={r.draft}
-                          onChange={(e) => handleDraftChange(r.key, e.target.value)}
+                          onChange={(e) =>
+                            handleDraftChange(
+                              r.key,
+                              e.target.value
+                                .replace(/[^0-9.]/g, '')
+                                .replace(/(\..*)\./g, '$1'),
+                            )
+                          }
                           placeholder="0.00"
                           disabled={r.saving}
                           style={{

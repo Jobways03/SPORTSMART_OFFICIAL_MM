@@ -21,6 +21,13 @@ export class UpdateSellerBankDetailsDto {
   @IsString()
   @MinLength(2)
   @MaxLength(150)
+  // Account holder name is a person/business name — letters only (no digits).
+  // Must start with a letter; allows spaces, periods, apostrophes, hyphens.
+  // Mirrors the storefront `validatePersonName` regex so client + server agree.
+  @Matches(/^[A-Za-z][A-Za-z .'-]*$/, {
+    message:
+      'Account holder name must contain only letters, spaces, periods, apostrophes or hyphens',
+  })
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   accountHolderName!: string;
 
@@ -54,5 +61,8 @@ export class UpdateSellerBankDetailsDto {
   @IsString()
   @MaxLength(100)
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @Matches(/^[\w.\-]+@[A-Za-z]+$/, {
+    message: 'UPI VPA must be in the format username@bank (e.g. name@upi)',
+  })
   upiVpa?: string;
 }

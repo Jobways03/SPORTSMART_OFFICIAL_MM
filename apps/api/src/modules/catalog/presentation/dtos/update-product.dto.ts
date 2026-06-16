@@ -74,15 +74,17 @@ export class UpdateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   baseSku?: string;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(0)
   baseStock?: number;
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   baseBarcode?: string;
 
   @IsOptional()
@@ -92,6 +94,7 @@ export class UpdateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   weightUnit?: string;
 
   @IsOptional()
@@ -111,14 +114,17 @@ export class UpdateProductDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   dimensionUnit?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   returnPolicy?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   warrantyInfo?: string;
 
   // Phase 92 follow-up (2026-05-23) — Gap #22 admin surface for the
@@ -174,6 +180,7 @@ export class UpdateProductDto {
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   tags?: string[];
 
   @IsOptional()

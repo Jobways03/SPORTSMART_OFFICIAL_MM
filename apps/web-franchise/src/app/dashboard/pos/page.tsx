@@ -918,7 +918,12 @@ if (cart.length === 0) {
                 type="text"
                 placeholder="Customer name (optional)"
                 value={customerName}
-                onChange={(e) => setCustomerName(e.target.value)}
+                maxLength={100}
+                onChange={(e) =>
+                  // PERSON name — strip digits/specials so only a real name
+                  // can be typed/pasted. Submit re-checks via validatePersonName.
+                  setCustomerName(e.target.value.replace(/[^A-Za-z .'-]/g, ''))
+                }
                 style={{
                   padding: '8px 10px',
                   fontSize: 13,
@@ -928,9 +933,15 @@ if (cart.length === 0) {
               />
               <input
                 type="text"
+                inputMode="numeric"
                 placeholder="Customer phone (optional)"
                 value={customerPhone}
-                onChange={(e) => setCustomerPhone(e.target.value)}
+                maxLength={10}
+                onChange={(e) =>
+                  // Indian mobile — digits only, max 10. Submit re-checks
+                  // via validateIndianMobile.
+                  setCustomerPhone(e.target.value.replace(/\D/g, '').slice(0, 10))
+                }
                 style={{
                   padding: '8px 10px',
                   fontSize: 13,

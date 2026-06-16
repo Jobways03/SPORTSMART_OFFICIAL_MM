@@ -13,6 +13,11 @@ export class UpdateFranchiseBankDetailsDto {
   @IsString()
   @MinLength(2)
   @MaxLength(150)
+  // Letters only (no digits) — mirrors the storefront `validatePersonName` regex.
+  @Matches(/^[A-Za-z][A-Za-z .'-]*$/, {
+    message:
+      'Account holder name must contain only letters, spaces, periods, apostrophes or hyphens',
+  })
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   accountHolderName!: string;
 
@@ -39,12 +44,18 @@ export class UpdateFranchiseBankDetailsDto {
   @IsNotEmpty({ message: 'Bank name is required' })
   @IsString()
   @MaxLength(150)
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9 &.,\-/()']*$/, {
+    message: 'Bank name contains invalid characters',
+  })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   bankName!: string;
 
   @IsOptional()
   @IsString()
   @MaxLength(100)
+  @Matches(/^[\w.\-]+@[A-Za-z]+$/, {
+    message: 'Please enter a valid UPI ID (e.g. name@bank)',
+  })
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   upiVpa?: string;
 }

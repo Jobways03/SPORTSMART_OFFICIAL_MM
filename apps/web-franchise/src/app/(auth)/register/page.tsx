@@ -209,7 +209,12 @@ export default function FranchiseRegisterPage() {
                     placeholder="Owner's full name"
                     value={ownerName}
                     maxLength={100}
-                    onChange={(e) => setOwnerName(e.target.value)}
+                    onChange={(e) =>
+                      // PERSON name — strip anything that isn't a letter/space/
+                      // period/apostrophe/hyphen so digits/specials can't be
+                      // typed or pasted in. Submit re-checks via validateOwnerName.
+                      setOwnerName(e.target.value.replace(/[^A-Za-z .'-]/g, ''))
+                    }
                     onBlur={() => handleBlur('ownerName', ownerName)}
                     aria-invalid={!!errors.ownerName}
                     autoComplete="name"
@@ -228,7 +233,14 @@ export default function FranchiseRegisterPage() {
                     placeholder="Business or franchise name"
                     value={businessName}
                     maxLength={150}
-                    onChange={(e) => setBusinessName(e.target.value)}
+                    onChange={(e) =>
+                      // BUSINESS name — keep letters, digits and the common
+                      // legal-name punctuation (& . , - / ( ) '). Digits are
+                      // intentionally preserved ("3M", "7-Eleven", "Demo1").
+                      setBusinessName(
+                        e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, ''),
+                      )
+                    }
                     onBlur={() => handleBlur('businessName', businessName)}
                     aria-invalid={!!errors.businessName}
                     autoComplete="organization"

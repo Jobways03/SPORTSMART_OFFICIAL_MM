@@ -18,7 +18,11 @@ import { useRouter } from 'next/navigation';
 import { apiClient, ApiError } from '@/lib/api-client';
 import { franchiseProfileService, FranchiseProfile } from '@/services/profile.service';
 import { PincodeFields } from '@sportsmart/ui';
-import { validatePincode, validatePersonName } from '@/lib/validators';
+import {
+  validatePincode,
+  validatePersonName,
+  validateBusinessName,
+} from '@/lib/validators';
 import './franchise-onboarding.css';
 
 type GstType = 'REGULAR' | 'COMPOSITION' | 'CASUAL';
@@ -165,9 +169,10 @@ export default function FranchiseOnboardingPage() {
 
   const validate = (): boolean => {
     const next: Partial<Record<keyof FormState, string>> = {};
-    if (form.legalBusinessName.trim().length < 2) {
-      next.legalBusinessName = 'Legal business name is required';
-    }
+    // Legal business name is a BUSINESS name — letters, digits and common
+    // legal punctuation are all allowed (digits are NOT stripped).
+    const legalNameError = validateBusinessName(form.legalBusinessName);
+    if (legalNameError) next.legalBusinessName = legalNameError;
     if (!form.entityType) {
       next.entityType = 'Type of entity is required';
     }
@@ -407,10 +412,18 @@ export default function FranchiseOnboardingPage() {
             input={
               <input
                 type="text"
-                maxLength={200}
+                maxLength={150}
                 value={form.legalBusinessName}
                 onChange={(e) =>
-                  setForm({ ...form, legalBusinessName: e.target.value })
+                  setForm({
+                    ...form,
+                    // BUSINESS name — keep letters, digits and legal
+                    // punctuation (& . , - / ( ) '); never strip digits.
+                    legalBusinessName: e.target.value.replace(
+                      /[^A-Za-z0-9 &.,\-/()']/g,
+                      '',
+                    ),
+                  })
                 }
               />
             }
@@ -467,7 +480,11 @@ export default function FranchiseOnboardingPage() {
                 maxLength={15}
                 value={form.gstNumber}
                 onChange={(e) => {
-                  const v = e.target.value.toUpperCase();
+                  // GSTIN — uppercase, alphanumerics only, max 15 chars.
+                  const v = e.target.value
+                    .toUpperCase()
+                    .replace(/[^A-Z0-9]/g, '')
+                    .slice(0, 15);
                   // GST state code = the first 2 digits of the GSTIN — auto-derive.
                   setForm({
                     ...form,
@@ -508,7 +525,14 @@ export default function FranchiseOnboardingPage() {
                 maxLength={10}
                 value={form.panNumber}
                 onChange={(e) =>
-                  setForm({ ...form, panNumber: e.target.value.toUpperCase() })
+                  setForm({
+                    ...form,
+                    // PAN — uppercase, alphanumerics only, max 10 chars.
+                    panNumber: e.target.value
+                      .toUpperCase()
+                      .replace(/[^A-Z0-9]/g, '')
+                      .slice(0, 10),
+                  })
                 }
                 placeholder="ABCDE1234F"
               />
@@ -626,7 +650,12 @@ export default function FranchiseOnboardingPage() {
                 maxLength={150}
                 value={form.bankAccountHolderName}
                 onChange={(e) =>
-                  setForm({ ...form, bankAccountHolderName: e.target.value })
+                  setForm({
+                    ...form,
+                    // Strip anything that isn't a letter/space/period/apostrophe/
+                    // hyphen so digits can't be typed or pasted into a name.
+                    bankAccountHolderName: e.target.value.replace(/[^A-Za-z .'-]/g, ''),
+                  })
                 }
                 placeholder="Name as per bank records"
               />
@@ -664,7 +693,11 @@ export default function FranchiseOnboardingPage() {
                 onChange={(e) =>
                   setForm({
                     ...form,
-                    bankIfscCode: e.target.value.toUpperCase().slice(0, 11),
+                    // IFSC — uppercase, alphanumerics only, max 11 chars.
+                    bankIfscCode: e.target.value
+                      .toUpperCase()
+                      .replace(/[^A-Z0-9]/g, '')
+                      .slice(0, 11),
                   })
                 }
                 placeholder="e.g. HDFC0001234"
@@ -681,7 +714,12 @@ export default function FranchiseOnboardingPage() {
                 maxLength={150}
                 value={form.bankName}
                 onChange={(e) =>
-                  setForm({ ...form, bankName: e.target.value })
+                  setForm({
+                    ...form,
+                    // Bank name behaves like a BUSINESS name — keep letters,
+                    // digits and legal punctuation (& . , - / ( ) ').
+                    bankName: e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, ''),
+                  })
                 }
                 placeholder="e.g. HDFC Bank"
               />

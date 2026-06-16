@@ -215,7 +215,10 @@ export default function SellerRegisterPage() {
                     placeholder="Enter your full name"
                     value={sellerName}
                     maxLength={100}
-                    onChange={(e) => setSellerName(e.target.value)}
+                    onChange={(e) =>
+                      // Person name — letters/space/period/apostrophe/hyphen only.
+                      setSellerName(e.target.value.replace(/[^A-Za-z .'-]/g, ''))
+                    }
                     onBlur={() => handleBlur('sellerName', sellerName)}
                     aria-invalid={!!errors.sellerName}
                     aria-describedby={errors.sellerName ? 'sellerName-error' : undefined}
@@ -237,7 +240,11 @@ export default function SellerRegisterPage() {
                     placeholder="Your shop or business name"
                     value={sellerShopName}
                     maxLength={150}
-                    onChange={(e) => setSellerShopName(e.target.value)}
+                    onChange={(e) =>
+                      // Business name — keep letters, digits, and a small
+                      // punctuation set; do NOT strip digits.
+                      setSellerShopName(e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, ''))
+                    }
                     onBlur={() => handleBlur('sellerShopName', sellerShopName)}
                     aria-invalid={!!errors.sellerShopName}
                     aria-describedby={errors.sellerShopName ? 'sellerShopName-error' : undefined}
@@ -278,10 +285,14 @@ export default function SellerRegisterPage() {
                   <input
                     id="phoneNumber"
                     type="tel"
+                    inputMode="numeric"
                     placeholder="10-digit mobile"
                     value={phoneNumber}
-                    maxLength={15}
-                    onChange={(e) => setPhoneNumber(e.target.value)}
+                    maxLength={10}
+                    onChange={(e) =>
+                      // Indian mobile — digits only, capped at 10.
+                      setPhoneNumber(e.target.value.replace(/\D/g, '').slice(0, 10))
+                    }
                     onBlur={() => handleBlur('phoneNumber', phoneNumber)}
                     aria-invalid={!!errors.phoneNumber}
                     aria-describedby={errors.phoneNumber ? 'phoneNumber-error' : undefined}

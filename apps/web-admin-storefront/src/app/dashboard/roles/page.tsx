@@ -8,6 +8,12 @@ import {
   groupPermissionsByModule,
 } from '@/services/admin-roles.service';
 import { RequirePermission } from '@/lib/permissions';
+import { validateBusinessName } from '@/lib/validators';
+
+// Role names are BUSINESS-style labels — letters AND digits plus a few
+// punctuation marks are legitimate (e.g. "Tier 2 Support", "Finance (RO)").
+const filterRoleName = (v: string) =>
+  v.replace(/[^A-Za-z0-9 &.,\-/()']/g, '').slice(0, 150);
 
 export default function RolesPage() {
   return (
@@ -700,9 +706,14 @@ function RoleFormModal({
 
   const submit = async () => {
     setErr('');
-    if (mode === 'create' && !name.trim()) {
-      setErr('Name is required');
-      return;
+    // Role name is a BUSINESS-style label (letters + digits allowed). It is
+    // only editable on create; on edit the name input is disabled.
+    if (mode === 'create') {
+      const nameErr = validateBusinessName(name, 'Name');
+      if (nameErr) {
+        setErr(nameErr);
+        return;
+      }
     }
     setSubmitting(true);
     try {
@@ -741,7 +752,8 @@ function RoleFormModal({
             <Field label="Name">
               <input
                 value={name}
-                onChange={(e) => setName(e.target.value)}
+                maxLength={150}
+                onChange={(e) => setName(filterRoleName(e.target.value))}
                 disabled={mode === 'edit'}
                 style={inputStyle}
               />

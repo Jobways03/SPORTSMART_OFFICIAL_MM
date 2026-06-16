@@ -15,8 +15,7 @@
  *      show the reason and let the seller edit + re-submit.
  *
  * After approval (verificationStatus=VERIFIED + status=ACTIVE), this
- * page redirects to the first-listing wizard at
- * /dashboard/onboarding/first-listing.
+ * page redirects straight to the dashboard.
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -239,13 +238,14 @@ export default function SellerOnboardingPage() {
     form.registeredAddress.locality,
   ]);
 
-  // Once approved, jump to first-listing wizard.
+  // Once approved, go straight to the dashboard (the first-listing wizard was
+  // removed — approval lands the seller directly on the dashboard).
   useEffect(() => {
     if (
       profile?.status === 'ACTIVE' &&
       profile?.verificationStatus === 'VERIFIED'
     ) {
-      router.push('/dashboard/onboarding/first-listing');
+      router.push('/dashboard');
     }
   }, [profile, router]);
 
@@ -528,10 +528,15 @@ export default function SellerOnboardingPage() {
               id="legalBusinessName"
               value={form.legalBusinessName}
               onChange={(e) =>
-                setForm({ ...form, legalBusinessName: e.target.value })
+                setForm({
+                  ...form,
+                  // Business name — keep letters, digits, and a small
+                  // punctuation set; strip anything else on type/paste.
+                  legalBusinessName: e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, ''),
+                })
               }
               required
-              maxLength={200}
+              maxLength={150}
             />
 
             {/* Phase 35 — explicit hint that GST fields go through the
@@ -604,7 +609,9 @@ export default function SellerOnboardingPage() {
               id="gstin"
               value={form.gstin}
               onChange={(e) => {
-                const v = e.target.value.toUpperCase();
+                // Uppercase, strip non-alphanumerics, cap at 15 so a paste
+                // with spaces/dashes can't slip a malformed GSTIN into state.
+                const v = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 15);
                 // GST state code = the first 2 digits of the GSTIN, so derive it
                 // automatically and keep the field read-only (no manual entry).
                 setForm({
@@ -638,7 +645,11 @@ export default function SellerOnboardingPage() {
               id="panNumber"
               value={form.panNumber}
               onChange={(e) =>
-                setForm({ ...form, panNumber: e.target.value.toUpperCase() })
+                setForm({
+                  ...form,
+                  // Uppercase, strip non-alphanumerics, cap at 10 chars.
+                  panNumber: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10),
+                })
               }
               maxLength={10}
               required
@@ -727,9 +738,14 @@ export default function SellerOnboardingPage() {
               <input
                 value={form.bankAccountHolderName}
                 onChange={(e) =>
-                  setForm({ ...form, bankAccountHolderName: e.target.value })
+                  setForm({
+                    ...form,
+                    // Strip anything that isn't a letter/space/period/apostrophe/
+                    // hyphen so digits can't be typed or pasted into a name.
+                    bankAccountHolderName: e.target.value.replace(/[^A-Za-z .'-]/g, ''),
+                  })
                 }
-                maxLength={150}
+                maxLength={100}
                 placeholder="Name as per bank records"
                 required
               />
@@ -753,7 +769,8 @@ export default function SellerOnboardingPage() {
                 onChange={(e) =>
                   setForm({
                     ...form,
-                    bankIfscCode: e.target.value.toUpperCase().slice(0, 11),
+                    // Uppercase, strip non-alphanumerics, cap at 11 chars.
+                    bankIfscCode: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11),
                   })
                 }
                 maxLength={11}
@@ -763,7 +780,14 @@ export default function SellerOnboardingPage() {
               <label>Bank name</label>
               <input
                 value={form.bankName}
-                onChange={(e) => setForm({ ...form, bankName: e.target.value })}
+                onChange={(e) =>
+                  setForm({
+                    ...form,
+                    // Bank name is a business name — keep letters/digits and a
+                    // small punctuation set; strip anything else.
+                    bankName: e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, ''),
+                  })
+                }
                 maxLength={150}
                 placeholder="e.g. HDFC Bank"
               />

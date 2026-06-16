@@ -1134,13 +1134,14 @@ const router = useRouter();
             type="checkbox"
             id="hasVariants"
             checked={form.hasVariants}
-            disabled
+            onChange={e => updateField('hasVariants', e.target.checked)}
+            disabled={!isEditable}
           />
           <label htmlFor="hasVariants">This product has variants</label>
           <span className="form-hint" style={{ marginLeft: 8 }}>
             {form.hasVariants
-              ? '(auto-enabled when variants are generated)'
-              : '(generate variants below to enable)'}
+              ? '(tick to manage sizes, colours & variants below)'
+              : '(tick if this product comes in multiple sizes or colours)'}
           </span>
         </div>
 
@@ -1253,7 +1254,8 @@ const router = useRouter();
         )}
       </div>
 
-      {/* Variants Section */}
+      {/* Variants Section — only shown when this product is marked as having variants */}
+      {form.hasVariants && (
       <div className="form-card">
         <div className="form-card-head">
           <div className="form-card-title">Variants</div>
@@ -1510,6 +1512,7 @@ const router = useRouter();
           </div>
         )}
       </div>
+      )}
 
       {/* Images Section (edit only) */}
       <div className="form-card">

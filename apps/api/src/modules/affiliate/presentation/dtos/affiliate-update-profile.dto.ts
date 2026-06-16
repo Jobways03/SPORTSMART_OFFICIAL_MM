@@ -24,12 +24,20 @@ export class AffiliateUpdateProfileDto {
   @IsString()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @Length(1, 64, { message: 'First name must be between 1 and 64 characters' })
+  @Matches(/^[A-Za-z][A-Za-z .'-]*$/, {
+    message:
+      'First name must contain only letters, spaces, periods, apostrophes or hyphens',
+  })
   firstName?: string;
 
   @IsOptional()
   @IsString()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @Length(1, 64, { message: 'Last name must be between 1 and 64 characters' })
+  @Matches(/^[A-Za-z][A-Za-z .'-]*$/, {
+    message:
+      'Last name must contain only letters, spaces, periods, apostrophes or hyphens',
+  })
   lastName?: string;
 
   @IsOptional()

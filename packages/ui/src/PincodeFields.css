@@ -43,10 +43,14 @@
   border-color: #2563eb;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
 }
-/* a successfully auto-filled field gets a soft green wash but stays editable */
+/* a PIN-resolved field gets a soft green wash and is locked read-only */
 .pin__input--filled {
   background: #f0fdf4 !important;
   border-color: #86efac !important;
+}
+/* PIN-derived City/State are read-only — signal that they can't be edited */
+.pin__input[readonly] {
+  cursor: not-allowed;
 }
 .pin__note {
   font-size: 12px;

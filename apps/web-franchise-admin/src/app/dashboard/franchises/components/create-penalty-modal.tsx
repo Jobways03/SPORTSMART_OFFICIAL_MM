@@ -71,12 +71,15 @@ export default function CreatePenaltyModal({ franchiseId, businessName, onClose,
           <div className="modal-form-group">
             <label>Amount *</label>
             <input
-              type="number"
+              type="text"
+              inputMode="decimal"
               placeholder="Enter penalty amount"
               value={amount}
-              onChange={e => setAmount(e.target.value)}
-              min="0.01"
-              step="0.01"
+              onChange={e =>
+                setAmount(
+                  e.target.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1'),
+                )
+              }
             />
           </div>
 

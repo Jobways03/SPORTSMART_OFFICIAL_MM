@@ -1,9 +1,10 @@
-import { IsOptional, IsString, IsNumber, IsEnum, Min } from 'class-validator';
+import { IsOptional, IsString, IsNumber, IsInt, IsEnum, MaxLength, Min } from 'class-validator';
 import { VariantStatus } from '@prisma/client';
 
 export class UpdateVariantDto {
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   title?: string;
 
   @IsOptional()
@@ -33,10 +34,11 @@ export class UpdateVariantDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   sku?: string;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(0)
   stock?: number;
 
@@ -47,6 +49,7 @@ export class UpdateVariantDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   weightUnit?: string;
 
   @IsOptional()
@@ -66,6 +69,7 @@ export class UpdateVariantDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   dimensionUnit?: string;
 
   // Phase 41 (2026-05-21) — @IsEnum(VariantStatus) replaces @IsString.
@@ -77,5 +81,6 @@ export class UpdateVariantDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   barcode?: string;
 }

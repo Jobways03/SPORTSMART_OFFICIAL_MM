@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { apiFetch, ApiError } from '@/lib/api';
 import {
+  filterPersonNameInput,
   validateEmail,
   validateIndianMobile,
   validatePassword,
@@ -174,8 +175,11 @@ export default function RegisterPage() {
             <input
               type="text"
               required
+              maxLength={100}
               value={form.firstName}
-              onChange={update('firstName')}
+              onChange={(e) =>
+                setForm((p) => ({ ...p, firstName: filterPersonNameInput(e.target.value) }))
+              }
               disabled={loading}
               style={inputStyle}
             />
@@ -184,8 +188,11 @@ export default function RegisterPage() {
             <input
               type="text"
               required
+              maxLength={100}
               value={form.lastName}
-              onChange={update('lastName')}
+              onChange={(e) =>
+                setForm((p) => ({ ...p, lastName: filterPersonNameInput(e.target.value) }))
+              }
               disabled={loading}
               style={inputStyle}
             />

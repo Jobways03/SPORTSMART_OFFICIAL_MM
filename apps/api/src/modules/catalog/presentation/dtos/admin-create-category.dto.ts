@@ -34,6 +34,9 @@ export class AdminCreateCategoryDto {
   // No <> to defeat XSS attempts that inject script tags into the
   // taxonomy. React escapes on render, but defence in depth.
   @Matches(/^[^<>]+$/, { message: 'name cannot contain < or >' })
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9 &.,\-/()']*$/, {
+    message: 'name contains invalid characters',
+  })
   name!: string;
 
   /**

@@ -2,7 +2,7 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { apiFetch, formatINR } from '../../../lib/api';
-import { validateAmount } from '../../../lib/validators';
+import { filterAmountInput, filterIntegerInput, validateAmount } from '../../../lib/validators';
 
 interface Settings {
   defaultCommissionPercentage: number;
@@ -225,7 +225,7 @@ export default function SettingsPage() {
             displaySuffix="%"
             editing={editing}
             value={form.defaultCommissionPercentage}
-            onChange={(v) => setForm({ ...form, defaultCommissionPercentage: v })}
+            onChange={(v) => setForm({ ...form, defaultCommissionPercentage: filterAmountInput(v, 2) })}
             inputType="number"
             step="0.5"
             min={0}
@@ -254,7 +254,7 @@ export default function SettingsPage() {
             displaySuffix={`day${settings.returnWindowDays === 1 ? '' : 's'}`}
             editing={editing}
             value={form.returnWindowDays}
-            onChange={(v) => setForm({ ...form, returnWindowDays: v })}
+            onChange={(v) => setForm({ ...form, returnWindowDays: filterIntegerInput(v) })}
             inputType="number"
             step="1"
             min={0}
@@ -283,7 +283,7 @@ export default function SettingsPage() {
               displayValue={formatINR(settings.minimumPayoutAmount)}
               editing={editing}
               value={form.minimumPayoutAmount}
-              onChange={(v) => setForm({ ...form, minimumPayoutAmount: v })}
+              onChange={(v) => setForm({ ...form, minimumPayoutAmount: filterAmountInput(v, 2) })}
               inputType="number"
               step="50"
               min={0}
@@ -298,7 +298,7 @@ export default function SettingsPage() {
               displaySuffix={`day${settings.commissionReversalWindowDays === 1 ? '' : 's'}`}
               editing={editing}
               value={form.commissionReversalWindowDays}
-              onChange={(v) => setForm({ ...form, commissionReversalWindowDays: v })}
+              onChange={(v) => setForm({ ...form, commissionReversalWindowDays: filterIntegerInput(v) })}
               inputType="number"
               step="1"
               min={0}
@@ -327,7 +327,7 @@ export default function SettingsPage() {
               displaySuffix="%"
               editing={editing}
               value={form.tdsRate}
-              onChange={(v) => setForm({ ...form, tdsRate: v })}
+              onChange={(v) => setForm({ ...form, tdsRate: filterAmountInput(v, 2) })}
               inputType="number"
               step="0.5"
               min={0}
@@ -342,7 +342,7 @@ export default function SettingsPage() {
               displayValue={formatINR(settings.tdsThresholdPerFY)}
               editing={editing}
               value={form.tdsThresholdPerFY}
-              onChange={(v) => setForm({ ...form, tdsThresholdPerFY: v })}
+              onChange={(v) => setForm({ ...form, tdsThresholdPerFY: filterAmountInput(v, 2) })}
               inputType="number"
               step="500"
               min={0}

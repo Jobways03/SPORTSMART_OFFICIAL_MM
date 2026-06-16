@@ -2,7 +2,11 @@
 
 import { FormEvent, useEffect, useState } from 'react';
 import { apiFetch, formatDate } from '../../../lib/api';
-import { validateIndianMobile, validatePersonName } from '../../../lib/validators';
+import {
+  filterPersonNameInput,
+  validateIndianMobile,
+  validatePersonName,
+} from '../../../lib/validators';
 
 interface Profile {
   id: string;
@@ -192,9 +196,11 @@ export default function ProfilePage() {
                 <FormField label="First name" required>
                   <input
                     value={form.firstName}
-                    onChange={(e) => setForm({ ...form, firstName: e.target.value })}
+                    onChange={(e) =>
+                      setForm({ ...form, firstName: filterPersonNameInput(e.target.value) })
+                    }
                     required
-                    maxLength={64}
+                    maxLength={100}
                     disabled={saving}
                     style={inputStyle}
                   />
@@ -202,9 +208,11 @@ export default function ProfilePage() {
                 <FormField label="Last name" required>
                   <input
                     value={form.lastName}
-                    onChange={(e) => setForm({ ...form, lastName: e.target.value })}
+                    onChange={(e) =>
+                      setForm({ ...form, lastName: filterPersonNameInput(e.target.value) })
+                    }
                     required
-                    maxLength={64}
+                    maxLength={100}
                     disabled={saving}
                     style={inputStyle}
                   />

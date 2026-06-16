@@ -223,3 +223,73 @@ export function validateUploadFile(
   }
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Business identity + Indian financial-instrument validators. Regexes mirror
+// the backend DTOs so every surface rejects the same shapes the server does.
+// Business / shop / brand / legal names are NOT person names — they keep
+// digits plus a small punctuation set ( & . , - / ( ) ' and space).
+// ---------------------------------------------------------------------------
+
+const BUSINESS_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9 &.,\-/()']*$/;
+const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const BANK_ACCOUNT_REGEX = /^[0-9]{9,18}$/;
+const UPI_VPA_REGEX = /^[\w.\-]+@[A-Za-z]+$/;
+
+/** Business / shop / brand / legal name: letters+digits + a few punctuation. */
+export function validateBusinessName(value: string, label = 'Name'): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return `${label} is required`;
+  if (trimmed.length < 2) return `${label} must be at least 2 characters`;
+  if (trimmed.length > 150) return `${label} must not exceed 150 characters`;
+  if (!BUSINESS_NAME_REGEX.test(trimmed)) return `${label} contains invalid characters`;
+  return null;
+}
+
+/** PAN: 5 letters + 4 digits + 1 letter (uppercase). */
+export function validatePan(value: string): string | null {
+  const trimmed = (value ?? '').trim().toUpperCase();
+  if (!trimmed) return 'PAN is required';
+  if (!PAN_REGEX.test(trimmed)) {
+    return 'PAN must be 5 letters + 4 digits + 1 letter (e.g. ABCDE1234F)';
+  }
+  return null;
+}
+
+/** GSTIN: 15-char GST identification number. */
+export function validateGstin(value: string): string | null {
+  const trimmed = (value ?? '').trim().toUpperCase();
+  if (!trimmed) return 'GSTIN is required';
+  if (!GSTIN_REGEX.test(trimmed)) {
+    return 'GSTIN must be 15 chars (2-digit state + PAN + entity + Z + checksum)';
+  }
+  return null;
+}
+
+/** IFSC: 4 letters + 0 + 6 alphanumerics (e.g. HDFC0001234). */
+export function validateIfsc(value: string): string | null {
+  const trimmed = (value ?? '').trim().toUpperCase();
+  if (!trimmed) return 'IFSC code is required';
+  if (!IFSC_REGEX.test(trimmed)) {
+    return 'IFSC must be 4 letters + 0 + 6 alphanumerics (e.g. HDFC0001234)';
+  }
+  return null;
+}
+
+/** Bank account number: 9-18 digits. Strips spaces before checking. */
+export function validateBankAccountNumber(value: string): string | null {
+  const digits = (value ?? '').replace(/\s+/g, '');
+  if (!digits) return 'Account number is required';
+  if (!BANK_ACCOUNT_REGEX.test(digits)) return 'Bank account number must be 9–18 digits';
+  return null;
+}
+
+/** UPI VPA: handle@provider. */
+export function validateUPI(value: string): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return 'UPI ID is required';
+  if (!UPI_VPA_REGEX.test(trimmed)) return 'Enter a valid UPI ID (e.g. name@bank)';
+  return null;
+}
