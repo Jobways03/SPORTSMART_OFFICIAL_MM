@@ -20,7 +20,18 @@ interface ToolField {
   // Optional field-level format check. Runs after the required check and
   // only when the field has a value. Returns an error message or null.
   validate?: (value: string) => string | null;
+  // Optional onChange input filter for restrictive fields (pincode, phone,
+  // person name, integer counts). Returns the sanitised value to store.
+  // Omitted for free-text fields (AWB, address, mode, date/time, etc.).
+  filter?: (value: string) => string;
 }
+
+// Reusable input filters mirroring the lib/validators field semantics.
+const digitsMax = (max: number) => (v: string) => v.replace(/\D/g, '').slice(0, max);
+const pincodeFilter = digitsMax(6);
+const mobileFilter = digitsMax(10);
+const personNameFilter = (v: string) => v.replace(/[^A-Za-z .'-]/g, '');
+const intFilter = (v: string) => v.replace(/\D/g, '');
 
 function ToolCard({
   title,
@@ -80,7 +91,10 @@ function ToolCard({
             placeholder={f.label + (f.required ? ' *' : '')}
             value={values[f.name] ?? ''}
             onChange={(e) =>
-              setValues((v) => ({ ...v, [f.name]: e.target.value }))
+              setValues((v) => ({
+                ...v,
+                [f.name]: f.filter ? f.filter(e.target.value) : e.target.value,
+              }))
             }
             style={{ ...input, minWidth: f.wide ? 280 : 150 }}
           />
@@ -120,7 +134,7 @@ export default function DelhiveryToolsPage() {
         title="Pincode serviceability"
         desc="Is a destination pincode deliverable, and does it support COD / prepaid?"
         actionLabel="Check"
-        fields={[{ name: 'pincode', label: 'Pincode', required: true, validate: validatePincode }]}
+        fields={[{ name: 'pincode', label: 'Pincode', required: true, validate: validatePincode, filter: pincodeFilter }]}
         run={(v) => get(`/admin/delhivery/serviceability/${encodeURIComponent(v.pincode.trim())}`)}
       />
 
@@ -129,9 +143,9 @@ export default function DelhiveryToolsPage() {
         desc="Live cost quote between two pincodes. Mode S = Surface, E = Express."
         actionLabel="Calculate"
         fields={[
-          { name: 'origin', label: 'Origin pincode', required: true, validate: validatePincode },
-          { name: 'destination', label: 'Destination pincode', required: true, validate: validatePincode },
-          { name: 'weightGrams', label: 'Weight (g)', required: true },
+          { name: 'origin', label: 'Origin pincode', required: true, validate: validatePincode, filter: pincodeFilter },
+          { name: 'destination', label: 'Destination pincode', required: true, validate: validatePincode, filter: pincodeFilter },
+          { name: 'weightGrams', label: 'Weight (g)', required: true, filter: intFilter },
           { name: 'mode', label: 'Mode (S/E)' },
           { name: 'paymentType', label: 'Pre-paid / COD' },
         ]}
@@ -152,8 +166,8 @@ export default function DelhiveryToolsPage() {
         desc="Estimated delivery days between two pincodes. mot S = Surface, E = Express."
         actionLabel="Check"
         fields={[
-          { name: 'origin', label: 'Origin pincode', required: true, validate: validatePincode },
-          { name: 'destination', label: 'Destination pincode', required: true, validate: validatePincode },
+          { name: 'origin', label: 'Origin pincode', required: true, validate: validatePincode, filter: pincodeFilter },
+          { name: 'destination', label: 'Destination pincode', required: true, validate: validatePincode, filter: pincodeFilter },
           { name: 'mot', label: 'Mode (S/E)' },
         ]}
         run={(v) => {
@@ -170,7 +184,7 @@ export default function DelhiveryToolsPage() {
         title="Fetch waybills"
         desc="Reserve bulk AWB numbers from Delhivery (normally done automatically at booking)."
         actionLabel="Fetch"
-        fields={[{ name: 'count', label: 'Count' }]}
+        fields={[{ name: 'count', label: 'Count', filter: intFilter }]}
         run={(v) => get(`/admin/delhivery/waybill?count=${Number(v.count) || 1}`)}
       />
 
@@ -182,7 +196,7 @@ export default function DelhiveryToolsPage() {
           { name: 'warehouseName', label: 'Warehouse name', required: true, wide: true },
           { name: 'date', label: 'Date (YYYY-MM-DD)', required: true },
           { name: 'time', label: 'Time (HH:MM:SS)', required: true },
-          { name: 'expectedPackageCount', label: 'Package count', required: true },
+          { name: 'expectedPackageCount', label: 'Package count', required: true, filter: intFilter },
         ]}
         run={(v) =>
           post('/admin/delhivery/pickup', {
@@ -221,14 +235,16 @@ export default function DelhiveryToolsPage() {
             name: 'consigneeName',
             label: 'Consignee name',
             validate: (v) => validatePersonName(v, 'Consignee name'),
+            filter: personNameFilter,
           },
           {
             name: 'consigneePhone',
             label: 'Consignee phone',
             validate: validateIndianMobile,
+            filter: mobileFilter,
           },
           { name: 'consigneeAddress', label: 'Consignee address', wide: true },
-          { name: 'weightGrams', label: 'Weight (g)' },
+          { name: 'weightGrams', label: 'Weight (g)', filter: intFilter },
         ]}
         run={(v) => {
           const changes: Record<string, unknown> = {};

@@ -4,8 +4,10 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiFetch, formatDate, formatINR } from '../../../lib/api';
 import {
+  filterBusinessNameInput,
   validateAccountHolderName,
   validateBankAccount,
+  validateBusinessName,
   validateIFSC,
   validateUPI,
 } from '../../../lib/validators';
@@ -456,7 +458,8 @@ function AddMethodForm({ onSaved, existingCount }: { onSaved: () => void; existi
       type === 'BANK'
         ? validateAccountHolderName(holder) ||
           validateBankAccount(accountNumber) ||
-          validateIFSC(ifsc)
+          validateIFSC(ifsc) ||
+          validateBusinessName(bankName, { label: 'Bank name', required: false })
         : validateUPI(upiId);
     if (validationError) {
       setErr(validationError);
@@ -511,8 +514,10 @@ function AddMethodForm({ onSaved, existingCount }: { onSaved: () => void; existi
           <FormField label="Account number" required>
             <input
               value={accountNumber}
-              onChange={(e) => setAccountNumber(e.target.value.replace(/\D/g, ''))}
+              onChange={(e) => setAccountNumber(e.target.value.replace(/\D/g, '').slice(0, 18))}
               required
+              inputMode="numeric"
+              maxLength={18}
               style={inputStyle}
               placeholder="1234567890"
             />
@@ -520,7 +525,7 @@ function AddMethodForm({ onSaved, existingCount }: { onSaved: () => void; existi
           <FormField label="IFSC" required>
             <input
               value={ifsc}
-              onChange={(e) => setIfsc(e.target.value.toUpperCase())}
+              onChange={(e) => setIfsc(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11))}
               required
               maxLength={11}
               style={inputStyle}
@@ -530,15 +535,17 @@ function AddMethodForm({ onSaved, existingCount }: { onSaved: () => void; existi
           <FormField label="Account holder name" required>
             <input
               value={holder}
-              onChange={(e) => setHolder(e.target.value)}
+              onChange={(e) => setHolder(e.target.value.replace(/[^A-Za-z .'-]/g, ''))}
               required
+              maxLength={100}
               style={inputStyle}
             />
           </FormField>
           <FormField label="Bank name" optional>
             <input
               value={bankName}
-              onChange={(e) => setBankName(e.target.value)}
+              onChange={(e) => setBankName(filterBusinessNameInput(e.target.value))}
+              maxLength={150}
               style={inputStyle}
               placeholder="HDFC Bank"
             />

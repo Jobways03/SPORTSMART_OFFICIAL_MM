@@ -13,6 +13,9 @@ import {
   validatePassword,
   validateConfirmPassword,
   getPasswordStrength,
+  filterPersonName,
+  filterBusinessName,
+  filterIndianMobile,
 } from '@/lib/validators';
 import { CaptchaWidget } from '@/components/CaptchaWidget';
 import './register.css';
@@ -215,7 +218,7 @@ export default function SellerRegisterPage() {
                     placeholder="Enter your full name"
                     value={sellerName}
                     maxLength={100}
-                    onChange={(e) => setSellerName(e.target.value)}
+                    onChange={(e) => setSellerName(filterPersonName(e.target.value))}
                     onBlur={() => handleBlur('sellerName', sellerName)}
                     aria-invalid={!!errors.sellerName}
                     aria-describedby={errors.sellerName ? 'sellerName-error' : undefined}
@@ -237,7 +240,7 @@ export default function SellerRegisterPage() {
                     placeholder="Your shop or business name"
                     value={sellerShopName}
                     maxLength={150}
-                    onChange={(e) => setSellerShopName(e.target.value)}
+                    onChange={(e) => setSellerShopName(filterBusinessName(e.target.value))}
                     onBlur={() => handleBlur('sellerShopName', sellerShopName)}
                     aria-invalid={!!errors.sellerShopName}
                     aria-describedby={errors.sellerShopName ? 'sellerShopName-error' : undefined}
@@ -280,8 +283,8 @@ export default function SellerRegisterPage() {
                     type="tel"
                     placeholder="10-digit mobile"
                     value={phoneNumber}
-                    maxLength={15}
-                    onChange={(e) => setPhoneNumber(e.target.value)}
+                    maxLength={10}
+                    onChange={(e) => setPhoneNumber(filterIndianMobile(e.target.value))}
                     onBlur={() => handleBlur('phoneNumber', phoneNumber)}
                     aria-invalid={!!errors.phoneNumber}
                     aria-describedby={errors.phoneNumber ? 'phoneNumber-error' : undefined}

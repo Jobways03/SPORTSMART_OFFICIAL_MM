@@ -487,7 +487,9 @@ export default function AddressesPage() {
                     className="profile-input"
                     value={form.fullName}
                     maxLength={50}
-                    onChange={(e) => setForm({ ...form, fullName: e.target.value })}
+                    onChange={(e) =>
+                      setForm({ ...form, fullName: e.target.value.replace(/[^A-Za-z .'-]/g, '') })
+                    }
                     required
                   />
                 </div>
@@ -499,7 +501,16 @@ export default function AddressesPage() {
                     className="profile-input"
                     placeholder="9876543210"
                     value={form.phone}
-                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                    inputMode="numeric"
+                    maxLength={10}
+                    onChange={(e) => {
+                      // Indian mobile — digits only, drop a pasted 91 country
+                      // code, refuse leading 0-5, cap at 10.
+                      let next = e.target.value.replace(/\D/g, '');
+                      if (next.startsWith('91') && next.length > 10) next = next.slice(2);
+                      next = next.replace(/^[0-5]+/, '');
+                      setForm({ ...form, phone: next.slice(0, 10) });
+                    }}
                     required
                   />
                   <div className="profile-field-helper">10-digit Indian mobile number.</div>
@@ -640,6 +651,22 @@ export default function AddressesPage() {
                       onChange={(e) => setForm({ ...form, locality: e.target.value })}
                     />
                   )}
+                </div>
+                <div className="profile-field">
+                  <label htmlFor="postalCode">Postal Code</label>
+                  <input
+                    id="postalCode"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={6}
+                    className="profile-input"
+                    placeholder="6 digits"
+                    value={form.postalCode}
+                    onChange={(e) =>
+                      setForm({ ...form, postalCode: e.target.value.replace(/\D/g, '').slice(0, 6) })
+                    }
+                    required
+                  />
                 </div>
               </div>
 

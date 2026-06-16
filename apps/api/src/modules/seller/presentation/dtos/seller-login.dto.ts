@@ -4,6 +4,7 @@ import { Transform } from 'class-transformer';
 export class SellerLoginDto {
   @IsNotEmpty({ message: 'Email or phone number is required' })
   @IsString()
+  @MaxLength(255)
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   identifier!: string;
 
@@ -17,6 +18,7 @@ export class SellerLoginDto {
   // the verifier service is in passthrough mode.
   @IsOptional()
   @IsString()
+  @MaxLength(4096)
   captchaToken?: string;
 
   // The seller portal this login came from. The D2C portal sends 'D2C', the

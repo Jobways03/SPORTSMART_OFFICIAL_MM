@@ -286,7 +286,8 @@ export default function BlogPostForm({ initial }: Props) {
             <input
               type="text"
               value={author}
-              onChange={(e) => setAuthor(e.target.value)}
+              maxLength={100}
+              onChange={(e) => setAuthor(e.target.value.replace(/[^A-Za-z .'-]/g, '').slice(0, 100))}
               placeholder="Admin name"
               style={input}
             />

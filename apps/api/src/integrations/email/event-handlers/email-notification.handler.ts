@@ -282,7 +282,7 @@ export class EmailNotificationHandler {
    * Fires when admin clicks Approve on the review queue. The
    * pre-Phase-19 event had no consumer; the seller would have to
    * refresh the onboarding page to discover their fate. This handler
-   * sends a welcome email pointing at the first-listing wizard.
+   * sends a welcome email pointing at the seller dashboard.
    */
   @OnEvent('seller.approved')
   async onSellerApproved(
@@ -299,7 +299,7 @@ export class EmailNotificationHandler {
         'APP_URL',
         'http://localhost:8000',
       );
-      const sellerPortalUrl = `${appUrl.replace(/\/$/, '')}/dashboard/onboarding/first-listing`;
+      const sellerPortalUrl = `${appUrl.replace(/\/$/, '')}/dashboard`;
 
       const notesBlock = notes && notes.trim().length > 0
         ? safeHtml`<div style="background: #f9fafb; border-left: 3px solid #d1d5db; padding: 12px 16px; margin: 12px 0; font-size: 13px; color: #374151;"><strong>Notes from admin:</strong> ${notes}</div>`
@@ -313,7 +313,7 @@ export class EmailNotificationHandler {
           <p>Hi ${seller.sellerName},</p>
           <p>Your seller account is now <strong>active</strong>. You can list your products, manage inventory, and start accepting orders.</p>
           ${rawHtml(notesBlock)}
-          <p>Next step: complete your first-listing checklist.</p>
+          <p>Head to your dashboard to add your first product and start selling.</p>
           <p><a href="${sellerPortalUrl}" style="background: #15803d; color: #ffffff; padding: 10px 16px; text-decoration: none; border-radius: 6px; display: inline-block;">Open seller dashboard</a></p>
           <p style="font-size: 13px; color: #6b7280;">Welcome to the marketplace.</p>
         `),

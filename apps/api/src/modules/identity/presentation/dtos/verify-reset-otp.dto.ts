@@ -1,9 +1,10 @@
-import { IsEmail, IsNotEmpty, IsString, Length } from 'class-validator';
+import { IsEmail, IsNotEmpty, IsString, Length, MaxLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 export class VerifyResetOtpDto {
   @IsNotEmpty({ message: 'Email is required' })
   @IsEmail({}, { message: 'Please enter a valid email address' })
+  @MaxLength(255)
   @Transform(({ value }) => typeof value === 'string' ? value.trim().toLowerCase() : value)
   email!: string;
 

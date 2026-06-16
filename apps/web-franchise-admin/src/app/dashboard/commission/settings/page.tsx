@@ -221,12 +221,14 @@ export default function FranchiseCommissionSettingsPage() {
                 Online fulfillment rate (%)
               </label>
               <input
-                type="number"
-                min={0}
-                max={100}
-                step="0.01"
+                type="text"
+                inputMode="decimal"
                 value={onlineRate}
-                onChange={(e) => setOnlineRate(e.target.value)}
+                onChange={(e) =>
+                  setOnlineRate(
+                    e.target.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1'),
+                  )
+                }
                 style={{
                   width: '100%',
                   padding: '10px 12px',
@@ -253,12 +255,14 @@ export default function FranchiseCommissionSettingsPage() {
                 Procurement fee rate (%)
               </label>
               <input
-                type="number"
-                min={0}
-                max={100}
-                step="0.01"
+                type="text"
+                inputMode="decimal"
                 value={procurementRate}
-                onChange={(e) => setProcurementRate(e.target.value)}
+                onChange={(e) =>
+                  setProcurementRate(
+                    e.target.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1'),
+                  )
+                }
                 style={{
                   width: '100%',
                   padding: '10px 12px',

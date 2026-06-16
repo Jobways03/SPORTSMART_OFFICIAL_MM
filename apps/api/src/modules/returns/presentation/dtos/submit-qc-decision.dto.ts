@@ -1,6 +1,7 @@
 import {
   ArrayMinSize,
   IsArray,
+  IsBoolean,
   IsIn,
   IsNotEmpty,
   IsNumber,
@@ -167,6 +168,7 @@ export class SubmitQcDecisionDto {
    * decision needed). Audit-logged either way.
    */
   @IsOptional()
+  @IsBoolean()
   overrideSellerResponseWindow?: boolean;
 
   /**
@@ -176,6 +178,7 @@ export class SubmitQcDecisionDto {
    * approvals are traceable.
    */
   @IsOptional()
+  @IsBoolean()
   acknowledgeHighRisk?: boolean;
 
   /**
@@ -229,5 +232,6 @@ export class SubmitQcDecisionDto {
    * the dual-admin enforcement workflow ships in a follow-up.
    */
   @IsOptional()
+  @IsBoolean()
   requiresApproval?: boolean;
 }

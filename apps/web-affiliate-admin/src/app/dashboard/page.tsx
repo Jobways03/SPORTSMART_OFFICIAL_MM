@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiFetch, formatDate, formatINR } from '../../lib/api';
 import {
+  filterAmountInput,
+  filterIntegerInput,
   validateAmount,
   validateFutureDate,
   validateText,
@@ -1260,7 +1262,7 @@ function CommissionSection({
           <input
             type="number"
             value={pct}
-            onChange={(e) => setPct(e.target.value)}
+            onChange={(e) => setPct(filterAmountInput(e.target.value, 2))}
             min={0}
             max={100}
             step={0.5}
@@ -1419,7 +1421,11 @@ function CouponEditor({
             <input
               type="number"
               value={discountValue}
-              onChange={(e) => setDiscountValue(e.target.value)}
+              onChange={(e) =>
+                setDiscountValue(
+                  filterAmountInput(e.target.value, discountKind === 'PERCENT' ? 2 : 0),
+                )
+              }
               min={0}
               max={discountKind === 'PERCENT' ? 100 : undefined}
               step={discountKind === 'PERCENT' ? 0.5 : 1}
@@ -1439,7 +1445,7 @@ function CouponEditor({
           <input
             type="number"
             value={maxUses}
-            onChange={(e) => setMaxUses(e.target.value)}
+            onChange={(e) => setMaxUses(filterIntegerInput(e.target.value))}
             min={0}
             placeholder="No limit"
             style={inputStyle}
@@ -1449,7 +1455,7 @@ function CouponEditor({
           <input
             type="number"
             value={minOrderValue}
-            onChange={(e) => setMinOrderValue(e.target.value)}
+            onChange={(e) => setMinOrderValue(filterAmountInput(e.target.value, 2))}
             min={0}
             placeholder="No minimum"
             style={inputStyle}

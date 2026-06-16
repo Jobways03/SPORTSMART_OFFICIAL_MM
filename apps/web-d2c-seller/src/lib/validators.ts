@@ -208,6 +208,165 @@ export function validateAmount(
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Submit-time validators for identity / payout fields. Each returns an
+// error-message string or null when valid. Regexes mirror the backend DTOs
+// so the frontend rejects exactly the shapes the server will.
+// ---------------------------------------------------------------------------
+
+const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
+const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/;
+const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const BANK_ACCOUNT_REGEX = /^[0-9]{9,18}$/;
+// Business / shop / brand / legal name: letters AND digits plus a small set
+// of business punctuation. Unlike validatePersonName this KEEPS digits.
+const BUSINESS_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9 &.,\-/()']*$/;
+
+/** Business / shop / brand / legal name — letters, digits, & . , - / ( ) ' */
+export function validateBusinessName(
+  value: string,
+  label = 'Name',
+): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return `${label} is required`;
+  if (trimmed.length < 2) return `${label} must be at least 2 characters`;
+  if (trimmed.length > 150) return `${label} must not exceed 150 characters`;
+  if (!BUSINESS_NAME_REGEX.test(trimmed)) return `${label} contains invalid characters`;
+  return null;
+}
+
+/** Indian PAN — 5 letters + 4 digits + 1 letter (uppercase). */
+export function validatePan(value: string): string | null {
+  const trimmed = (value ?? '').trim().toUpperCase();
+  if (!trimmed) return 'PAN is required';
+  if (!PAN_REGEX.test(trimmed)) return 'PAN must be 5 letters + 4 digits + 1 letter (e.g. ABCDE1234F)';
+  return null;
+}
+
+/** 15-char GSTIN (2-digit state + PAN + entity + Z + checksum). */
+export function validateGstin(value: string): string | null {
+  const trimmed = (value ?? '').trim().toUpperCase();
+  if (!trimmed) return 'GSTIN is required';
+  if (!GSTIN_REGEX.test(trimmed)) return 'Enter a valid 15-character GSTIN';
+  return null;
+}
+
+/** IFSC — 4 letters + 0 + 6 alphanumerics (e.g. HDFC0001234). */
+export function validateIfsc(value: string): string | null {
+  const trimmed = (value ?? '').trim().toUpperCase();
+  if (!trimmed) return 'IFSC code is required';
+  if (!IFSC_REGEX.test(trimmed)) return 'IFSC must be 4 letters + 0 + 6 alphanumerics (e.g. HDFC0001234)';
+  return null;
+}
+
+/** Bank account number — 9 to 18 digits. */
+export function validateBankAccountNumber(value: string): string | null {
+  const digits = (value ?? '').replace(/\s+/g, '');
+  if (!digits) return 'Account number is required';
+  if (!BANK_ACCOUNT_REGEX.test(digits)) return 'Bank account number must be 9–18 digits';
+  return null;
+}
+
+interface ValidateIntegerOptions {
+  min?: number;
+  max?: number;
+  label?: string;
+  required?: boolean;
+}
+
+/** Non-negative integer count / quantity within optional bounds. */
+export function validateInteger(
+  value: string | number,
+  { min = 0, max = Number.MAX_SAFE_INTEGER, label = 'Value', required = true }: ValidateIntegerOptions = {},
+): string | null {
+  const raw = typeof value === 'number' ? String(value) : (value ?? '').trim();
+  if (!raw) {
+    if (required) return `${label} is required`;
+    return null;
+  }
+  if (!/^\d+$/.test(raw)) return `${label} must be a whole number`;
+  const num = Number(raw);
+  if (num < min) return `${label} must be at least ${min}`;
+  if (num > max) return `${label} must not exceed ${max}`;
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// onChange INPUT FILTERS. Each takes the raw input string and returns the
+// filtered string to store in state, so disallowed characters can never be
+// typed or pasted. Pair these with the submit validators above — the filter
+// is UX (stop bad keystrokes); the validator is the gate. Apply the correct
+// one per field SEMANTIC (a business name keeps digits; a person name does
+// not; an address keeps everything).
+// ---------------------------------------------------------------------------
+
+/** Person name: letters + space, period, apostrophe, hyphen. Strips digits. */
+export function filterPersonName(value: string): string {
+  return value.replace(/[^A-Za-z .'-]/g, '');
+}
+
+/** Business name: keeps letters AND digits plus & . , - / ( ) ' and space. */
+export function filterBusinessName(value: string): string {
+  return value.replace(/[^A-Za-z0-9 &.,\-/()']/g, '');
+}
+
+/** Indian mobile: digits only, capped at 10. */
+export function filterIndianMobile(value: string): string {
+  return value.replace(/\D/g, '').slice(0, 10);
+}
+
+/** Pincode / ZIP: digits only, capped at 6. */
+export function filterPincode(value: string): string {
+  return value.replace(/\D/g, '').slice(0, 6);
+}
+
+/** Bank account number: digits only, capped at 18. */
+export function filterBankAccount(value: string): string {
+  return value.replace(/\D/g, '').slice(0, 18);
+}
+
+/** IFSC: uppercase alphanumerics only, capped at 11. */
+export function filterIfsc(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11);
+}
+
+/** PAN: uppercase alphanumerics only, capped at 10. */
+export function filterPan(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10);
+}
+
+/** GSTIN: uppercase alphanumerics only, capped at 15. */
+export function filterGstin(value: string): string {
+  return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 15);
+}
+
+/** Integer count / quantity: digits only. */
+export function filterInteger(value: string): string {
+  return value.replace(/\D/g, '');
+}
+
+/** OTP / fixed-length numeric code: digits only, capped at `length`. */
+export function filterOtp(value: string, length = 6): string {
+  return value.replace(/\D/g, '').slice(0, length);
+}
+
+/**
+ * Money amount: digits with at most one decimal point. Strips everything
+ * else (letters, signs, extra dots), preserving a single fractional part.
+ */
+export function filterAmount(value: string): string {
+  // Drop anything that isn't a digit or a dot.
+  let cleaned = value.replace(/[^0-9.]/g, '');
+  const firstDot = cleaned.indexOf('.');
+  if (firstDot !== -1) {
+    // Keep the first dot; remove any later ones.
+    cleaned =
+      cleaned.slice(0, firstDot + 1) +
+      cleaned.slice(firstDot + 1).replace(/\./g, '');
+  }
+  return cleaned;
+}
+
 interface ValidateUploadFileOptions {
   maxBytes?: number;
   types?: string[];

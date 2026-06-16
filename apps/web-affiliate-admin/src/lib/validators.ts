@@ -86,6 +86,39 @@ export function validateOtp(value: string): string | null {
   return null;
 }
 
+// ── onChange input filters ──────────────────────────────────────────────
+// Restrictive-field filters: wrap an input's onChange so the *stored* value
+// is sanitised as the user types or pastes. These mirror the same regexes the
+// submit-time validators above enforce, so a value that survives the filter is
+// already in the validator's alphabet. Keep them pure string→string.
+
+/**
+ * Money / amount field. Keeps digits and a single decimal point, drops a
+ * leading-dot, and (optionally) caps the number of decimal places. Use for
+ * currency and percent inputs that legitimately accept fractions.
+ */
+export function filterAmountInput(value: string, decimals = 2): string {
+  let cleaned = (value ?? '').replace(/[^0-9.]/g, '');
+  const firstDot = cleaned.indexOf('.');
+  if (firstDot !== -1) {
+    // Collapse any later dots into the fractional part.
+    cleaned =
+      cleaned.slice(0, firstDot + 1) +
+      cleaned.slice(firstDot + 1).replace(/\./g, '');
+  }
+  if (decimals === 0) return cleaned.replace(/\./g, '');
+  if (firstDot !== -1) {
+    const [whole, frac = ''] = cleaned.split('.');
+    return `${whole}.${frac.slice(0, decimals)}`;
+  }
+  return cleaned;
+}
+
+/** Integer count / quantity field — digits only. */
+export function filterIntegerInput(value: string): string {
+  return (value ?? '').replace(/\D/g, '');
+}
+
 /** Strong password — length 8-128 with upper, lower, digit, and special. */
 export function validateStrongPassword(value: string): string | null {
   const v = value ?? '';

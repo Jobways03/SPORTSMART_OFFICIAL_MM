@@ -8,6 +8,12 @@ const GSTIN_REGEX =
 const PAN_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const PINCODE_REGEX = /^[1-9][0-9]{5}$/;
 const INDIAN_MOBILE_REGEX = /^[6-9]\d{9}$/;
+// IFSC — 4 letters + '0' + 6 alphanumerics (RBI format). Matches the
+// edit-bank modal's inline ACCOUNT/IFSC checks.
+const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+// UPI VPA — handle@psp (e.g. name.surname@okhdfcbank). Local part allows
+// word chars, dot and hyphen; the bank/PSP suffix is letters only.
+const UPI_REGEX = /^[\w.\-]+@[A-Za-z]+$/;
 const NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9 .,'&()\-/]*$/;
 // Person name — must start with a letter; letters, spaces, period,
 // apostrophe and hyphen only. NO digits, NO other special characters.
@@ -44,6 +50,23 @@ export function validatePincode(value: string): string | null {
   const trimmed = (value ?? '').trim();
   if (!trimmed) return 'Pincode is required';
   if (!PINCODE_REGEX.test(trimmed)) return 'Enter a valid 6-digit pincode';
+  return null;
+}
+
+/** IFSC — 4 letters + 0 + 6 alphanumerics (e.g. HDFC0001234). */
+export function validateIFSC(value: string): string | null {
+  const trimmed = (value ?? '').trim().toUpperCase();
+  if (!trimmed) return 'IFSC code is required';
+  if (!IFSC_REGEX.test(trimmed))
+    return 'Invalid IFSC — 4 letters + 0 + 6 alphanumerics';
+  return null;
+}
+
+/** UPI VPA — handle@psp (e.g. name@okhdfcbank). */
+export function validateUPI(value: string): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return 'UPI ID is required';
+  if (!UPI_REGEX.test(trimmed)) return 'Enter a valid UPI ID (e.g. name@bank)';
   return null;
 }
 

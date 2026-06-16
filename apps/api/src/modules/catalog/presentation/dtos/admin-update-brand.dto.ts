@@ -22,6 +22,9 @@ export class AdminUpdateBrandDto {
   @MinLength(1)
   @MaxLength(80)
   @Matches(/^[^<>]+$/, { message: 'name cannot contain < or >' })
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9 &.,\-/()']*$/, {
+    message: 'name contains invalid characters',
+  })
   name?: string;
 
   @IsOptional()

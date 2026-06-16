@@ -1,8 +1,9 @@
-import { IsOptional, IsString, IsNumber, Min } from 'class-validator';
+import { IsOptional, IsString, IsNumber, IsInt, MaxLength, Min } from 'class-validator';
 
 export class CreateVariantDto {
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   title?: string;
 
   @IsOptional()
@@ -28,14 +29,16 @@ export class CreateVariantDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   sku?: string;
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   barcode?: string;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(0)
   stock?: number;
 
@@ -46,5 +49,6 @@ export class CreateVariantDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(20)
   weightUnit?: string;
 }

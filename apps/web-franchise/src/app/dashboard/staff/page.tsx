@@ -451,6 +451,9 @@ function AddStaffModal({
           label="Name"
           value={form.name}
           onChange={(v) => setForm({ ...form, name: v })}
+          // PERSON name — letters/space/period/apostrophe/hyphen only.
+          filter={(v) => v.replace(/[^A-Za-z .'-]/g, '')}
+          maxLength={100}
           required
           disabled={isSaving}
         />
@@ -466,6 +469,10 @@ function AddStaffModal({
           label="Phone (optional)"
           value={form.phone || ''}
           onChange={(v) => setForm({ ...form, phone: v })}
+          // Indian mobile — digits only, max 10.
+          filter={(v) => v.replace(/\D/g, '').slice(0, 10)}
+          inputMode="numeric"
+          maxLength={10}
           disabled={isSaving}
         />
         <div>
@@ -587,6 +594,9 @@ function EditStaffModal({
           label="Name"
           value={form.name || ''}
           onChange={(v) => setForm({ ...form, name: v })}
+          // PERSON name — letters/space/period/apostrophe/hyphen only.
+          filter={(v) => v.replace(/[^A-Za-z .'-]/g, '')}
+          maxLength={100}
           required
           disabled={isSaving}
         />
@@ -607,6 +617,10 @@ function EditStaffModal({
           label="Phone"
           value={form.phone || ''}
           onChange={(v) => setForm({ ...form, phone: v })}
+          // Indian mobile — digits only, max 10.
+          filter={(v) => v.replace(/\D/g, '').slice(0, 10)}
+          inputMode="numeric"
+          maxLength={10}
           disabled={isSaving}
         />
         <div>
@@ -758,6 +772,9 @@ function FieldInput({
   type = 'text',
   required,
   disabled,
+  filter,
+  maxLength,
+  inputMode,
 }: {
   label: string;
   value: string;
@@ -765,6 +782,12 @@ function FieldInput({
   type?: string;
   required?: boolean;
   disabled?: boolean;
+  // Optional keystroke-level input filter (e.g. strip non-letters for a
+  // person name, or non-digits for a phone). Applied before onChange so
+  // the stored value can never contain disallowed characters.
+  filter?: (v: string) => string;
+  maxLength?: number;
+  inputMode?: React.HTMLAttributes<HTMLInputElement>['inputMode'];
 }) {
   const [revealed, setRevealed] = useState(false);
   const isPassword = type === 'password';
@@ -779,8 +802,10 @@ function FieldInput({
         <input
           type={effectiveType}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={(e) => onChange(filter ? filter(e.target.value) : e.target.value)}
           disabled={disabled}
+          maxLength={maxLength}
+          inputMode={inputMode}
           style={{
             ...fieldInputStyle,
             marginTop: 0,

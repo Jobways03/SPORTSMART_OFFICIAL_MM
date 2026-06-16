@@ -116,7 +116,7 @@ export default function NewProcurementPage() {
               </select>
             </Field>
             <Field label="Supplier name">
-              <input value={supplierName} onChange={(e) => setSupplierName(e.target.value)} disabled={submitting} placeholder="e.g. Adidas India Pvt Ltd" style={input} />
+              <input value={supplierName} maxLength={150} onChange={(e) => setSupplierName(e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, '').slice(0, 150))} disabled={submitting} placeholder="e.g. Adidas India Pvt Ltd" style={input} />
             </Field>
             <Field label="Expected date">
               <input type="date" value={expectedDate} onChange={(e) => setExpectedDate(e.target.value)} disabled={submitting} style={input} />

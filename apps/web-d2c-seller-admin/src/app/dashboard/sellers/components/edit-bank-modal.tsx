@@ -91,7 +91,7 @@ export default function EditBankModal({ seller, initial, onClose, onSuccess }: P
             <label>Account Holder Name *</label>
             <input
               value={accountHolderName}
-              onChange={(e) => setAccountHolderName(e.target.value)}
+              onChange={(e) => setAccountHolderName(e.target.value.replace(/[^A-Za-z .'-]/g, ''))}
               placeholder="As per bank records"
             />
             {accountHolderName && holderError && (

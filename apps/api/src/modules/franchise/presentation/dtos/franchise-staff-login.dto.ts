@@ -10,6 +10,7 @@ export class FranchiseStaffLoginDto {
 
   @IsNotEmpty()
   @IsEmail()
+  @MaxLength(255)
   email!: string;
 
   @IsNotEmpty()

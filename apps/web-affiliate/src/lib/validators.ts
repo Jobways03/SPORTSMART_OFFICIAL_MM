@@ -6,9 +6,30 @@ const IFSC_REGEX = /^[A-Z]{4}0[A-Z0-9]{6}$/;
 // UPI VPA: handle@psp — handle is alphanumeric/._- (2+), psp is letters (2+).
 const UPI_REGEX = /^[a-zA-Z0-9.\-_]{2,256}@[a-zA-Z]{2,64}$/;
 const NAME_REGEX = /^[A-Za-z][A-Za-z .'-]*$/;
+// Business / shop / bank / brand name: letters AND digits plus a small set of
+// punctuation (& . , - / ( ) ' and space). Digits are deliberately allowed.
+const BUSINESS_NAME_REGEX = /^[A-Za-z0-9][A-Za-z0-9 &.,\-/()']*$/;
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const INDIAN_MOBILE_REGEX = /^[6-9]\d{9}$/;
 const OTP_REGEX = /^\d{6}$/;
+
+// ───────────────────────────────────────────────────────────────────────────
+// onChange input filters. These strip-as-you-type so the stored value can only
+// ever hold characters the field permits (paste-safe). Submit validators above
+// still run as the source of truth — the filters just keep the UI honest.
+
+/** Person-name keystroke filter — letters, space, period, apostrophe, hyphen. */
+export function filterPersonNameInput(value: string): string {
+  return (value ?? '').replace(/[^A-Za-z .'-]/g, '');
+}
+
+/**
+ * Business / shop / bank / brand-name keystroke filter — keeps letters AND
+ * digits plus & . , - / ( ) ' and space. Never strips digits.
+ */
+export function filterBusinessNameInput(value: string): string {
+  return (value ?? '').replace(/[^A-Za-z0-9 &.,\-/()']/g, '');
+}
 
 /** Bank account number — digits only, 9–18 long (covers all Indian banks). */
 export function validateBankAccount(value: string): string | null {
@@ -131,5 +152,25 @@ export function validateText(
   if (trimmed.length > max) {
     return `${label} must not exceed ${max} characters`;
   }
+  return null;
+}
+
+/**
+ * Business / shop / bank / brand / legal name — letters AND digits plus a small
+ * punctuation set (& . , - / ( ) ' and space). Unlike a person name, digits are
+ * allowed (e.g. "3M India", "Bank of America (NA)"). Length 2–150 by default.
+ * `required: false` lets optional fields (e.g. an optional bank name) pass when
+ * left blank.
+ */
+export function validateBusinessName(
+  value: string,
+  { label = 'Name', required = true }: { label?: string; required?: boolean } = {},
+): string | null {
+  const trimmed = (value ?? '').trim();
+  if (!trimmed) return required ? `${label} is required` : null;
+  if (trimmed.length < 2) return `${label} is too short`;
+  if (trimmed.length > 150) return `${label} is too long`;
+  if (!BUSINESS_NAME_REGEX.test(trimmed))
+    return `${label} contains invalid characters`;
   return null;
 }

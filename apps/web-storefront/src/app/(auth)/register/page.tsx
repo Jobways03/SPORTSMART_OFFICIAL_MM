@@ -317,7 +317,7 @@ export default function RegisterPage() {
                     placeholder="Riya"
                     value={firstName}
                     maxLength={50}
-                    onChange={(e) => setFirstName(e.target.value)}
+                    onChange={(e) => setFirstName(e.target.value.replace(/[^A-Za-z .'-]/g, ''))}
                     onBlur={() => handleBlur('firstName', firstName)}
                     aria-invalid={!!eFirstName}
                     autoComplete="given-name"
@@ -337,7 +337,7 @@ export default function RegisterPage() {
                     placeholder="Sharma"
                     value={lastName}
                     maxLength={50}
-                    onChange={(e) => setLastName(e.target.value)}
+                    onChange={(e) => setLastName(e.target.value.replace(/[^A-Za-z .'-]/g, ''))}
                     onBlur={() => handleBlur('lastName', lastName)}
                     aria-invalid={!!eLastName}
                     autoComplete="family-name"

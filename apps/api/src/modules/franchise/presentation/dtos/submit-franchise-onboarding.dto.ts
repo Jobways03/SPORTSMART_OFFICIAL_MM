@@ -46,6 +46,9 @@ export class SubmitFranchiseOnboardingDto {
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
   @MinLength(2)
   @MaxLength(200)
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9 &.,\-/()']*$/, {
+    message: 'Legal business name contains invalid characters',
+  })
   legalBusinessName!: string;
 
   @IsEnum(FranchiseGstRegistrationTypeDto, {

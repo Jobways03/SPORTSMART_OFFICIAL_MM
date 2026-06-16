@@ -661,6 +661,61 @@ export default function AdminFranchiseDetailPage() {
         </p>
       </div>
 
+      {/* KYC review callout — makes the approval path unmistakable. "Account
+          Status" (Active/Inactive) is a SEPARATE control and does NOT approve
+          KYC; admins were conflating the two. Only shown while the franchise is
+          awaiting review. */}
+      {franchise.verificationStatus === 'UNDER_REVIEW' && (
+        <div
+          style={{
+            display: 'flex',
+            gap: 16,
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            padding: '14px 18px',
+            marginBottom: 16,
+            borderRadius: 10,
+            background: 'var(--color-warning-bg, #FFF7ED)',
+            border: '1px solid var(--color-warning, #F59E0B)',
+          }}
+        >
+          <div style={{ maxWidth: 680 }}>
+            <div
+              style={{
+                fontWeight: 700,
+                fontSize: 15,
+                color: 'var(--color-text, #1A1A1A)',
+                marginBottom: 2,
+              }}
+            >
+              KYC awaiting your review
+            </div>
+            <div style={{ fontSize: 13, color: 'var(--color-text-secondary, #525A65)' }}>
+              This franchise submitted KYC and cannot start operating until you approve
+              it here. Changing the <strong>account status</strong> (Active/Inactive)
+              does <strong>not</strong> approve KYC.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveModal('verification')}
+            style={{
+              whiteSpace: 'nowrap',
+              padding: '10px 18px',
+              borderRadius: 8,
+              border: 'none',
+              background: 'var(--color-success, #16A34A)',
+              color: '#fff',
+              fontWeight: 600,
+              fontSize: 14,
+              cursor: 'pointer',
+            }}
+          >
+            Review &amp; Approve KYC
+          </button>
+        </div>
+      )}
       {/* Logistics setup warning — shown when the franchise is approved but its
           store has not been registered with a courier, so its online orders
           cannot be shipped. This is the main source for delivery. */}
@@ -712,7 +767,7 @@ export default function AdminFranchiseDetailPage() {
                   <div className="info-grid">
                     <div className="form-group">
                       <label>Owner Name</label>
-                      <input value={editForm.ownerName || ''} onChange={e => setEditForm(p => ({ ...p, ownerName: e.target.value }))} />
+                      <input value={editForm.ownerName || ''} maxLength={100} onChange={e => setEditForm(p => ({ ...p, ownerName: e.target.value.replace(/[^A-Za-z .'-]/g, '') }))} />
                     </div>
                     <div className="form-group">
                       <label>Email</label>
@@ -720,7 +775,7 @@ export default function AdminFranchiseDetailPage() {
                     </div>
                     <div className="form-group">
                       <label>Phone</label>
-                      <input value={editForm.phoneNumber || ''} onChange={e => setEditForm(p => ({ ...p, phoneNumber: e.target.value }))} />
+                      <input value={editForm.phoneNumber || ''} inputMode="numeric" onChange={e => setEditForm(p => ({ ...p, phoneNumber: e.target.value.replace(/\D/g, '').slice(0, 10) }))} />
                     </div>
                   </div>
                 ) : (
@@ -768,7 +823,7 @@ export default function AdminFranchiseDetailPage() {
                   <div className="info-grid">
                     <div className="form-group">
                       <label>Business Name</label>
-                      <input value={editForm.businessName || ''} onChange={e => setEditForm(p => ({ ...p, businessName: e.target.value }))} />
+                      <input value={editForm.businessName || ''} maxLength={150} onChange={e => setEditForm(p => ({ ...p, businessName: e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, '') }))} />
                     </div>
                     <div className="form-group">
                       <label>Franchise Code</label>
@@ -776,11 +831,11 @@ export default function AdminFranchiseDetailPage() {
                     </div>
                     <div className="form-group">
                       <label>GST Number</label>
-                      <input value={editForm.gstNumber || ''} onChange={e => setEditForm(p => ({ ...p, gstNumber: e.target.value }))} placeholder="Enter GST number" />
+                      <input value={editForm.gstNumber || ''} onChange={e => setEditForm(p => ({ ...p, gstNumber: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 15) }))} placeholder="Enter GST number" />
                     </div>
                     <div className="form-group">
                       <label>PAN Number</label>
-                      <input value={editForm.panNumber || ''} onChange={e => setEditForm(p => ({ ...p, panNumber: e.target.value }))} placeholder="Enter PAN number" />
+                      <input value={editForm.panNumber || ''} onChange={e => setEditForm(p => ({ ...p, panNumber: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 10) }))} placeholder="Enter PAN number" />
                     </div>
                   </div>
                 ) : (
@@ -1715,8 +1770,8 @@ export default function AdminFranchiseDetailPage() {
         <aside className="franchise-detail-sidebar">
           <div className="franchise-sidebar-card">
             <h3>Actions</h3>
-            <SidebarBtn label="Update Status" icon="status" onClick={() => setActiveModal('status')} />
-            <SidebarBtn label="Update Verification" icon="verify" onClick={() => setActiveModal('verification')} />
+            <SidebarBtn label="Account Status" icon="status" onClick={() => setActiveModal('status')} />
+            <SidebarBtn label="Approve KYC" icon="verify" onClick={() => setActiveModal('verification')} />
             <SidebarBtn label="Update Commission" icon="commission" onClick={() => setActiveModal('commission')} />
             <SidebarBtn label="Send Message" icon="message" onClick={() => setActiveModal('message')} />
             <SidebarBtn label="Change Password" icon="password" onClick={() => setActiveModal('password')} />

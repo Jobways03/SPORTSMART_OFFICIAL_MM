@@ -20,6 +20,13 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import { apiClient } from '@/lib/api-client';
 import { RichTextEditor } from '@sportsmart/ui';
+import { validateBusinessName } from '@/lib/validators';
+
+// Collection names are BUSINESS-style names — letters AND digits plus a
+// few punctuation marks are legitimate (e.g. "Under 1000", "Staff Picks").
+// Strip only characters outside that set as the admin types/pastes.
+const filterBusinessName = (v: string) =>
+  v.replace(/[^A-Za-z0-9 &.,\-/()']/g, '').slice(0, 150);
 
 /* ── types ── */
 interface CollectionProduct {
@@ -60,6 +67,7 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
   const isEdit = !!collectionId;
 
   const [name, setName] = useState('');
+  const [nameError, setNameError] = useState<string | null>(null);
   const [description, setDescription] = useState('');
   const [products, setProducts] = useState<CollectionProduct[]>([]);
   const [saving, setSaving] = useState(false);
@@ -108,7 +116,14 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
   }, [collectionId]);
 
   const handleSave = async () => {
-    if (!name.trim()) return;
+    // Collection name is a BUSINESS-style name (letters + digits allowed).
+    // Validate on submit and surface the error inline before the API call.
+    const nameErr = validateBusinessName(name, 'Collection name');
+    if (nameErr) {
+      setNameError(nameErr);
+      return;
+    }
+    setNameError(null);
     setSaving(true);
     try {
       // Phase 37 (2026-05-21) — PATCH semantics (the backend now uses
@@ -354,10 +369,14 @@ export default function CollectionForm({ collectionId }: { collectionId?: string
             <input
               type="text"
               value={name}
-              onChange={(e) => setName(e.target.value)}
+              maxLength={150}
+              onChange={(e) => { setName(filterBusinessName(e.target.value)); if (nameError) setNameError(null); }}
               placeholder="e.g., Summer collection, Under $100, Staff picks"
               style={input}
             />
+            {nameError && (
+              <div style={{ color: '#dc2626', fontSize: 12, marginTop: 6 }}>{nameError}</div>
+            )}
             <label style={{ ...label, marginTop: 18 }}>Description</label>
             <RichTextEditor
               value={description}

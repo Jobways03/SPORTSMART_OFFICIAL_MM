@@ -9,7 +9,11 @@ import {
 } from '@/services/profile.service';
 import { useModal, PincodeFields } from '@sportsmart/ui';
 import { apiClient, ApiError } from '@/lib/api-client';
-import { validatePassword, validateOwnerName } from '@/lib/validators';
+import {
+  validatePassword,
+  validateOwnerName,
+  validateBusinessName,
+} from '@/lib/validators';
 
 type PincodeData = {
   district: string;
@@ -318,8 +322,13 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     gst: (v: string) => v.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 15),
     // Digits only, exact max.
     digitsMax: (v: string, max: number) => v.replace(/\D/g, '').slice(0, max),
-    // Name: letters + spaces + basic punctuation, no digits.
-    name: (v: string) => v.replace(/[0-9]/g, '').slice(0, 80),
+    // PERSON name: letters + space + period/apostrophe/hyphen only — strips
+    // digits AND other specials (@ # $ …) so they can't be typed or pasted.
+    personName: (v: string) => v.replace(/[^A-Za-z .'-]/g, '').slice(0, 100),
+    // BUSINESS name: letters, digits and legal punctuation (& . , - / ( ) ').
+    // Digits are intentionally KEPT ("3M", "7-Eleven", "Demo1").
+    businessName: (v: string) =>
+      v.replace(/[^A-Za-z0-9 &.,\-/()']/g, '').slice(0, 150),
   };
 
   // Per-field validator that returns an error string or empty.
@@ -352,10 +361,11 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
         if (!trimmed) return '';
         return validateOwnerName(trimmed) ?? '';
       case 'businessName':
-        // Business names commonly include digits (e.g. "3M", "7-Eleven", "Demo1"),
-        // so we don't reject them here. Length cap is enforced by the input's
-        // sanitize.name() in handleChange.
-        return '';
+        // Business names commonly include digits (e.g. "3M", "7-Eleven",
+        // "Demo1") — those are KEPT. Empty is allowed (field is optional);
+        // when present, validate the BUSINESS-name format/length on submit.
+        if (!trimmed) return '';
+        return validateBusinessName(trimmed) ?? '';
       default:
         return '';
     }
@@ -369,8 +379,8 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     else if (field === 'gstNumber') next = sanitize.gst(value);
     else if (field === 'pincode' || field === 'warehousePincode')
       next = sanitize.digitsMax(value, 6);
-    else if (field === 'ownerName' || field === 'businessName')
-      next = sanitize.name(value);
+    else if (field === 'ownerName') next = sanitize.personName(value);
+    else if (field === 'businessName') next = sanitize.businessName(value);
 
     setForm((prev) => ({ ...prev, [field]: next }));
     setFieldErrors((prev) => ({ ...prev, [field]: validateField(field, next) }));

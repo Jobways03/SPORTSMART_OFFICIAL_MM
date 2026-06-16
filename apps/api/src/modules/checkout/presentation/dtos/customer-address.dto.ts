@@ -45,6 +45,9 @@ const normalizePhone = ({ value }: { value: unknown }) => {
 const PIN_PATTERN = /^[1-9][0-9]{5}$/;
 const MOBILE_PATTERN = /^[6-9][0-9]{9}$/;
 const STATE_CODE_PATTERN = /^[0-9]{2}$/;
+// Person-name allowlist — letters plus spaces/periods/apostrophes/hyphens.
+// Mirrors the storefront `validatePersonName` regex so client & server agree.
+const PERSON_NAME_PATTERN = /^[A-Za-z][A-Za-z .'-]*$/;
 
 export enum AddressTypeDto {
   HOME = 'HOME',
@@ -57,6 +60,10 @@ export class CreateAddressDto {
   @Transform(trim)
   @MinLength(2, { message: 'fullName must be at least 2 characters' })
   @MaxLength(100, { message: 'fullName must not exceed 100 characters' })
+  @Matches(PERSON_NAME_PATTERN, {
+    message:
+      'fullName must contain only letters, spaces, periods, apostrophes or hyphens',
+  })
   fullName!: string;
 
   @IsString()
@@ -136,6 +143,10 @@ export class UpdateAddressDto {
   @Transform(trim)
   @MinLength(2)
   @MaxLength(100)
+  @Matches(PERSON_NAME_PATTERN, {
+    message:
+      'fullName must contain only letters, spaces, periods, apostrophes or hyphens',
+  })
   fullName?: string;
 
   @IsOptional()

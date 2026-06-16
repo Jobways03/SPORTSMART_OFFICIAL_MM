@@ -18,6 +18,11 @@ import {
   validateStrongPassword,
 } from '@/lib/validators';
 
+// Admin names are PERSON names — letters only (plus space/period/apostrophe/
+// hyphen). Strip anything else as the admin types/pastes; submit still runs
+// validatePersonName.
+const filterPersonName = (v: string) => v.replace(/[^A-Za-z .'-]/g, '').slice(0, 100);
+
 export default function AdminUsersPage() {
   return (
     <RequirePermission superAdminOnly fallback={<div style={{ padding: 24 }}>Loading…</div>}>
@@ -587,7 +592,7 @@ function CreateAdminModal({
         <div style={{ padding: '16px 20px' }}>
           <div style={{ display: 'grid', gap: 12 }}>
             <Field label="Name">
-              <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+              <input value={name} maxLength={100} onChange={(e) => setName(filterPersonName(e.target.value))} style={inputStyle} />
             </Field>
             <Field label="Email">
               <input
@@ -702,7 +707,7 @@ function EditAdminModal({
         <div style={{ padding: '16px 20px' }}>
           <div style={{ display: 'grid', gap: 12 }}>
             <Field label="Name">
-              <input value={name} onChange={(e) => setName(e.target.value)} style={inputStyle} />
+              <input value={name} maxLength={100} onChange={(e) => setName(filterPersonName(e.target.value))} style={inputStyle} />
             </Field>
             <Field label="Email">
               <input value={user.email} disabled style={{ ...inputStyle, background: '#f8fafc' }} />

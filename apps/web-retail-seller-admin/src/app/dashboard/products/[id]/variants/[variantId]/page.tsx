@@ -5,7 +5,7 @@ import { useRouter, useParams } from 'next/navigation';
 import Link from 'next/link';
 import { adminProductsService } from '@/services/admin-products.service';
 import { ApiError } from '@/lib/api-client';
-import { validateUploadFile } from '@/lib/validators';
+import { validateUploadFile, validateAmount } from '@/lib/validators';
 import '../../../product-form.css';
 import { useModal } from '@sportsmart/ui';
 
@@ -118,6 +118,29 @@ const router = useRouter();
   }
 
   async function handleSave() {
+    // Price (seller's price) is required and must be a positive money amount.
+    const priceError = validateAmount(form.price, { min: 0, decimals: 2, label: 'Price' });
+    if (priceError || Number(form.price) <= 0) {
+      showToast('error', priceError || 'Price must be greater than 0.');
+      return;
+    }
+    // Optional money fields — validate only when provided.
+    for (const [val, label] of [
+      [form.compareAtPrice, 'Compare at price'],
+      [form.costPrice, 'Cost price'],
+      [form.procurementPrice, 'Procurement price'],
+    ] as const) {
+      if (val) {
+        const err = validateAmount(val, { min: 0, decimals: 2, label });
+        if (err) { showToast('error', err); return; }
+      }
+    }
+    // Quantity is a required non-negative whole number.
+    const stockError = validateAmount(form.stock, { min: 0, decimals: 0, label: 'Quantity' });
+    if (stockError) {
+      showToast('error', stockError);
+      return;
+    }
     setSaving(true);
     try {
       const payload: any = {};

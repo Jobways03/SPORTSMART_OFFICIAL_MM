@@ -86,12 +86,14 @@ export default function FranchiseCommissionModal({
           <div className="modal-form-group">
             <label>Online Fulfillment Rate (%) *</label>
             <input
-              type="number"
-              min={0}
-              max={100}
-              step="0.01"
+              type="text"
+              inputMode="decimal"
               value={onlineRate}
-              onChange={e => setOnlineRate(e.target.value)}
+              onChange={e =>
+                setOnlineRate(
+                  e.target.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1'),
+                )
+              }
               placeholder="15"
             />
             <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>
@@ -102,12 +104,14 @@ export default function FranchiseCommissionModal({
           <div className="modal-form-group">
             <label>Procurement Fee Rate (%) *</label>
             <input
-              type="number"
-              min={0}
-              max={100}
-              step="0.01"
+              type="text"
+              inputMode="decimal"
               value={procurementRate}
-              onChange={e => setProcurementRate(e.target.value)}
+              onChange={e =>
+                setProcurementRate(
+                  e.target.value.replace(/[^0-9.]/g, '').replace(/(\..*)\./g, '$1'),
+                )
+              }
               placeholder="5"
             />
             <div style={{ fontSize: 12, color: 'var(--color-text-secondary)', marginTop: 4 }}>

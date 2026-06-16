@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { sellerProductService } from '@/services/product.service';
 import { apiClient, ApiError } from '@/lib/api-client';
 import { sellerAuthService } from '@/services/auth.service';
+import { validatePincode } from '@/lib/validators';
 import '../products/product-form.css';
 import '../products/products.css';
 
@@ -203,7 +204,11 @@ export default function BrowseCatalogPage() {
   };
 
   const handleMapFormChange = (field: keyof MapFormData, value: string) => {
-    setMapForm(prev => ({ ...prev, [field]: value }));
+    // Pickup pincode is an Indian PIN — keep digits only, max 6, so a
+    // non-numeric paste can't reach state or the payload.
+    const next =
+      field === 'pickupPincode' ? value.replace(/\D/g, '').slice(0, 6) : value;
+    setMapForm(prev => ({ ...prev, [field]: next }));
   };
 
   const handleMapSubmit = async () => {
@@ -229,6 +234,16 @@ export default function BrowseCatalogPage() {
       }
       if (!mapForm.sellerInternalSku.trim()) {
         setMapError('Internal SKU is required.');
+        return;
+      }
+    }
+
+    // Pickup pincode is optional, but when provided it must be a valid
+    // 6-digit Indian PIN (mirrors the backend DTO).
+    if (mapForm.pickupPincode.trim()) {
+      const pinErr = validatePincode(mapForm.pickupPincode);
+      if (pinErr) {
+        setMapError(pinErr);
         return;
       }
     }

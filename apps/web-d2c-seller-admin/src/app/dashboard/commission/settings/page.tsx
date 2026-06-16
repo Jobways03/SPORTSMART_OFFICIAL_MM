@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
-import { validateAmount } from '@/lib/validators';
+import { validateAmount, filterMoneyInput } from '@/lib/validators';
 
 interface CommissionSettings {
   id: string;
@@ -219,8 +219,9 @@ export default function CommissionSettingsPage() {
           <div style={{ position: 'relative' }}>
             <input
               type="text"
+              inputMode="decimal"
               value={commissionValue}
-              onChange={(e) => setCommissionValue(e.target.value)}
+              onChange={(e) => setCommissionValue(filterMoneyInput(e.target.value))}
               style={inputStyle}
             />
             <span style={suffixStyle}>
@@ -239,8 +240,9 @@ export default function CommissionSettingsPage() {
             <div style={{ position: 'relative' }}>
               <input
                 type="text"
+                inputMode="decimal"
                 value={secondCommissionValue}
-                onChange={(e) => setSecondCommissionValue(e.target.value)}
+                onChange={(e) => setSecondCommissionValue(filterMoneyInput(e.target.value))}
                 style={inputStyle}
               />
               <span style={suffixStyle}>
@@ -294,8 +296,9 @@ export default function CommissionSettingsPage() {
             <div style={{ position: 'relative' }}>
               <input
                 type="text"
+                inputMode="decimal"
                 value={maxCommissionAmount}
-                onChange={(e) => setMaxCommissionAmount(e.target.value)}
+                onChange={(e) => setMaxCommissionAmount(filterMoneyInput(e.target.value))}
                 style={inputStyle}
               />
               <span style={suffixStyle}>FIXED</span>

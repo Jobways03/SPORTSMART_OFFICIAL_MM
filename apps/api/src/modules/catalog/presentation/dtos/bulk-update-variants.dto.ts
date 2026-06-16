@@ -3,10 +3,12 @@ import {
   ArrayMinSize,
   IsArray,
   IsEnum,
+  IsInt,
   IsNumber,
   IsOptional,
   IsString,
   IsUUID,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -23,12 +25,13 @@ export class BulkVariantUpdateItemDto {
   price?: number;
 
   @IsOptional()
-  @IsNumber()
+  @IsInt()
   @Min(0)
   stock?: number;
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
   sku?: string;
 
   // Phase 41 (2026-05-21) — @IsEnum(VariantStatus). Pre-Phase-41 the

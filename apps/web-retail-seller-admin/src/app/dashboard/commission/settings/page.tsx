@@ -3,6 +3,18 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
+import { validateAmount } from '@/lib/validators';
+
+/**
+ * Keep a money / percentage text input numeric: digits with at most a single
+ * decimal point. Mirrors the amount onChange filter used elsewhere in the app.
+ */
+function filterDecimal(value: string): string {
+  const cleaned = value.replace(/[^0-9.]/g, '');
+  const firstDot = cleaned.indexOf('.');
+  if (firstDot === -1) return cleaned;
+  return cleaned.slice(0, firstDot + 1) + cleaned.slice(firstDot + 1).replace(/\./g, '');
+}
 
 interface CommissionSettings {
   id: string;
@@ -54,6 +66,38 @@ export default function CommissionSettingsPage() {
   }, []);
 
   const handleSave = async () => {
+    // Validate the numeric commission values before saving. Percentage fields
+    // are capped at 100; fixed-amount fields use the default money bound.
+    const primaryError = validateAmount(commissionValue, {
+      min: 0,
+      max: primaryIsPercent ? 100 : 10_000_000,
+      label: 'Global commission',
+    });
+    if (primaryError) {
+      setMessage({ text: primaryError, type: 'error' });
+      return;
+    }
+    if (isCombo) {
+      const secondError = validateAmount(secondCommissionValue, {
+        min: 0,
+        max: secondIsPercent ? 100 : 10_000_000,
+        label: 'Second global commission',
+      });
+      if (secondError) {
+        setMessage({ text: secondError, type: 'error' });
+        return;
+      }
+    }
+    if (enableMaxCommission) {
+      const maxError = validateAmount(maxCommissionAmount, {
+        min: 0,
+        label: 'Maximum commission amount',
+      });
+      if (maxError) {
+        setMessage({ text: maxError, type: 'error' });
+        return;
+      }
+    }
     setSaving(true);
     setMessage(null);
     try {
@@ -177,8 +221,9 @@ export default function CommissionSettingsPage() {
           <div style={{ position: 'relative' }}>
             <input
               type="text"
+              inputMode="decimal"
               value={commissionValue}
-              onChange={(e) => setCommissionValue(e.target.value)}
+              onChange={(e) => setCommissionValue(filterDecimal(e.target.value))}
               style={inputStyle}
             />
             <span style={suffixStyle}>
@@ -197,8 +242,9 @@ export default function CommissionSettingsPage() {
             <div style={{ position: 'relative' }}>
               <input
                 type="text"
+                inputMode="decimal"
                 value={secondCommissionValue}
-                onChange={(e) => setSecondCommissionValue(e.target.value)}
+                onChange={(e) => setSecondCommissionValue(filterDecimal(e.target.value))}
                 style={inputStyle}
               />
               <span style={suffixStyle}>
@@ -252,8 +298,9 @@ export default function CommissionSettingsPage() {
             <div style={{ position: 'relative' }}>
               <input
                 type="text"
+                inputMode="decimal"
                 value={maxCommissionAmount}
-                onChange={(e) => setMaxCommissionAmount(e.target.value)}
+                onChange={(e) => setMaxCommissionAmount(filterDecimal(e.target.value))}
                 style={inputStyle}
               />
               <span style={suffixStyle}>FIXED</span>

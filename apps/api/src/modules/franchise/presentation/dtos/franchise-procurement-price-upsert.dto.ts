@@ -1,4 +1,4 @@
-import { IsIn, IsInt, IsNumber, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 /**
  * Phase 159l — bounds + audit-reason + optimistic-concurrency fields added.
@@ -30,6 +30,7 @@ export class FranchiseProcurementPriceUpsertDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   notes?: string;
 
   // Phase 159l (audit #14) — structured change reason for the audit trail.

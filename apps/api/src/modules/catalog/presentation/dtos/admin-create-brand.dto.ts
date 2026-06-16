@@ -23,6 +23,9 @@ export class AdminCreateBrandDto {
   @MinLength(1, { message: 'name is required' })
   @MaxLength(80, { message: 'name must not exceed 80 characters' })
   @Matches(/^[^<>]+$/, { message: 'name cannot contain < or >' })
+  @Matches(/^[A-Za-z0-9][A-Za-z0-9 &.,\-/()']*$/, {
+    message: 'name contains invalid characters',
+  })
   name!: string;
 
   @IsOptional()

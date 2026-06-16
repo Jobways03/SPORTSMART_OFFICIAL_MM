@@ -4,6 +4,12 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { apiClient } from '@/lib/api-client';
 import { RequirePermission } from '@/lib/permissions';
+import { validateBusinessName } from '@/lib/validators';
+
+// Menu names are BUSINESS-style labels — letters AND digits plus a few
+// punctuation marks are legitimate (e.g. "Footer menu", "Main Menu 2").
+const filterMenuName = (v: string) =>
+  v.replace(/[^A-Za-z0-9 &.,\-/()']/g, '').slice(0, 150);
 
 interface MenuListRow {
   id: string;
@@ -46,7 +52,9 @@ function MenusListInner() {
   const onCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (!newMenu.handle.trim() || !newMenu.name.trim()) return;
+    if (!newMenu.handle.trim()) return;
+    const nameErr = validateBusinessName(newMenu.name, 'Name');
+    if (nameErr) { setError(nameErr); return; }
     try {
       await apiClient('/admin/storefront/menus', {
         method: 'POST',
@@ -90,7 +98,8 @@ function MenusListInner() {
               <input
                 type="text"
                 value={newMenu.name}
-                onChange={(e) => setNewMenu({ ...newMenu, name: e.target.value })}
+                maxLength={150}
+                onChange={(e) => setNewMenu({ ...newMenu, name: filterMenuName(e.target.value) })}
                 placeholder="Footer menu"
                 required
                 style={{ width: '100%', padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 14 }}

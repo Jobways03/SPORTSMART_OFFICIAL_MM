@@ -91,7 +91,7 @@ export default function EditBankModal({ seller, initial, onClose, onSuccess }: P
             <label>Account Holder Name *</label>
             <input
               value={accountHolderName}
-              onChange={(e) => setAccountHolderName(e.target.value)}
+              onChange={(e) => setAccountHolderName(e.target.value.replace(/[^A-Za-z .'-]/g, ''))}
               placeholder="As per bank records"
             />
             {accountHolderName && holderError && (
@@ -103,8 +103,9 @@ export default function EditBankModal({ seller, initial, onClose, onSuccess }: P
             <label>Account Number *</label>
             <input
               value={accountNumber}
-              onChange={(e) => setAccountNumber(e.target.value)}
+              onChange={(e) => setAccountNumber(e.target.value.replace(/\D/g, '').slice(0, 18))}
               inputMode="numeric"
+              maxLength={18}
               placeholder={
                 initial?.accountLast4
                   ? `Current ends ••••${initial.accountLast4} — re-enter full number`
@@ -120,7 +121,8 @@ export default function EditBankModal({ seller, initial, onClose, onSuccess }: P
             <label>IFSC Code *</label>
             <input
               value={ifscCode}
-              onChange={(e) => setIfscCode(e.target.value.toUpperCase())}
+              onChange={(e) => setIfscCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 11))}
+              maxLength={11}
               placeholder="e.g. HDFC0001234"
             />
             {ifscCode && !ifscValid && (
@@ -134,7 +136,8 @@ export default function EditBankModal({ seller, initial, onClose, onSuccess }: P
             <label>Bank Name *</label>
             <input
               value={bankName}
-              onChange={(e) => setBankName(e.target.value)}
+              onChange={(e) => setBankName(e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, ''))}
+              maxLength={150}
               placeholder="e.g. HDFC Bank"
             />
           </div>
