@@ -89,6 +89,14 @@ export interface SellerDetail {
   lockUntil: string | null;
   createdAt: string;
   updatedAt: string;
+  // Logistics pickup readiness — the gate for product delivery. The admin must
+  // register the seller's pickup address as a courier "warehouse" before any
+  // order can be shipped. logisticsPickupRegistered = at least one partner
+  // registration with a warehouse name (the same signal the ship flow checks).
+  selfDeliveryEnabled?: boolean;
+  logisticsPickupRegistered?: boolean;
+  logisticsRegisteredPartners?: string[];
+  logisticsPartnerAttempts?: number;
 }
 
 export interface ListSellersParams {

@@ -260,7 +260,7 @@ function LoginPageContent() {
             {justVerified && (
               <div
                 role="status"
-                className="mt-6 flex items-start gap-2 p-3 border border-success/30 bg-green-50 text-success text-body rounded-2xl"
+                className="mt-6 flex items-start gap-2 p-3 border border-success/30 bg-green-50 text-[#15803D] text-body rounded-2xl"
               >
                 <CheckCircle2 className="size-4 mt-0.5 shrink-0" />
                 Email verified! Sign in to get started.
@@ -269,7 +269,7 @@ function LoginPageContent() {
             {needsEmailVerification && (
               <div
                 role="alert"
-                className="mt-6 flex items-start gap-2 p-3 border border-danger/30 bg-red-50 text-danger text-body rounded-2xl"
+                className="mt-6 flex items-start gap-2 p-3 border border-danger/30 bg-red-50 text-[#B91C1C] text-body rounded-2xl"
               >
                 <AlertCircle className="size-4 mt-0.5 shrink-0" />
                 <span>
@@ -286,7 +286,7 @@ function LoginPageContent() {
             {serverError && (
               <div
                 role="alert"
-                className="mt-6 flex items-start gap-2 p-3 border border-danger/30 bg-red-50 text-danger text-body rounded-2xl"
+                className="mt-6 flex items-start gap-2 p-3 border border-danger/30 bg-red-50 text-[#B91C1C] text-body rounded-2xl"
               >
                 <AlertCircle className="size-4 mt-0.5 shrink-0" />
                 {serverError}

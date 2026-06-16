@@ -33,6 +33,21 @@ const RELEASE_LOCK_LUA = `
   end
 `;
 
+/**
+ * Fenced lease RENEWAL — extend the lock's TTL iff we still hold it
+ * (GET == token), atomically. Used by the watchdog so a long-running
+ * job whose body outlives the initial TTL keeps its lock instead of
+ * letting it expire and a second replica run concurrently. A renewal on
+ * a lock that is no longer ours (TTL already expired + taken) is a no-op.
+ */
+const RENEW_LOCK_LUA = `
+  if redis.call('GET', KEYS[1]) == ARGV[1] then
+    return redis.call('PEXPIRE', KEYS[1], ARGV[2])
+  else
+    return 0
+  end
+`;
+
 @Injectable()
 export class RedisService implements OnModuleDestroy {
   private readonly client: Redis;
@@ -44,6 +59,16 @@ export class RedisService implements OnModuleDestroy {
       retryStrategy: (times) => Math.min(times * 200, 2000),
       enableReadyCheck: true,
       lazyConnect: false,
+      // Fail fast on a wedged/half-open socket instead of hanging the HTTP
+      // request: cap connect + per-command time.
+      connectTimeout: 5000,
+      commandTimeout: 2000,
+      // ElastiCache HA failover: the demoted primary answers writes with
+      // `-READONLY` rather than dropping the socket. ioredis does NOT
+      // reconnect on that by default, so writes would keep hitting the old
+      // node until the TCP connection independently breaks — defeating the
+      // automatic failover. Returning 2 reconnects AND resends the command.
+      reconnectOnError: (err) => (err.message.includes('READONLY') ? 2 : false),
     });
 
     this.client.on('connect', () => this.logger.log('Redis connected'));
@@ -91,12 +116,26 @@ export class RedisService implements OnModuleDestroy {
     await this.client.del(key);
   }
 
-  /** Delete keys matching a pattern */
+  /**
+   * Delete keys matching a pattern.
+   *
+   * Uses a cursor-based SCAN + UNLINK (async, non-blocking delete) rather
+   * than KEYS + DEL. KEYS is O(N) over the whole keyspace and blocks the
+   * single-threaded server until it completes — on a real ElastiCache
+   * dataset that stalls EVERY client (including lock acquires and the
+   * health ping). SCAN walks incrementally without blocking; UNLINK frees
+   * memory off the main thread.
+   */
   async delPattern(pattern: string): Promise<void> {
-    const keys = await this.client.keys(pattern);
-    if (keys.length > 0) {
-      await this.client.del(...keys);
+    const stream = this.client.scanStream({ match: pattern, count: 200 });
+    const deletions: Array<Promise<unknown>> = [];
+    for await (const batch of stream) {
+      const keys = batch as string[];
+      if (keys.length > 0) {
+        deletions.push(this.client.unlink(...keys));
+      }
     }
+    await Promise.all(deletions);
   }
 
   /** Acquire a distributed lock (returns true if acquired) */
@@ -155,6 +194,36 @@ export class RedisService implements OnModuleDestroy {
     } catch (err) {
       this.logger.error(
         `releaseLockWithToken failed for ${key}: ${(err as Error).message}`,
+      );
+      return false;
+    }
+  }
+
+  /**
+   * Fenced lease renewal — extend the lock's TTL to `ttlSeconds` iff the
+   * current value still matches `token` (atomic Lua CAS). Returns true when
+   * renewed (still ours), false when not (TTL expired and a successor holds
+   * it, lock already released) or on a Redis error. Best-effort like
+   * releaseLockWithToken: never throws, so a watchdog tick can't crash the job.
+   */
+  async renewLockWithToken(
+    key: string,
+    token: string,
+    ttlSeconds: number,
+  ): Promise<boolean> {
+    if (!token) return false; // defensive — empty token matches nothing
+    try {
+      const renewed = await this.client.eval(
+        RENEW_LOCK_LUA,
+        1, // numkeys
+        key,
+        token,
+        String(Math.max(1, Math.floor(ttlSeconds)) * 1000), // PEXPIRE takes ms
+      );
+      return renewed === 1 || renewed === '1';
+    } catch (err) {
+      this.logger.warn(
+        `renewLockWithToken failed for ${key}: ${(err as Error).message}`,
       );
       return false;
     }

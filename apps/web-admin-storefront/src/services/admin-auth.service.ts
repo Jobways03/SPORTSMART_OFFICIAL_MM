@@ -42,9 +42,12 @@ export interface MfaVerifyChallengeResponse {
 
 export const adminAuthService = {
   login(email: string, password: string): Promise<ApiResponse<AdminLoginResponse>> {
+    // This is the SUPER (platform) admin portal. portalType is sent for symmetry
+    // with the seller/franchise/affiliate admin portals; SUPER_ADMIN is allowed
+    // from any portal anyway, so it never trips the wrong-portal gate.
     return apiClient<AdminLoginResponse>('/admin/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ email, password, portalType: 'SUPER' }),
     });
   },
 

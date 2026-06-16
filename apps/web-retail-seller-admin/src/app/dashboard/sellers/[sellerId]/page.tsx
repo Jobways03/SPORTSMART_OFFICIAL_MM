@@ -93,6 +93,91 @@ function TaxBadge({ state }: { state: 'verified' | 'pending' | 'missing' }) {
   );
 }
 
+// Logistics pickup-registration badge. Delivery is the main source of value for
+// a seller, so a missing pickup registration is flagged in red (blocking), a
+// registered one in green. Not colour-only — both carry an icon + text.
+function LogisticsBadge({ registered, partners }: { registered: boolean; partners?: string[] }) {
+  const base: CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '4px 12px',
+    borderRadius: 10,
+    fontSize: 12,
+    fontWeight: 700,
+    whiteSpace: 'nowrap',
+  };
+  if (registered) {
+    const list = partners && partners.length ? partners.join(', ') : undefined;
+    return (
+      <span
+        style={{ ...base, background: '#DCFCE7', color: '#166534' }}
+        title={list ? `Pickup registered with ${list}` : 'Pickup address registered with a courier'}
+      >
+        <span aria-hidden>&#10003;</span> Logistics ready
+      </span>
+    );
+  }
+  return (
+    <span
+      style={{ ...base, background: '#FEE2E2', color: '#991B1B' }}
+      title="No courier pickup address registered — orders cannot be shipped"
+    >
+      <span aria-hidden>&#9888;</span> Pickup not registered
+    </span>
+  );
+}
+
+// Prominent, actionable banner for an approved seller whose pickup address is
+// not yet registered with a courier (so their orders cannot be shipped).
+function LogisticsSetupBanner({ onSetup }: { onSetup: () => void }) {
+  return (
+    <div
+      role="alert"
+      style={{
+        display: 'flex',
+        gap: 12,
+        alignItems: 'flex-start',
+        padding: '12px 16px',
+        background: '#FEF3C7',
+        border: '1px solid #FDE68A',
+        borderRadius: 8,
+        marginBottom: 16,
+      }}
+    >
+      <span aria-hidden style={{ fontSize: 18, lineHeight: '22px', color: '#B45309' }}>&#9888;</span>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 700, color: '#92400E', fontSize: 14, marginBottom: 2 }}>
+          Pickup address not registered with a courier
+        </div>
+        <div style={{ color: '#92400E', fontSize: 13, lineHeight: 1.5 }}>
+          This seller is approved, but their pickup location has not been added to
+          logistics — so their orders <strong>cannot be shipped</strong>. Register a
+          pickup location to enable delivery.
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onSetup}
+        style={{
+          alignSelf: 'center',
+          padding: '8px 14px',
+          borderRadius: 6,
+          border: '1px solid #D97706',
+          background: '#D97706',
+          color: '#fff',
+          fontSize: 13,
+          fontWeight: 600,
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        Set up logistics
+      </button>
+    </div>
+  );
+}
+
 function taxVerifyBtnStyle(bg: string, border: string, disabled: boolean): CSSProperties {
   return {
     marginTop: 10,
@@ -673,7 +758,22 @@ export default function AdminSellerDetailPage() {
         {!seller.isEmailVerified && (
           <span style={{ fontSize: 13, color: 'var(--color-warning)', fontWeight: 500 }}>Email Not Verified</span>
         )}
+        {/* Logistics pickup readiness — the gate for product delivery. */}
+        <LogisticsBadge
+          registered={!!seller.logisticsPickupRegistered}
+          partners={seller.logisticsRegisteredPartners}
+        />
       </div>
+
+      {/* Logistics setup warning — shown when the seller is approved but their
+          pickup address has not been registered with a courier, so their
+          orders cannot be shipped. This is the main source for delivery. */}
+      {!seller.logisticsPickupRegistered &&
+        (seller.status === 'ACTIVE' || seller.verificationStatus === 'VERIFIED') && (
+          <LogisticsSetupBanner
+            onSetup={() => router.push(`/dashboard/settings?sellerId=${seller.sellerId}`)}
+          />
+        )}
 
       {/* Completion Bar */}
       <div className="completion-bar-wrapper">

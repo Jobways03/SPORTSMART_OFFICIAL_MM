@@ -50,9 +50,16 @@ export class AccountsDashboardService {
     );
   }
 
-  async getSellerOverview(fromDate?: Date, toDate?: Date) {
-    return this.cached(this.key('seller', fromDate, toDate), () =>
-      this.accountsRepo.getSellerFinanceSummary({ fromDate, toDate }),
+  async getSellerOverview(
+    fromDate?: Date,
+    toDate?: Date,
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
+  ) {
+    // Isolation fix (2026-06-16) — the scope is part of the cache key, else a
+    // scoped admin and an unrestricted admin would share a cached entry (leak).
+    const scopeKey = allowedSellerTypes?.join(',') || 'all';
+    return this.cached(this.key('seller', fromDate, toDate, scopeKey), () =>
+      this.accountsRepo.getSellerFinanceSummary({ fromDate, toDate, allowedSellerTypes }),
     );
   }
 
@@ -105,16 +112,21 @@ export class AccountsDashboardService {
     page = 1,
     metric: RankMetric = 'REVENUE',
     nodeType: RankNodeType = 'ALL',
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
   ) {
     const offset = (Math.max(1, page) - 1) * limit;
+    // Isolation fix (2026-06-16) — scope the SELLER leaderboard to the admin's
+    // type(s); franchise rankings are a separate domain (left blended per the
+    // product call). Scope is part of the cache key to avoid cross-admin leak.
+    const scopeKey = allowedSellerTypes?.join(',') || 'all';
     return this.cached(
-      this.key('top', limit, fromDate, toDate, offset, metric, nodeType),
+      this.key('top', limit, fromDate, toDate, offset, metric, nodeType, scopeKey),
       async () => {
         const wantSellers = nodeType === 'ALL' || nodeType === 'SELLER';
         const wantFranchises = nodeType === 'ALL' || nodeType === 'FRANCHISE';
         const [topSellers, topFranchises] = await Promise.all([
           wantSellers
-            ? this.accountsRepo.getTopSellers(limit, fromDate, toDate, offset, metric)
+            ? this.accountsRepo.getTopSellers(limit, fromDate, toDate, offset, metric, allowedSellerTypes)
             : Promise.resolve([]),
           wantFranchises
             ? this.accountsRepo.getTopFranchises(limit, fromDate, toDate, offset, metric)

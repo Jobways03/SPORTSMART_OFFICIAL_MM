@@ -323,32 +323,6 @@ export class OrdersPublicFacade {
     });
   }
 
-  /**
-   * Find delivered franchise sub-orders past return window.
-   */
-  async findDeliveredFranchiseSubOrdersPastReturnWindow() {
-    return this.prisma.subOrder.findMany({
-      where: {
-        fulfillmentNodeType: 'FRANCHISE',
-        fulfillmentStatus: 'DELIVERED',
-        commissionProcessed: false,
-        returnWindowEndsAt: { lt: new Date() },
-        franchiseId: { not: null },
-        NOT: {
-          returns: {
-            some: {
-              status: { notIn: ['REJECTED', 'QC_REJECTED', 'CANCELLED'] },
-            },
-          },
-        },
-      },
-      include: {
-        items: true,
-        masterOrder: { select: { id: true, orderNumber: true } },
-      },
-    });
-  }
-
   async countSubOrdersForNode(nodeType: 'SELLER' | 'FRANCHISE', nodeId: string, where?: any) {
     const baseWhere: any = { ...where };
     if (nodeType === 'SELLER') baseWhere.sellerId = nodeId;

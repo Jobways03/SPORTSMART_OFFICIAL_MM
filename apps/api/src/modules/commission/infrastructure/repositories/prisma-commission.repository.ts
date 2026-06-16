@@ -257,21 +257,32 @@ export class PrismaCommissionRepository implements CommissionRepository {
 
   /* ── Admin summary ────────────────────────────────────────────────── */
 
-  async getAdminCommissionSummary(): Promise<CommissionSummary> {
+  async getAdminCommissionSummary(
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
+  ): Promise<CommissionSummary> {
+    // Isolation fix (2026-06-16) — scope every aggregate to the admin's seller
+    // type(s) via the owning-seller relation. null/empty = unrestricted totals.
+    const scope =
+      allowedSellerTypes && allowedSellerTypes.length > 0
+        ? { seller: { sellerType: { in: allowedSellerTypes } } }
+        : {};
     const [totalRecords, platformAgg, settlementAgg, marginAgg, pendingCount, settledCount] =
       await Promise.all([
-        this.prisma.commissionRecord.count(),
+        this.prisma.commissionRecord.count({ where: { ...scope } }),
         this.prisma.commissionRecord.aggregate({
+          where: { ...scope },
           _sum: { totalPlatformAmount: true },
         }),
         this.prisma.commissionRecord.aggregate({
+          where: { ...scope },
           _sum: { totalSettlementAmount: true },
         }),
         this.prisma.commissionRecord.aggregate({
+          where: { ...scope },
           _sum: { platformMargin: true },
         }),
-        this.prisma.commissionRecord.count({ where: { status: 'PENDING' } }),
-        this.prisma.commissionRecord.count({ where: { status: 'SETTLED' } }),
+        this.prisma.commissionRecord.count({ where: { ...scope, status: 'PENDING' } }),
+        this.prisma.commissionRecord.count({ where: { ...scope, status: 'SETTLED' } }),
       ]);
 
     return {
@@ -353,6 +364,13 @@ export class PrismaCommissionRepository implements CommissionRepository {
 
     if (filter.sellerId) {
       where.sellerId = filter.sellerId;
+    }
+
+    // Isolation fix (2026-06-16) — restrict to the admin's seller-type scope
+    // via the owning-seller relation. Absent/null = unrestricted (super /
+    // franchise admin); ['D2C'] / ['RETAIL'] hides the other type's rows.
+    if (filter.allowedSellerTypes && filter.allowedSellerTypes.length > 0) {
+      where.seller = { sellerType: { in: filter.allowedSellerTypes } };
     }
 
     if (filter.commissionType) {

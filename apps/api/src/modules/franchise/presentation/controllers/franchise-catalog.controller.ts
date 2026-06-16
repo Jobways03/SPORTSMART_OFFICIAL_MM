@@ -19,6 +19,7 @@ import { FranchiseAuthGuard } from '../../../../core/guards';
 import { FranchiseCatalogService } from '../../application/services/franchise-catalog.service';
 import { FranchiseAddCatalogMappingDto, BulkAddCatalogMappingsDto } from '../dtos/franchise-add-catalog-mapping.dto';
 import { FranchiseUpdateCatalogMappingDto } from '../dtos/franchise-update-catalog-mapping.dto';
+import { FranchisePauseCatalogMappingDto } from '../dtos/franchise-pause-catalog-mapping.dto';
 import { FranchiseActiveGuard } from '../../../../core/guards';
 
 @ApiTags('Franchise Catalog')
@@ -111,8 +112,7 @@ export class FranchiseCatalogController {
     const data = await this.catalogService.addMapping(franchiseId, {
       productId: dto.productId,
       variantId: dto.variantId,
-      globalSku: '', // Will be resolved in service or repository
-      franchiseSku: dto.franchiseSku,
+      globalSku: '', // Resolved in the service from the master/variant SKU.
       barcode: dto.barcode,
       isListedForOnlineFulfillment: dto.isListedForOnlineFulfillment,
     });
@@ -135,7 +135,6 @@ export class FranchiseCatalogController {
       productId: m.productId,
       variantId: m.variantId,
       globalSku: '',
-      franchiseSku: m.franchiseSku,
       barcode: m.barcode,
       isListedForOnlineFulfillment: m.isListedForOnlineFulfillment,
     }));
@@ -162,6 +161,49 @@ export class FranchiseCatalogController {
     return {
       success: true,
       message: 'Catalog mapping updated successfully',
+      data,
+    };
+  }
+
+  // Franchise self-pause — temporarily stop selling THIS franchise's offer for
+  // the SKU. Does not touch the shared Product or any other seller's/
+  // franchise's offer; only an APPROVED, live mapping the franchise owns is
+  // affected. Reversible via the resume endpoint below.
+  @Patch('mappings/:mappingId/pause')
+  @HttpCode(HttpStatus.OK)
+  async pauseMapping(
+    @Req() req: Request,
+    @Param('mappingId') mappingId: string,
+    @Body() dto: FranchisePauseCatalogMappingDto,
+  ) {
+    const franchiseId = (req as any).franchiseId;
+    const data = await this.catalogService.pauseMapping(
+      franchiseId,
+      mappingId,
+      dto?.reason,
+    );
+
+    return {
+      success: true,
+      message: 'Sales paused for this product',
+      data,
+    };
+  }
+
+  // Franchise self-resume — lift a self-pause back to live. An admin STOP is
+  // not resumable here (service guards on stoppedById === franchiseId).
+  @Patch('mappings/:mappingId/resume')
+  @HttpCode(HttpStatus.OK)
+  async resumeMapping(
+    @Req() req: Request,
+    @Param('mappingId') mappingId: string,
+  ) {
+    const franchiseId = (req as any).franchiseId;
+    const data = await this.catalogService.resumeMapping(franchiseId, mappingId);
+
+    return {
+      success: true,
+      message: 'Sales resumed for this product',
       data,
     };
   }

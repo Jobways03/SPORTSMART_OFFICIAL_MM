@@ -18,9 +18,15 @@ import {
 import type { Request } from 'express';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../core/guards';
+import {
+  AdminAuthGuard,
+  RolesGuard,
+  PermissionsGuard,
+  AdminSettlementSellerScopeGuard,
+} from '../../core/guards';
 import { Roles } from '../../core/decorators/roles.decorator';
 import { Permissions } from '../../core/decorators/permissions.decorator';
+import { resolveScopedTypes } from '../../core/authorization/seller-scope';
 import { Idempotent } from '../../core/decorators/idempotent.decorator';
 import { SettlementService } from './settlement.service';
 import { CommissionInvoiceUnavailableError } from '../tax/application/services/commission-invoice.service';
@@ -348,13 +354,21 @@ export class AdminSettlementController {
   @Get('seller-breakdown')
   @Permissions('settlements.read')
   async getSellerBreakdown(
+    @Req() req: Request,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(50, Math.max(1, parseInt(limit || '20', 10) || 20));
 
-    const data = await this.settlementService.getAdminSellerBreakdown(pageNum, limitNum);
+    // Isolation fix (2026-06-16) — a scoped admin only sees their own seller
+    // type's per-seller rows (null = unrestricted: super / franchise admin).
+    const allowedSellerTypes = resolveScopedTypes((req as any).user?.permissions);
+    const data = await this.settlementService.getAdminSellerBreakdown(
+      pageNum,
+      limitNum,
+      allowedSellerTypes,
+    );
 
     return {
       success: true,
@@ -384,6 +398,9 @@ export class AdminSettlementController {
    * the settlement is missing or its invoice hasn't been issued yet. */
   @Get(':settlementId/commission-invoice')
   @Permissions('settlements.read')
+  // Isolation fix (2026-06-16) — a scoped admin may only view a settlement of
+  // their own seller type; cross-type → 404.
+  @UseGuards(AdminSettlementSellerScopeGuard)
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Header('Content-Type', 'text/html; charset=utf-8')
   async getCommissionInvoice(
@@ -414,6 +431,8 @@ export class AdminSettlementController {
    * This is a remittance advice, not a tax invoice. 404 if missing. */
   @Get(':settlementId/settlement-statement')
   @Permissions('settlements.read')
+  // Isolation fix (2026-06-16) — own seller type only; cross-type → 404.
+  @UseGuards(AdminSettlementSellerScopeGuard)
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @Header('Content-Type', 'text/html; charset=utf-8')
   async getSettlementStatement(
@@ -485,6 +504,8 @@ export class AdminSettlementController {
 
   @Get(':settlementId/adjustments')
   @Permissions('settlements.read')
+  // Isolation fix (2026-06-16) — own seller type only; cross-type → 404.
+  @UseGuards(AdminSettlementSellerScopeGuard)
   async listAdjustments(
     @Param('settlementId') settlementId: string,
     @Query('page') page?: string,

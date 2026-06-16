@@ -213,25 +213,9 @@ export const sellerProductService = {
     });
   },
 
-  /**
-   * Toggle a live product between ACTIVE and SUSPENDED. Useful when the
-   * seller needs to pause sales briefly without involving an admin.
-   */
-  setSelfStatus(
-    token: string,
-    productId: string,
-    status: 'ACTIVE' | 'SUSPENDED',
-    reason?: string,
-  ): Promise<ApiResponse<{ productId: string; status: string }>> {
-    return apiClient<{ productId: string; status: string }>(
-      `/seller/products/${productId}/self-status`,
-      {
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ status, reason }),
-      },
-    );
-  },
+  // 2026-06-15 — setSelfStatus (product-level pause) removed: pausing the
+  // shared product stopped sales for ALL sellers. Per-seller pause is pauseSales
+  // / resumeSales above.
 
   generateVariants(token: string, productId: string, optionValueIds: string[][]): Promise<ApiResponse<any>> {
     return apiClient<any>(`/seller/products/${productId}/variants/generate`, {
@@ -405,6 +389,25 @@ export const sellerProductService = {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
       body: JSON.stringify({ reason }),
+    });
+  },
+
+  // 2026-06-15 — pause/resume THIS seller's offer for a whole product (all
+  // variants) from My Products. Only this seller's mappings change; other
+  // sellers keep selling and the shared product stays live.
+  pauseSales(token: string, productId: string, reason?: string): Promise<ApiResponse<any>> {
+    return apiClient<any>(`/seller/catalog/product/${productId}/pause-sales`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  resumeSales(token: string, productId: string): Promise<ApiResponse<any>> {
+    return apiClient<any>(`/seller/catalog/product/${productId}/resume-sales`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: JSON.stringify({}),
     });
   },
 

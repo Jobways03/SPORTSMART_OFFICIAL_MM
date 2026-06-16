@@ -23,10 +23,13 @@ describe('resolveSellerScope', () => {
     expect(s).toEqual({ unrestricted: false, allowed: ['RETAIL'] });
   });
 
-  it('allows both types when both scopes are held (e.g. SUPER_ADMIN)', () => {
+  it('is UNRESTRICTED when ALL seller-type scopes are held (e.g. SUPER_ADMIN)', () => {
+    // Holding every seller type's scope key is not a partial filter — it must
+    // behave like "no restriction", otherwise the `sellerType IN [...]` filters
+    // would hide null-owner / franchise / platform rows from the super admin.
     const s = resolveSellerScope(['sellers.scope.d2c', 'sellers.scope.retail']);
-    expect(s.unrestricted).toBe(false);
-    expect(s.allowed).toEqual(['D2C', 'RETAIL']);
+    expect(s.unrestricted).toBe(true);
+    expect(s.allowed).toEqual([]);
   });
 });
 

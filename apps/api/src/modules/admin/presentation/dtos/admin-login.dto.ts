@@ -1,5 +1,6 @@
 import {
   IsEmail,
+  IsIn,
   IsOptional,
   IsString,
   Matches,
@@ -30,6 +31,15 @@ export class AdminLoginDto {
   @IsString()
   @MaxLength(4096)
   captchaToken?: string;
+
+  // The admin portal this login came from. Each admin frontend sends its own
+  // value; the login is rejected (after password) when a PORTAL-SPECIFIC role
+  // (D2C_ADMIN / RETAILER_ADMIN / FRANCHISE_ADMIN / AFFILIATE_ADMIN) signs in
+  // at a different portal. SUPER_ADMIN + generic/ops roles are allowed anywhere.
+  // Optional → a client that omits it skips the gate (safe degradation).
+  @IsOptional()
+  @IsIn(['D2C', 'RETAIL', 'FRANCHISE', 'AFFILIATE', 'SUPER'])
+  portalType?: 'D2C' | 'RETAIL' | 'FRANCHISE' | 'AFFILIATE' | 'SUPER';
 }
 
 export class AdminForgotPasswordDto {

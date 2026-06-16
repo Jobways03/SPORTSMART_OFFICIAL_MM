@@ -8,13 +8,20 @@ export interface SellerMappingListParams {
   isActive?: boolean;
   approvalStatus?: string;
   search?: string;
+  /** Seller-type scope filter (D2C/RETAIL). null/undefined = unrestricted (no
+   *  filter); a non-empty list restricts to those owning-seller types. */
+  sellerTypes?: string[] | null;
 }
 
 export interface ISellerMappingRepository {
   // ── Admin queries ──
-  findByProduct(productId: string): Promise<any[]>;
+  findByProduct(productId: string, sellerTypes?: string[] | null): Promise<any[]>;
   findAllPaginated(params: SellerMappingListParams): Promise<{ mappings: any[]; total: number }>;
-  findPendingPaginated(page: number, limit: number): Promise<{ mappings: any[]; total: number }>;
+  findPendingPaginated(
+    page: number,
+    limit: number,
+    sellerTypes?: string[] | null,
+  ): Promise<{ mappings: any[]; total: number }>;
   findById(mappingId: string): Promise<any | null>;
   /** Resolve each mapping's owning seller type — used for bulk seller-type
    *  scope filtering on the admin bulk approve/stop endpoints. */
@@ -39,6 +46,15 @@ export interface ISellerMappingRepository {
    * Returns null if the current status isn't STOPPED.
    */
   reapprove(mappingId: string, adminId: string, reason: string): Promise<any | null>;
+  /**
+   * 2026-06-15 — seller-guarded resume of a SELF-paused offer.
+   * STOPPED → APPROVED + isActive, but ONLY when the row was stopped by
+   * this same seller (stoppedBy === sellerId). This is the inverse of the
+   * seller pause (repo.stop called with the sellerId), and the stoppedBy
+   * guard means a seller can NEVER lift an admin STOP/SUSPEND — only an
+   * admin reapprove can. Returns null if no matching self-paused row.
+   */
+  resumeBySeller(mappingId: string, sellerId: string): Promise<any | null>;
   /**
    * Phase 57 — bulk approve for the pending queue. Atomic per row:
    * each row's status-conditional update runs inside a single
@@ -99,6 +115,25 @@ export interface ISellerMappingRepository {
   findDistinctProductIdsBySeller(sellerId: string): Promise<string[]>;
   findBySellerAndProduct(sellerId: string, productId: string, variantId?: string | null): Promise<any | null>;
   findBySellerForProduct(sellerId: string, productId: string): Promise<any[]>;
+  /**
+   * 2026-06-15 — this seller's mappings for a product WITH lifecycle fields
+   * (approvalStatus, isActive, stoppedBy), for the product-scoped pause/resume
+   * ("Pause/Resume sales" in My Products). findBySellerForProduct only returns
+   * {id, variantId}, which isn't enough to decide what to pause/resume.
+   */
+  findSellerOffersForProduct(
+    sellerId: string,
+    productId: string,
+  ): Promise<
+    Array<{
+      id: string;
+      variantId: string | null;
+      productId: string;
+      approvalStatus: string;
+      isActive: boolean;
+      stoppedBy: string | null;
+    }>
+  >;
   create(data: any): Promise<any>;
   // Phase 42 (2026-05-21) — optional tx so variant-generation can share
   // the outer transaction with the mapping inserts.

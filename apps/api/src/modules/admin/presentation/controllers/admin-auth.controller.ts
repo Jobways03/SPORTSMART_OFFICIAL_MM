@@ -83,6 +83,7 @@ export class AdminAuthController {
         password: dto.password,
         userAgent,
         ipAddress,
+        portalType: dto.portalType,
       });
 
       // Follow-up #H40 — mirror tokens to httpOnly cookies; body still

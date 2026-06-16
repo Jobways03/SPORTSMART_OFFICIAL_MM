@@ -112,6 +112,91 @@ function getMappingStatusClass(status: string): string {
   return 'mapping-status-badge';
 }
 
+// Logistics pickup-registration badge. Online delivery is the franchise's main
+// fulfillment path, so a missing pickup registration is flagged in red
+// (blocking), a registered one in green. Not colour-only — icon + text.
+function LogisticsBadge({ registered, partners }: { registered: boolean; partners?: string[] }) {
+  const base: React.CSSProperties = {
+    display: 'inline-flex',
+    alignItems: 'center',
+    gap: 6,
+    padding: '4px 12px',
+    borderRadius: 999,
+    fontSize: 12,
+    fontWeight: 700,
+    whiteSpace: 'nowrap',
+  };
+  if (registered) {
+    const list = partners && partners.length ? partners.join(', ') : undefined;
+    return (
+      <span
+        style={{ ...base, background: '#DCFCE7', color: '#166534' }}
+        title={list ? `Pickup registered with ${list}` : 'Pickup address registered with a courier'}
+      >
+        <span aria-hidden>&#10003;</span> Logistics ready
+      </span>
+    );
+  }
+  return (
+    <span
+      style={{ ...base, background: '#FEE2E2', color: '#991B1B' }}
+      title="No courier pickup address registered — online orders cannot be shipped"
+    >
+      <span aria-hidden>&#9888;</span> Pickup not registered
+    </span>
+  );
+}
+
+// Prominent, actionable banner for an approved franchise whose store is not yet
+// registered with a courier (so its online orders cannot be shipped).
+function LogisticsSetupBanner({ onSetup }: { onSetup: () => void }) {
+  return (
+    <div
+      role="alert"
+      style={{
+        display: 'flex',
+        gap: 12,
+        alignItems: 'flex-start',
+        padding: '12px 16px',
+        background: '#FEF3C7',
+        border: '1px solid #FDE68A',
+        borderRadius: 8,
+        marginBottom: 16,
+      }}
+    >
+      <span aria-hidden style={{ fontSize: 18, lineHeight: '22px', color: '#B45309' }}>&#9888;</span>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontWeight: 700, color: '#92400E', fontSize: 14, marginBottom: 2 }}>
+          Pickup location not registered with a courier
+        </div>
+        <div style={{ color: '#92400E', fontSize: 13, lineHeight: 1.5 }}>
+          This franchise is approved, but its store has not been added to logistics
+          — so its online orders <strong>cannot be shipped</strong>. Register a
+          pickup location to enable delivery.
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={onSetup}
+        style={{
+          alignSelf: 'center',
+          padding: '8px 14px',
+          borderRadius: 6,
+          border: '1px solid #D97706',
+          background: '#D97706',
+          color: '#fff',
+          fontSize: 13,
+          fontWeight: 600,
+          cursor: 'pointer',
+          whiteSpace: 'nowrap',
+        }}
+      >
+        Set up logistics
+      </button>
+    </div>
+  );
+}
+
 export default function AdminFranchiseDetailPage() {
   const { notify, confirmDialog } = useModal();
   const router = useRouter();
@@ -541,6 +626,11 @@ export default function AdminFranchiseDetailPage() {
           <span className={getVerificationBadgeClass(franchise.verificationStatus)}>
             {formatStatus(franchise.verificationStatus)}
           </span>
+          {/* Logistics pickup readiness — the gate for online order delivery. */}
+          <LogisticsBadge
+            registered={!!franchise.logisticsPickupRegistered}
+            partners={franchise.logisticsRegisteredPartners}
+          />
           {/* Logistics partners (courier registration). The Settings panel
               reads the entity id from ?sellerId=, so we pass the franchise id. */}
           <button
@@ -569,6 +659,18 @@ export default function AdminFranchiseDetailPage() {
           Owned by {franchise.ownerName} &middot; {franchise.email} &middot; {franchise.phoneNumber}
         </p>
       </div>
+
+      {/* Logistics setup warning — shown when the franchise is approved but its
+          store has not been registered with a courier, so its online orders
+          cannot be shipped. This is the main source for delivery. */}
+      {!franchise.logisticsPickupRegistered &&
+        (franchise.status === 'ACTIVE' ||
+          franchise.status === 'APPROVED' ||
+          franchise.verificationStatus === 'VERIFIED') && (
+          <LogisticsSetupBanner
+            onSetup={() => router.push(`/dashboard/settings?sellerId=${franchise.id}`)}
+          />
+        )}
 
       <div className="franchise-detail-layout">
         <div className="franchise-detail-main">

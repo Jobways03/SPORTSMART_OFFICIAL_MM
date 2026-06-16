@@ -418,6 +418,13 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       // logistics partner (they feed the courier warehouse). 403 so the
       // frontend shows the "contact your admin" lock message.
       LOGISTICS_ADDRESS_LOCKED: HttpStatus.FORBIDDEN,
+      // Portal isolation (2026-06-16) — a credential valid for one persona's /
+      // portal type is rejected at a different portal (seller D2C vs RETAIL;
+      // admin D2C/RETAIL/FRANCHISE/AFFILIATE). 403 = authenticated identity
+      // refused this resource; the body's `code` lets the login screen show the
+      // "use your own portal" message instead of a generic 500.
+      WRONG_SELLER_PORTAL: HttpStatus.FORBIDDEN,
+      WRONG_ADMIN_PORTAL: HttpStatus.FORBIDDEN,
     };
     return map[code] || HttpStatus.INTERNAL_SERVER_ERROR;
   }

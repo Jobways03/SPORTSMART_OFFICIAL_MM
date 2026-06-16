@@ -133,7 +133,6 @@ export default function CatalogPage() {
     label: string;
     masterSku: string | null;
     included: boolean;
-    franchiseSku: string;
     barcode: string;
     isListed: boolean;
     // Already mapped by this franchise — the row is rendered as a
@@ -152,6 +151,8 @@ export default function CatalogPage() {
 
   // ---- Remove mapping state ----
   const [removingId, setRemovingId] = useState<string | null>(null);
+  // ---- Pause / resume (self-pause) state ----
+  const [togglingId, setTogglingId] = useState<string | null>(null);
 
   const flashSuccess = (msg: string) => {
     setSuccessMessage(msg);
@@ -243,7 +244,6 @@ export default function CatalogPage() {
   const openEditModal = (mapping: CatalogMapping) => {
     setEditMapping(mapping);
     const initial: UpdateMappingPayload = {
-      franchiseSku: mapping.franchiseSku || '',
       barcode: mapping.barcode || '',
       isListedForOnlineFulfillment: mapping.isListedForOnlineFulfillment,
     };
@@ -281,7 +281,6 @@ export default function CatalogPage() {
     const wasNonPending = editMapping.approvalStatus !== 'PENDING_APPROVAL';
     try {
       const payload: UpdateMappingPayload = {
-        franchiseSku: (editForm.franchiseSku || '').trim() || undefined,
         barcode: (editForm.barcode || '').trim() || undefined,
         isListedForOnlineFulfillment: editForm.isListedForOnlineFulfillment,
       };
@@ -322,6 +321,50 @@ export default function CatalogPage() {
     }
   };
 
+  // Self-pause: stop selling THIS franchise's offer for the product. Does not
+  // touch the shared product or any other seller's/franchise's offer.
+  const handlePauseMapping = async (mapping: CatalogMapping) => {
+    const title = mapping.product?.title || 'this product';
+    if (
+      !(await confirmDialog(
+        `Pause sales of "${title}"? It will stop showing for your franchise until you resume it. Other sellers are not affected.`,
+      ))
+    )
+      return;
+    setTogglingId(mapping.id);
+    try {
+      await franchiseCatalogService.pauseMapping(mapping.id);
+      flashSuccess('Sales paused');
+      await loadMappings();
+    } catch (err) {
+      if (err instanceof ApiError) {
+        void notify(err.body.message || 'Failed to pause sales');
+      } else {
+        void notify('Failed to pause sales');
+      }
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
+  // Self-resume: lift a pause this franchise applied itself.
+  const handleResumeMapping = async (mapping: CatalogMapping) => {
+    setTogglingId(mapping.id);
+    try {
+      await franchiseCatalogService.resumeMapping(mapping.id);
+      flashSuccess('Sales resumed');
+      await loadMappings();
+    } catch (err) {
+      if (err instanceof ApiError) {
+        void notify(err.body.message || 'Failed to resume sales');
+      } else {
+        void notify('Failed to resume sales');
+      }
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
   // ---- Handlers: Browse ----
   const handleBrowseSearch = () => {
     setProductsPage(1);
@@ -345,7 +388,6 @@ export default function CatalogPage() {
         label: product.title,
         masterSku: product.baseSku,
         included: !existingStatus,
-        franchiseSku: '',
         barcode: '',
         isListed: true,
         alreadyMapped: Boolean(existingStatus),
@@ -365,7 +407,6 @@ export default function CatalogPage() {
             label: v.title || v.sku || v.masterSku || v.id.slice(0, 8),
             masterSku: v.sku || v.masterSku,
             included: !existingStatus,
-            franchiseSku: '',
             barcode: '',
             isListed: true,
             alreadyMapped: Boolean(existingStatus),
@@ -393,33 +434,16 @@ export default function CatalogPage() {
       return;
     }
 
-    // Franchise SKU is OPTIONAL — when blank, the system falls back
-    // to the master/global SKU everywhere it's displayed and scanned.
-    // We only validate that any *manually entered* franchise SKUs in
-    // this batch are unique among themselves, so the franchise can't
-    // type the same value twice by accident.
-    const skuSeen = new Map<string, number>();
+    // Every franchise mapping uses the master/global (super-admin) SKU — there
+    // is no per-franchise SKU override. Barcode stays optional; validate the
+    // format of any manually entered code so a malformed value is caught here
+    // instead of failing the API call or breaking a later POS scan.
     for (const r of selected) {
-      // Validate the format of any manually entered SKU / barcode before
-      // submit so a malformed code is caught here instead of failing the
-      // API call or breaking a later POS scan. Both fields are optional.
-      const skuFormatError = validateCodeField(r.franchiseSku, 'Franchise SKU');
-      if (skuFormatError) {
-        setAddError(`${r.label}: ${skuFormatError}`);
-        return;
-      }
       const barcodeFormatError = validateCodeField(r.barcode, 'Barcode');
       if (barcodeFormatError) {
         setAddError(`${r.label}: ${barcodeFormatError}`);
         return;
       }
-      const sku = r.franchiseSku.trim();
-      if (!sku) continue;
-      if (skuSeen.has(sku)) {
-        setAddError(`Franchise SKU "${sku}" is repeated. Each variant needs a unique SKU.`);
-        return;
-      }
-      skuSeen.set(sku, 1);
     }
 
     setAddError('');
@@ -432,7 +456,6 @@ export default function CatalogPage() {
         const payload: AddMappingPayload = {
           productId: addProduct.id,
           variantId: r.variantId || undefined,
-          franchiseSku: r.franchiseSku.trim() || undefined,
           barcode: r.barcode.trim() || undefined,
           isListedForOnlineFulfillment: r.isListed,
         };
@@ -443,7 +466,6 @@ export default function CatalogPage() {
         const payloads: AddMappingPayload[] = selected.map((r) => ({
           productId: addProduct.id,
           variantId: r.variantId || undefined,
-          franchiseSku: r.franchiseSku.trim() || undefined,
           barcode: r.barcode.trim() || undefined,
           isListedForOnlineFulfillment: r.isListed,
         }));
@@ -532,6 +554,9 @@ export default function CatalogPage() {
           onEdit={openEditModal}
           onRemove={handleRemoveMapping}
           removingId={removingId}
+          onPause={handlePauseMapping}
+          onResume={handleResumeMapping}
+          togglingId={togglingId}
           onGoBrowse={() => setActiveTab('browse')}
         />
       )}
@@ -682,15 +707,13 @@ export default function CatalogPage() {
               )}
 
               {(() => {
-                // Dirty-check — the franchise can only submit when at
-                // least one of franchiseSku / barcode / isListed has
-                // changed from the original snapshot. Treat null and
-                // empty-string as the same value (both render as a
-                // blank input but the API accepts undefined).
+                // Dirty-check — the franchise can only submit when the
+                // barcode or the listed flag has changed from the original
+                // snapshot. (The SKU is the master/global SKU and isn't
+                // editable.) Treat null and empty-string as the same value.
                 const norm = (v: unknown) =>
                   typeof v === 'string' ? v.trim() : v ?? '';
                 const isDirty =
-                  norm(editForm.franchiseSku) !== norm(originalEditForm.franchiseSku) ||
                   norm(editForm.barcode) !== norm(originalEditForm.barcode) ||
                   Boolean(editForm.isListedForOnlineFulfillment) !==
                     Boolean(originalEditForm.isListedForOnlineFulfillment);
@@ -1170,6 +1193,9 @@ function MyCatalogTab(props: {
   onEdit: (m: CatalogMapping) => void;
   onRemove: (m: CatalogMapping) => void;
   removingId: string | null;
+  onPause: (m: CatalogMapping) => void;
+  onResume: (m: CatalogMapping) => void;
+  togglingId: string | null;
   onGoBrowse: () => void;
 }) {
   const {
@@ -1190,6 +1216,9 @@ function MyCatalogTab(props: {
     onEdit,
     onRemove,
     removingId,
+    onPause,
+    onResume,
+    togglingId,
     onGoBrowse,
   } = props;
 
@@ -1439,6 +1468,48 @@ function MyCatalogTab(props: {
                           >
                             {isRejected ? 'Fix & Resubmit' : 'Edit'}
                           </button>
+                          {mapping.canPause && (
+                            <button
+                              type="button"
+                              onClick={() => onPause(mapping)}
+                              disabled={togglingId === mapping.id}
+                              title="Stop selling this product from your franchise (reversible). Other sellers are not affected."
+                              style={{
+                                padding: '6px 14px',
+                                fontSize: 12,
+                                fontWeight: 600,
+                                border: '1px solid #fde68a',
+                                borderRadius: 6,
+                                background: '#fffbeb',
+                                color: '#b45309',
+                                cursor: 'pointer',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {togglingId === mapping.id ? '...' : 'Pause sales'}
+                            </button>
+                          )}
+                          {mapping.canResume && (
+                            <button
+                              type="button"
+                              onClick={() => onResume(mapping)}
+                              disabled={togglingId === mapping.id}
+                              title="Resume selling this product from your franchise"
+                              style={{
+                                padding: '6px 14px',
+                                fontSize: 12,
+                                fontWeight: 600,
+                                border: '1px solid #bbf7d0',
+                                borderRadius: 6,
+                                background: '#f0fdf4',
+                                color: '#15803d',
+                                cursor: 'pointer',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {togglingId === mapping.id ? '...' : 'Resume sales'}
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => onRemove(mapping)}
@@ -1671,7 +1742,7 @@ function BrowseProductsTab(props: {
                       cursor: 'pointer',
                     }}
                   >
-                    + Add to Catalog
+                    + Add
                   </button>
                 </div>
               </div>

@@ -8,10 +8,8 @@ import {
   addressesService,
   CustomerAddress,
   AddressPayload,
-  IndiaStateRef,
-  taxReferenceService,
 } from '@/services/addresses.service';
-import { useModal } from '@sportsmart/ui';
+import { useModal, usePincodeLookup } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
 import {
@@ -108,6 +106,11 @@ const ICONS = {
       <line x1="12" y1="16" x2="12.01" y2="16" />
     </svg>
   ),
+  check: (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  ),
   homeEmpty: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
       <path d="M3 9.5L12 3l9 6.5V21a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1V9.5z" />
@@ -131,22 +134,33 @@ export default function AddressesPage() {
   // the form opens; reused across retry attempts of the same
   // submission. A new key only on the next "Add" / "Edit" click.
   const [submitKey, setSubmitKey] = useState<string | null>(null);
-  // Phase 34 — india_states master, fetched once. Empty array =
-  // loading or fetch failure; the page still works because the
-  // backend re-resolves stateCode by name as a fallback.
-  const [indiaStates, setIndiaStates] = useState<IndiaStateRef[]>([]);
+  // Shared pincode → district/state/post-office lookup — the SAME hook the
+  // checkout address form uses. Drives the auto-fill (city + state) + the
+  // locality dropdown + the green confirmation line.
+  const {
+    loading: pincodeLoading,
+    error: pincodeError,
+    result: pincodeData,
+    autoFilled: pincodeAutoFilled,
+    lookup: runPincodeLookup,
+    reset: resetPincodeLookup,
+    setAutoFilled: setPincodeAutoFilled,
+  } = usePincodeLookup();
 
-  useEffect(() => {
-    taxReferenceService
-      .indiaStates()
-      .then((res) => {
-        if (res.data) setIndiaStates(res.data);
-      })
-      .catch(() => {
-        // Non-fatal — the dropdown silently degrades to whatever the
-        // page renders without master data.
-      });
-  }, []);
+  // Run the lookup and, on success, auto-fill city (district) + state.
+  // stateCode is cleared so a pincode-changed state can't keep a stale code;
+  // the backend re-resolves stateCode from the state name (same as checkout).
+  const lookupPincode = async (raw: string) => {
+    const data = await runPincodeLookup(raw);
+    if (data) {
+      setForm((prev) => ({
+        ...prev,
+        city: data.district,
+        state: data.state,
+        stateCode: '',
+      }));
+    }
+  };
 
   const fetchAddresses = () => {
     setLoading(true);
@@ -177,6 +191,7 @@ export default function AddressesPage() {
     setEditingId(null);
     setForm(EMPTY_FORM);
     setFormError(null);
+    resetPincodeLookup();
     setSubmitKey(mintSubmitKey());
     setModalOpen(true);
   };
@@ -196,6 +211,9 @@ export default function AddressesPage() {
       isDefault: !!addr.isDefault,
     });
     setFormError(null);
+    // Don't auto-run the lookup on edit — show the saved city/state/locality
+    // as editable. A fresh pincode change re-activates the auto-fill+dropdown.
+    resetPincodeLookup();
     setSubmitKey(mintSubmitKey());
     setModalOpen(true);
   };
@@ -206,6 +224,7 @@ export default function AddressesPage() {
     setEditingId(null);
     setForm(EMPTY_FORM);
     setFormError(null);
+    resetPincodeLookup();
   };
 
   const validateForm = (): string | null => {
@@ -289,6 +308,7 @@ export default function AddressesPage() {
       setModalOpen(false);
       setEditingId(null);
       setForm(EMPTY_FORM);
+      resetPincodeLookup();
     } catch (err) {
       const msg = err instanceof ApiError ? err.body.message : 'Failed to save address.';
       setFormError(msg || 'Failed to save address.');
@@ -509,82 +529,113 @@ export default function AddressesPage() {
                     onChange={(e) => setForm({ ...form, addressLine2: e.target.value })}
                   />
                 </div>
-                <div className="profile-field">
-                  <label htmlFor="locality">
-                    Locality <span className="profile-field-optional">(optional)</span>
-                  </label>
-                  <input
-                    id="locality"
-                    type="text"
-                    className="profile-input"
-                    value={form.locality}
-                    onChange={(e) => setForm({ ...form, locality: e.target.value })}
-                  />
-                </div>
-                <div className="profile-field">
-                  <label htmlFor="city">City</label>
-                  <input
-                    id="city"
-                    type="text"
-                    className="profile-input"
-                    value={form.city}
-                    onChange={(e) => setForm({ ...form, city: e.target.value })}
-                    required
-                  />
-                </div>
-                <div className="profile-field">
-                  <label htmlFor="state">State</label>
-                  {indiaStates.length > 0 ? (
-                    <select
-                      id="state"
-                      className="profile-input"
-                      value={form.stateCode || ''}
-                      onChange={(e) => {
-                        const code = e.target.value;
-                        const match = indiaStates.find((s) => s.code === code);
-                        setForm({
-                          ...form,
-                          stateCode: code,
-                          state: match ? match.name : '',
-                        });
-                      }}
-                      required
-                    >
-                      <option value="">Select state…</option>
-                      {indiaStates.map((s) => (
-                        <option key={s.code} value={s.code}>
-                          {s.name} {s.isUnionTerritory ? '(UT)' : ''}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <input
-                      id="state"
-                      type="text"
-                      className="profile-input"
-                      value={form.state}
-                      onChange={(e) =>
-                        setForm({ ...form, state: e.target.value, stateCode: '' })
-                      }
-                      required
-                    />
-                  )}
-                </div>
-                <div className="profile-field">
+
+                {/* Pincode first — typing 6 digits auto-fills City + State and
+                    populates the Locality dropdown (same flow as checkout). */}
+                <div className="profile-field profile-field-full">
                   <label htmlFor="postalCode">Postal Code</label>
                   <input
                     id="postalCode"
                     type="text"
                     inputMode="numeric"
                     maxLength={6}
-                    className="profile-input"
-                    placeholder="6 digits"
+                    className="profile-input tabular"
+                    placeholder="6-digit PIN"
                     value={form.postalCode}
-                    onChange={(e) =>
-                      setForm({ ...form, postalCode: e.target.value.replace(/\D/g, '') })
-                    }
+                    onChange={(e) => {
+                      const val = e.target.value.replace(/\D/g, '').slice(0, 6);
+                      setForm({ ...form, postalCode: val });
+                      lookupPincode(val);
+                    }}
                     required
                   />
+                  {pincodeLoading ? (
+                    <div className="profile-field-helper">Looking up pincode…</div>
+                  ) : pincodeError ? (
+                    <div className="profile-field-helper" style={{ color: '#B91C1C' }}>
+                      {pincodeError}
+                    </div>
+                  ) : pincodeData ? (
+                    <div
+                      className="profile-field-helper"
+                      style={{ color: '#15803D', display: 'flex', alignItems: 'center', gap: 4 }}
+                    >
+                      {ICONS.check}
+                      {pincodeData.district}, {pincodeData.state}
+                    </div>
+                  ) : form.postalCode.length < 6 ? (
+                    <div className="profile-field-helper">
+                      Enter your 6-digit PIN to auto-fill city &amp; state.
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="profile-field">
+                  <label htmlFor="city">City / District</label>
+                  <input
+                    id="city"
+                    type="text"
+                    className="profile-input"
+                    value={form.city}
+                    readOnly={pincodeAutoFilled}
+                    style={pincodeAutoFilled ? { background: '#F3F4F6' } : undefined}
+                    onChange={(e) => {
+                      setForm({ ...form, city: e.target.value });
+                      if (pincodeAutoFilled) setPincodeAutoFilled(false);
+                    }}
+                    required
+                  />
+                </div>
+                <div className="profile-field">
+                  <label htmlFor="state">State</label>
+                  <input
+                    id="state"
+                    type="text"
+                    className="profile-input"
+                    placeholder="State"
+                    value={form.state}
+                    readOnly={pincodeAutoFilled}
+                    style={pincodeAutoFilled ? { background: '#F3F4F6' } : undefined}
+                    onChange={(e) => {
+                      setForm({ ...form, state: e.target.value, stateCode: '' });
+                      if (pincodeAutoFilled) setPincodeAutoFilled(false);
+                    }}
+                    required
+                  />
+                </div>
+
+                <div className="profile-field profile-field-full">
+                  <label htmlFor="locality">
+                    Locality <span className="profile-field-optional">(optional)</span>
+                  </label>
+                  {pincodeData && pincodeData.places && pincodeData.places.length > 0 ? (
+                    <select
+                      id="locality"
+                      className="profile-input"
+                      value={form.locality}
+                      onChange={(e) => setForm({ ...form, locality: e.target.value })}
+                    >
+                      <option value="">Select your locality</option>
+                      {form.locality &&
+                        !pincodeData.places.some((p) => p.name === form.locality) && (
+                          <option value={form.locality}>{form.locality}</option>
+                        )}
+                      {pincodeData.places.map((p, idx) => (
+                        <option key={idx} value={p.name}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <input
+                      id="locality"
+                      type="text"
+                      className="profile-input"
+                      placeholder="Area / neighbourhood"
+                      value={form.locality}
+                      onChange={(e) => setForm({ ...form, locality: e.target.value })}
+                    />
+                  )}
                 </div>
               </div>
 

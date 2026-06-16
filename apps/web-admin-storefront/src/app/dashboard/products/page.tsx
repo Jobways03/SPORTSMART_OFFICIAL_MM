@@ -188,10 +188,16 @@ export default function ProductsPage() {
           `/admin/products/${productId}/franchise-mappings`,
         ),
       ]);
-      const sellers =
-        sellersRes.status === 'fulfilled' ? sellersRes.value.data?.mappings ?? [] : [];
-      const franchises =
-        franchisesRes.status === 'fulfilled' ? franchisesRes.value.data?.mappings ?? [] : [];
+      // Super admin sees only APPROVED seller/franchise offers. A mapping
+      // still PENDING_APPROVAL (or rejected) sits in the seller-type admin's
+      // queue (d2c/retail/franchise admin) and isn't part of the live
+      // marketplace catalog the super admin oversees yet.
+      const sellers = (
+        sellersRes.status === 'fulfilled' ? sellersRes.value.data?.mappings ?? [] : []
+      ).filter((m) => m.approvalStatus === 'APPROVED');
+      const franchises = (
+        franchisesRes.status === 'fulfilled' ? franchisesRes.value.data?.mappings ?? [] : []
+      ).filter((m) => m.approvalStatus === 'APPROVED');
       setInventoryCache((cache) => ({
         ...cache,
         [productId]: { loading: false, sellers, franchises },

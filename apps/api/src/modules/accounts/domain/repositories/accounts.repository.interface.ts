@@ -44,6 +44,7 @@ export interface AccountsRepository {
   getSellerFinanceSummary(params?: {
     fromDate?: Date;
     toDate?: Date;
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null;
   }): Promise<{
     currency: string;
     totalSellers: number;
@@ -142,6 +143,7 @@ export interface AccountsRepository {
     toDate?: Date,
     offset?: number,
     metric?: RankMetric,
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
   ): Promise<
     Array<{
       rank: number;

@@ -1110,27 +1110,41 @@
 .variant-table-actions {
   display: flex;
   gap: 8px;
+  align-items: center;
+  flex-wrap: nowrap;
 }
 
 .variant-table-actions a,
 .variant-table-actions button {
-  padding: 6px 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 0 14px;
   font-size: 12px;
   font-weight: 600;
-  border-radius: 6px;
+  line-height: 1;
+  white-space: nowrap;
+  border-radius: 8px;
   cursor: pointer;
   border: 1px solid #d1d5db;
   background: #fff;
   color: #374151;
   text-decoration: none;
-  transition: all 0.15s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 
 .variant-table-actions a:hover,
 .variant-table-actions button:hover {
-  background: #f3f4f6;
+  background: #f9fafb;
   border-color: #9ca3af;
+  color: #111827;
   text-decoration: none;
+}
+
+.variant-table-actions a:active,
+.variant-table-actions button:active {
+  background: #f3f4f6;
 }
 
 .variant-table-actions button.danger {
@@ -1141,6 +1155,7 @@
 .variant-table-actions button.danger:hover {
   background: #fef2f2;
   border-color: #f87171;
+  color: #b91c1c;
 }
 
 /* ===== Option Cards (Variant Options Editor) ===== */

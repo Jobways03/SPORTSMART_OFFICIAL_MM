@@ -85,6 +85,22 @@ export class IdempotencyInterceptor implements NestInterceptor {
     const key = this.readKey(req);
     const requestHash = computeRequestHash(req);
     const actor = extractActor(req);
+    // Namespace the STORED key per actor. The `key` column is globally
+    // @unique, so without this the SAME client X-Idempotency-Key presented by
+    // two DIFFERENT principals collides: a hash match replays the first
+    // actor's cached response to the second (cross-tenant disclosure), a
+    // mismatch 409s them against each other (cross-actor DoS).
+    //
+    // Not every @Idempotent route is authenticated — POST /auth/register is
+    // @Idempotent and anonymous — so for ANONYMOUS callers the actor id is the
+    // constant '-'. Using that verbatim would collapse every anonymous client
+    // into ONE shared namespace (an attacker could 409 legitimate
+    // registrations by spraying a guessed key). Discriminate anonymous callers
+    // by client IP instead. The raw `key` is still used for validation;
+    // actorType/actorId columns still store the raw actor for queries.
+    const actorDiscriminator =
+      actor.type === 'ANONYMOUS' ? (req.ip ?? '-') : actor.id;
+    const storageKey = `${actor.type}:${actorDiscriminator}:${key}`;
     const endpoint = `${req.method} ${
       (req as { route?: { path?: string } }).route?.path ?? req.path ?? ''
     }`;
@@ -104,6 +120,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     return from(
       this.tryClaim({
         key,
+        storageKey,
         requestHash,
         actor,
         endpoint,
@@ -188,6 +205,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
    */
   private async tryClaim(args: {
     key: string;
+    storageKey: string;
     requestHash: string;
     actor: { type: string; id: string };
     endpoint: string;
@@ -199,7 +217,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
     try {
       const created = await this.prisma.idempotencyKey.create({
         data: {
-          key: args.key,
+          key: args.storageKey,
           actorType: args.actor.type,
           actorId: args.actor.id,
           endpoint: args.endpoint,
@@ -215,7 +233,7 @@ export class IdempotencyInterceptor implements NestInterceptor {
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === 'P2002'
       ) {
-        return this.resolveExisting(args.key, args.requestHash);
+        return this.resolveExisting(args.storageKey, args.requestHash);
       }
       throw err;
     }
@@ -226,11 +244,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
    * to replay, reject, or wait.
    */
   private async resolveExisting(
-    key: string,
+    storageKey: string,
     requestHash: string,
   ): Promise<{ kind: 'cached'; status: number; body: unknown }> {
     const row = await this.prisma.idempotencyKey.findUnique({
-      where: { key },
+      where: { key: storageKey },
     });
     if (!row) {
       // The race lost a window where the row was deleted (sweeper /

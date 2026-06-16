@@ -168,9 +168,11 @@ export class UpdateMappingDto {
  * Phase 58 (2026-05-22) — seller-initiated pause of an APPROVED
  * mapping (audit Gaps #3 + #9). Symmetric with admin /stop:
  * approvalStatus → STOPPED, isActive → false, stoppedBy = sellerId.
- * Re-activation requires admin /reapprove — sellers cannot silently
- * lift their own pause, which closes the "self-pause + self-resume
- * without admin review" loop the audit flagged.
+ * 2026-06-15 — a seller CAN now lift their OWN pause via the My-Products
+ * resume (resumeBySeller), but the stoppedBy guard means they still can
+ * NEVER lift an admin STOP/SUSPEND — those remain admin /reapprove only.
+ * So the original "seller can't undo an admin compliance action" control
+ * is preserved while giving sellers self-service over their own pause.
  */
 export class SellerPauseMappingDto {
   @IsString()
@@ -178,6 +180,18 @@ export class SellerPauseMappingDto {
   @MinLength(3, { message: 'reason must be at least 3 characters' })
   @MaxLength(500, { message: 'reason must not exceed 500 characters' })
   reason!: string;
+}
+
+/**
+ * 2026-06-15 — product-scoped "pause my sales" from My Products. Reason is
+ * optional (a quick toggle, not a compliance action); defaults server-side.
+ */
+export class SellerPauseProductDto {
+  @IsOptional()
+  @IsString()
+  @Transform(trim)
+  @MaxLength(500, { message: 'reason must not exceed 500 characters' })
+  reason?: string;
 }
 
 /**

@@ -170,6 +170,31 @@ describe('#14 service node-type scoping', () => {
     expect(repo.getTopSellers.mock.calls[0][4]).toBe('MARGIN');
     expect(repo.getTopFranchises.mock.calls[0][4]).toBe('MARGIN');
   });
+
+  // Isolation fix (2026-06-16) — the seller-type scope must thread to the repo
+  // AND be part of the cache key, else a scoped admin and an unrestricted admin
+  // would share a cached leaderboard (cross-type leak).
+  it('threads allowedSellerTypes (7th arg) to getTopSellers', async () => {
+    const repo = makeRepo();
+    const svc = new AccountsDashboardService(repo);
+    await svc.getTopPerformers(10, undefined, undefined, 1, 'REVENUE', 'SELLER', ['D2C']);
+    expect(repo.getTopSellers.mock.calls[0][5]).toEqual(['D2C']);
+  });
+
+  it('does NOT serve a different scope from the same cache entry', async () => {
+    const repo = makeRepo();
+    const svc = new AccountsDashboardService(repo);
+    // Same (limit, range, page, metric, nodeType) but different scope → two
+    // distinct cache keys → two repo calls (no cross-scope contamination).
+    await svc.getTopPerformers(10, undefined, undefined, 1, 'REVENUE', 'SELLER', ['D2C']);
+    await svc.getTopPerformers(10, undefined, undefined, 1, 'REVENUE', 'SELLER', ['RETAIL']);
+    expect(repo.getTopSellers).toHaveBeenCalledTimes(2);
+    expect(repo.getTopSellers.mock.calls[0][5]).toEqual(['D2C']);
+    expect(repo.getTopSellers.mock.calls[1][5]).toEqual(['RETAIL']);
+    // Sanity: an identical scope IS served from cache (no third call).
+    await svc.getTopPerformers(10, undefined, undefined, 1, 'REVENUE', 'SELLER', ['D2C']);
+    expect(repo.getTopSellers).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe('#1/#14 controller metric/nodeType validation', () => {
@@ -196,6 +221,9 @@ describe('#1/#14 controller metric/nodeType validation', () => {
   it('normalises valid lower-case values and passes them through', async () => {
     const { ctrl, svc } = makeController();
     await ctrl.getTopPerformers({}, '10', '1', undefined, undefined, 'margin', 'seller');
-    expect(svc.getTopPerformers).toHaveBeenCalledWith(10, undefined, undefined, 1, 'MARGIN', 'SELLER');
+    // Isolation fix (2026-06-16) — the controller now also passes the admin's
+    // seller-type scope (7th arg). The mock req has no permissions, so
+    // resolveScopedTypes → null (unrestricted).
+    expect(svc.getTopPerformers).toHaveBeenCalledWith(10, undefined, undefined, 1, 'MARGIN', 'SELLER', null);
   });
 });

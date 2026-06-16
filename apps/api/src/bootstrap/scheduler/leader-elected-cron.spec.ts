@@ -33,9 +33,19 @@ function buildLeader(opts: {
   const releaseLockWithToken = jest.fn(
     opts.releaseImpl ?? (async () => true),
   );
-  const redis = { acquireLockWithToken, releaseLockWithToken } as any;
+  const renewLockWithToken = jest.fn(async () => true);
+  const redis = {
+    acquireLockWithToken,
+    releaseLockWithToken,
+    renewLockWithToken,
+  } as any;
   const leader = new LeaderElectedCron(redis);
-  return { leader, acquireLock: acquireLockWithToken, releaseLock: releaseLockWithToken };
+  return {
+    leader,
+    acquireLock: acquireLockWithToken,
+    releaseLock: releaseLockWithToken,
+    renewLock: renewLockWithToken,
+  };
 }
 
 describe('LeaderElectedCron', () => {
@@ -171,5 +181,64 @@ describe('LeaderElectedCron', () => {
     const { leader, acquireLock } = buildLeader({});
     await leader.run('my-job', 60, async () => undefined);
     expect(acquireLock).toHaveBeenCalledWith('cron-lock:my-job', 60);
+  });
+});
+
+// ── Lease-renewal watchdog (PR: lease renewal) ──────────────────────────
+describe('LeaderElectedCron — lease-renewal watchdog', () => {
+  // Flush pending microtasks (the acquire() await + the run() continuation
+  // that arms the interval + calls body) without advancing fake-timer clock.
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  };
+
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('renews the lock (fenced to our token) while the body runs, then stops + releases', async () => {
+    const { leader, renewLock, releaseLock } = buildLeader({});
+    let finish!: () => void;
+    const body = jest.fn(() => new Promise<void>((res) => (finish = res)));
+
+    // ttl 30s → renew every 10s (ttl/3).
+    const runP = leader.run('slow-job', 30, body);
+
+    await flush();
+    expect(body).toHaveBeenCalledTimes(1);
+    expect(renewLock).not.toHaveBeenCalled(); // not yet — first tick at 10s
+
+    // Advance ~25s of body time → renews at 10s and 20s.
+    await jest.advanceTimersByTimeAsync(25_000);
+    expect(renewLock).toHaveBeenCalledWith(
+      'cron-lock:slow-job',
+      expect.any(String),
+      30,
+    );
+    const renewsWhileRunning = renewLock.mock.calls.length;
+    expect(renewsWhileRunning).toBeGreaterThanOrEqual(2);
+
+    finish();
+    await runP;
+
+    // Watchdog cleared on completion → NO further renews; lock released.
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(renewLock.mock.calls.length).toBe(renewsWhileRunning);
+    expect(releaseLock).toHaveBeenCalledWith(
+      'cron-lock:slow-job',
+      expect.any(String),
+    );
+  });
+
+  it('does not arm the watchdog when leadership is not acquired', async () => {
+    const { leader, renewLock, releaseLock } = buildLeader({
+      acquireImpl: async () => false,
+    });
+
+    const res = await leader.run('job', 30, jest.fn());
+
+    expect(res).toEqual({ ran: false });
+    await jest.advanceTimersByTimeAsync(60_000);
+    expect(renewLock).not.toHaveBeenCalled();
+    expect(releaseLock).not.toHaveBeenCalled();
   });
 });

@@ -53,6 +53,14 @@ export interface CatalogMapping {
   isListedForOnlineFulfillment: boolean;
   isActive: boolean;
   approvalStatus: string;
+  /**
+   * Derived server-side per-row offer controls (franchise self-pause).
+   * `canPause` — an approved, live offer this franchise can pause.
+   * `canResume` — a pause THIS franchise applied itself (an admin STOP is
+   * not franchise-resumable, so it stays false there).
+   */
+  canPause?: boolean;
+  canResume?: boolean;
   createdAt: string;
   product?: {
     id: string;
@@ -69,16 +77,16 @@ export interface CatalogMapping {
   } | null;
 }
 
+// No franchiseSku: every franchise mapping uses the master/global (super-admin)
+// SKU resolved server-side. Only barcode + listing flag are franchise-settable.
 export interface AddMappingPayload {
   productId: string;
   variantId?: string;
-  franchiseSku?: string;
   barcode?: string;
   isListedForOnlineFulfillment?: boolean;
 }
 
 export interface UpdateMappingPayload {
-  franchiseSku?: string;
   barcode?: string;
   isListedForOnlineFulfillment?: boolean;
 }
@@ -164,5 +172,28 @@ export const franchiseCatalogService = {
     return apiClient(`/franchise/catalog/mappings/${mappingId}`, {
       method: 'DELETE',
     });
+  },
+  // Franchise self-pause: temporarily stop selling this offer (reversible).
+  pauseMapping(
+    mappingId: string,
+    reason?: string,
+  ): Promise<ApiResponse<CatalogMapping>> {
+    return apiClient<CatalogMapping>(
+      `/franchise/catalog/mappings/${mappingId}/pause`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify(reason ? { reason } : {}),
+      },
+    );
+  },
+  // Franchise self-resume: lift a self-pause back to live.
+  resumeMapping(mappingId: string): Promise<ApiResponse<CatalogMapping>> {
+    return apiClient<CatalogMapping>(
+      `/franchise/catalog/mappings/${mappingId}/resume`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({}),
+      },
+    );
   },
 };

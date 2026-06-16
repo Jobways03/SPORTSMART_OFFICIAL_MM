@@ -1,22 +1,17 @@
 name: Deploy
 
-# Phase 9 (2026-05-16) — manual-trigger deployment workflow.
+# Phase 2 (2026-06-15) — manual-trigger deploy to AWS ECS Fargate.
 #
-# Two parallel deploy paths:
-#   1. The API container → ECR / GHCR → the chosen target cluster.
-#   2. Each web-* app → its own image → same target.
+# Flow: prep (auth + compute tag + read API URL) → build (matrix: build &
+# push each image to ECR, baking NEXT_PUBLIC_API_URL into the web images) →
+# rollout (run infra/scripts/deploy.sh: migrate-then-roll on ECS).
 #
-# Triggered manually via `workflow_dispatch` so a routine push to
-# main never accidentally ships. The `environment:` block surfaces
-# GitHub's environment-protection rules (required reviewers, secrets
-# scoped per stage) before the deploy steps execute — that's the
-# real safety net, not the workflow YAML itself.
-#
-# The actual `deploy` steps below are intentionally illustrative. The
-# concrete `kubectl set image` / `aws ecs update-service` / Helm
-# command lives in `infra/scripts/deploy.sh`, which the workflow
-# invokes. That separation lets ops swap targets without rewriting CI
-# YAML.
+# Auth is GitHub OIDC → the Terraform-created deploy role (no static AWS
+# keys). Required GitHub repo variables (Settings → Variables):
+#   AWS_DEPLOY_ROLE_ARN  = terraform output deploy_role_arn
+#   AWS_REGION           = e.g. ap-south-1
+# The `production` environment's protection rules (required reviewers) are the
+# real prod safety gate.
 
 on:
   workflow_dispatch:
@@ -30,40 +25,33 @@ on:
           - production
         default: staging
       services:
-        description: "Comma-separated services to deploy (api, web-storefront, …) or 'all'"
+        description: "Comma-separated services (no spaces), e.g. api,web-storefront — or 'all'"
         required: true
         type: string
         default: "all"
 
 concurrency:
-  # Only one deploy per (environment, branch) in flight. A second
-  # workflow_dispatch while one is running is queued, not cancelled —
-  # cancelling a half-applied rollout would leave a partial set of
-  # pods on the new image.
+  # One deploy per (environment, branch); queue rather than cancel — a
+  # half-applied rollout must not be interrupted.
   group: deploy-${{ inputs.target }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build-and-push:
-    name: Build + push images
+  prep:
+    name: Prep
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-      id-token: write # for OIDC-federated cloud auth
-    env:
-      NODE_VERSION: "22"
-      PNPM_VERSION: "10.0.0"
+      id-token: write
     outputs:
       image_tag: ${{ steps.tag.outputs.tag }}
+      api_url: ${{ steps.cfg.outputs.api_url }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      # Phase 9 (PR 9.5) — every CI workflow runs a secret scanner.
-      # A manual deploy of a poisoned ref must still trip the alarm
-      # before any image push happens.
+      # Secret scan of the ref before anything is built or pushed.
       - name: Scan for secrets (gitleaks)
         uses: gitleaks/gitleaks-action@v2
         env:
@@ -71,196 +59,92 @@ jobs:
 
       - name: Compute image tag
         id: tag
-        # Short SHA is human-readable; combined with the env name in
-        # the registry, an operator can read "api:staging-abc1234" and
-        # know exactly which commit shipped where.
         run: echo "tag=${{ inputs.target }}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
-      - name: Enable pnpm
-        uses: pnpm/action-setup@v4
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          version: ${{ env.PNPM_VERSION }}
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
+      - name: Read API URL from SSM (baked into web images)
+        id: cfg
+        run: |
+          api_url="$(aws ssm get-parameter \
+            --name "/sportsmart/${{ inputs.target }}/deploy/api_url" \
+            --query 'Parameter.Value' --output text)"
+          echo "api_url=${api_url}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build + push (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    needs: prep
+    # Gate the PUSH behind the environment too: for production this means the
+    # required reviewer must approve BEFORE any image (incl. the moving
+    # :<target>-latest tag the task defs reference) reaches ECR — otherwise an
+    # autoscale/restart could pull unreviewed bits before the rollout gate.
+    environment:
+      name: ${{ inputs.target }}
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: api, dockerfile: infra/docker/Dockerfile.api, app: "" }
+          - { name: web-storefront, dockerfile: infra/docker/Dockerfile.web, app: web-storefront }
+          - { name: web-admin-storefront, dockerfile: infra/docker/Dockerfile.web, app: web-admin-storefront }
+          - { name: web-d2c-seller, dockerfile: infra/docker/Dockerfile.web, app: web-d2c-seller }
+          - { name: web-d2c-seller-admin, dockerfile: infra/docker/Dockerfile.web, app: web-d2c-seller-admin }
+          - { name: web-retail-seller, dockerfile: infra/docker/Dockerfile.web, app: web-retail-seller }
+          - { name: web-retail-seller-admin, dockerfile: infra/docker/Dockerfile.web, app: web-retail-seller-admin }
+          - { name: web-franchise, dockerfile: infra/docker/Dockerfile.web, app: web-franchise }
+          - { name: web-franchise-admin, dockerfile: infra/docker/Dockerfile.web, app: web-franchise-admin }
+          - { name: web-affiliate, dockerfile: infra/docker/Dockerfile.web, app: web-affiliate }
+          - { name: web-affiliate-admin, dockerfile: infra/docker/Dockerfile.web, app: web-affiliate-admin }
+    # Exact (comma-delimited) match so "web-d2c-seller" doesn't also select
+    # "web-d2c-seller-admin".
+    if: ${{ inputs.services == 'all' || contains(format(',{0},', inputs.services), format(',{0},', matrix.name)) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
-          cache: "pnpm"
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # API image (single build).
-      - name: Build + push API image
-        if: contains(inputs.services, 'api') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
+      - name: Build + push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
         with:
           context: .
-          file: infra/docker/Dockerfile.api
+          file: ${{ matrix.dockerfile }}
           push: true
+          # APP + the build-time NEXT_PUBLIC_API_URL only apply to web images;
+          # both lines are empty for the api build (blank lines are ignored).
+          build-args: |
+            ${{ matrix.app != '' && format('APP={0}', matrix.app) || '' }}
+            ${{ matrix.app != '' && format('NEXT_PUBLIC_API_URL={0}', needs.prep.outputs.api_url) || '' }}
           tags: |
-            ghcr.io/${{ github.repository }}/api:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository }}/api:${{ inputs.target }}-latest
-          cache-from: type=gha,scope=api
-          cache-to: type=gha,scope=api,mode=max
-
-      # Frontend matrix — each web-* app built in parallel.
-      # The list mirrors the frontend-ci matrix; keep them in lockstep.
-      - name: Build + push web-storefront
-        if: contains(inputs.services, 'web-storefront') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: infra/docker/Dockerfile.web
-          push: true
-          build-args: APP=web-storefront
-          tags: |
-            ghcr.io/${{ github.repository }}/web-storefront:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository }}/web-storefront:${{ inputs.target }}-latest
-          cache-from: type=gha,scope=web-storefront
-          cache-to: type=gha,scope=web-storefront,mode=max
-
-      - name: Build + push web-admin-storefront
-        if: contains(inputs.services, 'web-admin-storefront') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: infra/docker/Dockerfile.web
-          push: true
-          build-args: APP=web-admin-storefront
-          tags: |
-            ghcr.io/${{ github.repository }}/web-admin-storefront:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository }}/web-admin-storefront:${{ inputs.target }}-latest
-          cache-from: type=gha,scope=web-admin-storefront
-          cache-to: type=gha,scope=web-admin-storefront,mode=max
-
-      - name: Build + push web-d2c-seller-admin
-        if: contains(inputs.services, 'web-d2c-seller-admin') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: infra/docker/Dockerfile.web
-          push: true
-          build-args: APP=web-d2c-seller-admin
-          tags: |
-            ghcr.io/${{ github.repository }}/web-d2c-seller-admin:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository }}/web-d2c-seller-admin:${{ inputs.target }}-latest
-          cache-from: type=gha,scope=web-d2c-seller-admin
-          cache-to: type=gha,scope=web-d2c-seller-admin,mode=max
-
-      - name: Build + push web-d2c-seller
-        if: contains(inputs.services, 'web-d2c-seller') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: infra/docker/Dockerfile.web
-          push: true
-          build-args: APP=web-d2c-seller
-          tags: |
-            ghcr.io/${{ github.repository }}/web-d2c-seller:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository }}/web-d2c-seller:${{ inputs.target }}-latest
-          cache-from: type=gha,scope=web-d2c-seller
-          cache-to: type=gha,scope=web-d2c-seller,mode=max
-
-      - name: Build + push web-retail-seller-admin
-        if: contains(inputs.services, 'web-retail-seller-admin') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: infra/docker/Dockerfile.web
-          push: true
-          build-args: APP=web-retail-seller-admin
-          tags: |
-            ghcr.io/${{ github.repository }}/web-retail-seller-admin:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository }}/web-retail-seller-admin:${{ inputs.target }}-latest
-          cache-from: type=gha,scope=web-retail-seller-admin
-          cache-to: type=gha,scope=web-retail-seller-admin,mode=max
-
-      - name: Build + push web-retail-seller
-        if: contains(inputs.services, 'web-retail-seller') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: infra/docker/Dockerfile.web
-          push: true
-          build-args: APP=web-retail-seller
-          tags: |
-            ghcr.io/${{ github.repository }}/web-retail-seller:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository }}/web-retail-seller:${{ inputs.target }}-latest
-          cache-from: type=gha,scope=web-retail-seller
-          cache-to: type=gha,scope=web-retail-seller,mode=max
-
-      - name: Build + push web-franchise
-        if: contains(inputs.services, 'web-franchise') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: infra/docker/Dockerfile.web
-          push: true
-          build-args: APP=web-franchise
-          tags: |
-            ghcr.io/${{ github.repository }}/web-franchise:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository }}/web-franchise:${{ inputs.target }}-latest
-          cache-from: type=gha,scope=web-franchise
-          cache-to: type=gha,scope=web-franchise,mode=max
-
-      - name: Build + push web-franchise-admin
-        if: contains(inputs.services, 'web-franchise-admin') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: infra/docker/Dockerfile.web
-          push: true
-          build-args: APP=web-franchise-admin
-          tags: |
-            ghcr.io/${{ github.repository }}/web-franchise-admin:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository }}/web-franchise-admin:${{ inputs.target }}-latest
-          cache-from: type=gha,scope=web-franchise-admin
-          cache-to: type=gha,scope=web-franchise-admin,mode=max
-
-      - name: Build + push web-affiliate
-        if: contains(inputs.services, 'web-affiliate') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: infra/docker/Dockerfile.web
-          push: true
-          build-args: APP=web-affiliate
-          tags: |
-            ghcr.io/${{ github.repository }}/web-affiliate:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository }}/web-affiliate:${{ inputs.target }}-latest
-          cache-from: type=gha,scope=web-affiliate
-          cache-to: type=gha,scope=web-affiliate,mode=max
-
-      - name: Build + push web-affiliate-admin
-        if: contains(inputs.services, 'web-affiliate-admin') || inputs.services == 'all'
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: infra/docker/Dockerfile.web
-          push: true
-          build-args: APP=web-affiliate-admin
-          tags: |
-            ghcr.io/${{ github.repository }}/web-affiliate-admin:${{ steps.tag.outputs.tag }}
-            ghcr.io/${{ github.repository }}/web-affiliate-admin:${{ inputs.target }}-latest
-          cache-from: type=gha,scope=web-affiliate-admin
-          cache-to: type=gha,scope=web-affiliate-admin,mode=max
+            ${{ steps.ecr.outputs.registry }}/sportsmart-${{ inputs.target }}/${{ matrix.name }}:${{ needs.prep.outputs.image_tag }}
+            ${{ steps.ecr.outputs.registry }}/sportsmart-${{ inputs.target }}/${{ matrix.name }}:${{ inputs.target }}-latest
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,scope=${{ matrix.name }},mode=max
 
   rollout:
     name: Rollout (${{ inputs.target }})
     runs-on: ubuntu-latest
-    needs: build-and-push
-    # The `environment:` block invokes GitHub's environment protection
-    # rules. For `production` the workflow waits here for the manual
-    # approval configured in the repo's Environments tab — that's the
-    # real safety check on prod deploys, not anything in this YAML.
+    needs: [prep, build]
+    # GitHub environment protection (required reviewers for production) gates
+    # this job — the real prod safety check.
     environment:
       name: ${{ inputs.target }}
     permissions:
@@ -269,12 +153,20 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Apply rollout
-        env:
-          TARGET: ${{ inputs.target }}
-          SERVICES: ${{ inputs.services }}
-          IMAGE_TAG: ${{ needs.build-and-push.outputs.image_tag }}
-        # Delegate the actual cluster command to a script under
-        # infra/scripts/ so ops can swap kubectl/Helm/ECS/AppRunner
-        # without touching this YAML.
-        run: ./infra/scripts/deploy.sh "$TARGET" "$SERVICES" "$IMAGE_TAG"
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # deploy.sh runs migrations (one-shot Fargate task) then force-new-
+      # deployment on each service, reading cluster/subnets/sg/migrate-family
+      # from SSM. Circuit-breaker rollback on health-check failure.
+      - name: Roll out
+        run: ./infra/scripts/deploy.sh "${{ inputs.target }}" "${{ inputs.services }}" "${{ needs.prep.outputs.image_tag }}"
+
+      # End-to-end gate: verify each deployed service through the public
+      # ALB/DNS/TLS (the layer ECS health checks don't cover). Fails the deploy
+      # if any service isn't actually serving.
+      - name: Smoke test
+        run: ./infra/scripts/smoke.sh "${{ inputs.target }}" "${{ inputs.services }}"

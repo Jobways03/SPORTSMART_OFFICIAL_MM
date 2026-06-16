@@ -1,0 +1,59 @@
+# Staging inputs. Apply with:
+#   terraform apply -var-file=staging.tfvars
+#
+# Replace sportsmart.com with the real registered domain whose Route53 public
+# hosted zone exists in this account. node_env=staging boots WITHOUT the
+# external Razorpay/R2 creds (the prod-only boot-gate is skipped), so a first
+# bring-up needs no external_secrets.
+
+region   = "ap-south-1"
+env      = "staging"
+node_env = "staging"
+
+hosted_zone_name   = "sportsmart.com"
+env_domain         = "staging.sportsmart.com"
+auth_cookie_domain = ".staging.sportsmart.com"
+
+# OIDC deploy-role trust — MUST equal the real GitHub remote, else every
+# Actions deploy fails at AssumeRole.
+github_repo = "Jobways03/SPORTSMART_OFFICIAL_MM"
+
+image_tag = "staging-latest"
+
+# Minimal always-on staging sizing (~$150/mo). Smallest viable instances —
+# db.t4g.micro (~1 GB) and cache.t4g.micro (~0.5 GB) are enough for a low-
+# traffic test env; bump to t4g.small if migrations/connections struggle.
+rds_instance_class        = "db.t4g.micro"
+rds_multi_az              = false
+rds_backup_retention_days = 7
+rds_deletion_protection   = false
+elasticache_node_type     = "cache.t4g.micro"
+
+# Single NAT + single-node Redis + immediate secret deletion = cheap staging.
+# VPC interface endpoints off (their ~$95/mo dwarfs the NAT data they'd save at
+# staging traffic); 3-day log retention.
+redis_ha                    = false
+nat_per_az                  = false
+enable_vpc_endpoints        = false
+secret_recovery_window_days = 0
+log_retention_days          = 3
+
+# Run staging lean: 1 task each, and spin the seldom-tested portals to 0
+# (scale to 1 on demand: aws ecs update-service --desired-count 1). The api
+# and storefront still autoscale from 1.
+service_desired_count = {
+  api                     = 1
+  web-storefront          = 1
+  web-admin-storefront    = 1
+  web-d2c-seller          = 0
+  web-d2c-seller-admin    = 0
+  web-retail-seller       = 0
+  web-retail-seller-admin = 0
+  web-franchise           = 0
+  web-franchise-admin     = 0
+  web-affiliate           = 0
+  web-affiliate-admin     = 0
+}
+
+# alarm_emails = ["oncall@sportsmart.com"]  # uncomment to receive alerts
+
