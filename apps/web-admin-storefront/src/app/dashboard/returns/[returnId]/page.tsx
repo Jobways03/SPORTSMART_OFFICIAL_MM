@@ -12,9 +12,18 @@ import {
   LiabilityParty,
   CustomerRemedy,
 } from '@/services/admin-returns.service';
+import { validateUploadFile } from '@/lib/validators';
 import CaseTimeline from '@/components/CaseTimeline';
 
-type QcRow = { returnItemId: string; qcOutcome: QcOutcome; qcQuantityApproved: number; qcNotes: string };
+type QcRow = {
+  returnItemId: string;
+  qcOutcome: QcOutcome;
+  qcQuantityApproved: number;
+  qcNotes: string;
+  // Partial-VALUE refund override in paise (gross, tax-inclusive). Only used
+  // when qcOutcome === 'PARTIAL'; undefined = refund the full line amount.
+  qcPartialRefundPaise?: number;
+};
 
 const STATUS_COLORS: Record<string, { bg: string; color: string }> = {
   REQUESTED: { bg: '#fef3c7', color: '#92400e' },
@@ -78,6 +87,12 @@ export default function AdminReturnDetailPage() {
   const [qcOverallNotes, setQcOverallNotes] = useState('');
   const [qcLiabilityParty, setQcLiabilityParty] = useState<LiabilityParty | ''>('');
   const [qcCustomerRemedy, setQcCustomerRemedy] = useState<CustomerRemedy | ''>('');
+
+  // Admin QC-evidence upload — lets the admin attach inspection photos of the
+  // returned item so the RETURN_QC_MIN_EVIDENCE gate is met even when the
+  // seller / warehouse contributed none.
+  const [qcEvidenceFile, setQcEvidenceFile] = useState<File | null>(null);
+  const [qcEvidenceDesc, setQcEvidenceDesc] = useState('');
 
   // Initiate Refund modal — returns always credit the wallet, so no
   // method-picker state is needed; the modal just confirms the amount.
@@ -276,6 +291,41 @@ export default function AdminReturnDetailPage() {
     }
   };
 
+  const handleUploadQcEvidence = async () => {
+    const fileErr = validateUploadFile(qcEvidenceFile, {
+      maxBytes: 5 * 1024 * 1024,
+      types: ['image/jpeg', 'image/png', 'image/webp'],
+    });
+    if (fileErr) {
+      void notify(
+        fileErr === 'Unsupported file type'
+          ? 'Only JPG, PNG, and WEBP images are allowed'
+          : fileErr,
+      );
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await adminReturnsService.uploadQcEvidence(
+        returnId,
+        qcEvidenceFile as File,
+        qcEvidenceDesc.trim() || undefined,
+      );
+      if (res.success) {
+        void notify('QC evidence uploaded');
+        setQcEvidenceFile(null);
+        setQcEvidenceDesc('');
+        load();
+      } else {
+        void notify(res.message || 'Upload failed');
+      }
+    } catch (e: any) {
+      void notify(e?.body?.message || e?.message || 'Upload failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleClose = async () => {
     const ok = await confirmDialog({
       message: 'Close this return? This action cannot be undone.',
@@ -382,6 +432,14 @@ export default function AdminReturnDetailPage() {
           qcQuantityApproved:
             r.qcOutcome === 'REJECTED' || r.qcOutcome === 'DAMAGED' ? 0 : r.qcQuantityApproved,
           qcNotes: r.qcNotes || undefined,
+          // Partial-VALUE override (paise). Only sent for PARTIAL rows the
+          // admin actually reduced; omitted otherwise so the backend refunds
+          // the full qty-derived amount.
+          qcRefundAmountInPaise:
+            r.qcOutcome === 'PARTIAL' &&
+            typeof r.qcPartialRefundPaise === 'number'
+              ? r.qcPartialRefundPaise
+              : undefined,
         })),
         overallNotes: qcOverallNotes || undefined,
         liabilityParty: qcLiabilityParty || undefined,
@@ -1217,10 +1275,77 @@ export default function AdminReturnDetailPage() {
         );
       })()}
 
+      {/* Add QC Evidence — admin uploads inspection photos of the returned
+          item. Surfaced only at the RECEIVED stage (when QC is imminent) so
+          the admin can satisfy the min-evidence gate when the seller /
+          warehouse contributed nothing. Refreshes the return on success so
+          the attached-count + QC gate update immediately. */}
+      {canRunQc && (
+        <div style={{ ...cardStyleV2, marginBottom: 20, borderLeft: '4px solid #2563eb' }}>
+          <div style={cardHeaderV2}>
+            <span>Add QC Evidence</span>
+            <span
+              style={{
+                padding: '2px 10px',
+                borderRadius: 999,
+                background: (data.evidence?.length ?? 0) >= 2 ? '#d1fae5' : '#fef3c7',
+                color: (data.evidence?.length ?? 0) >= 2 ? '#065f46' : '#92400e',
+                fontSize: 11,
+                fontWeight: 700,
+              }}
+            >
+              {data.evidence?.length ?? 0} attached
+            </span>
+          </div>
+          <div style={{ padding: 16 }}>
+            <div style={{ fontSize: 12, color: '#374151', marginBottom: 12, lineHeight: 1.5 }}>
+              Upload inspection photos of the returned item. QC submission
+              requires at least 2 evidence photos — add one here if the seller
+              or warehouse didn&apos;t contribute enough.
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <input
+                // Remount after each successful upload (evidence count changes)
+                // so the native picker clears its displayed filename.
+                key={`qc-ev-input-${data.evidence?.length ?? 0}`}
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                onChange={(e) => setQcEvidenceFile(e.target.files?.[0] ?? null)}
+                disabled={busy}
+                style={{ fontSize: 13 }}
+              />
+              <input
+                type="text"
+                placeholder="Description (optional) — e.g. 'cracked handle, as inspected'"
+                value={qcEvidenceDesc}
+                onChange={(e) => setQcEvidenceDesc(e.target.value)}
+                disabled={busy}
+                maxLength={200}
+                style={qcInputStyle}
+              />
+              <div>
+                <button
+                  onClick={handleUploadQcEvidence}
+                  disabled={busy || !qcEvidenceFile}
+                  style={{
+                    ...approveBtn,
+                    opacity: busy || !qcEvidenceFile ? 0.6 : 1,
+                    cursor: busy || !qcEvidenceFile ? 'not-allowed' : 'pointer',
+                  }}
+                >
+                  {busy ? 'Uploading…' : 'Upload QC Photo'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Seller Response — surfaces the seller's accept/contest decision
           and free-text note so admin can weigh the seller's side before
           issuing a QC decision. Hidden until the seller has responded. */}
-      {data.sellerResponseStatus && (
+      {(data.sellerResponseStatus === 'ACCEPTED' ||
+        data.sellerResponseStatus === 'CONTESTED') && (
         <div
           style={{
             ...cardStyleV2,
@@ -1701,6 +1826,33 @@ export default function AdminReturnDetailPage() {
                     const refund = taxable + totalTax;
                     return { gross, discount, taxable, cgst, sgst, igst, totalTax, refund };
                   })();
+                  // Partial-VALUE refund. When the outcome is PARTIAL the admin
+                  // can give the CUSTOMER back less than the full line.
+                  // `fullRefundPaise` is the 100%-of-approved-qty refund; the
+                  // override (rupees the admin typed, in paise) scales every
+                  // figure below so the customer sees the real partial refund
+                  // and the GST reversal stays proportional.
+                  const fullRefundPaise = preview
+                    ? preview.refund
+                    : willRefund
+                      ? Math.round(
+                          (Number(item?.orderItem?.unitPrice ?? 0) || 0) *
+                            approvedQty *
+                            100,
+                        )
+                      : 0;
+                  const isPartial = row.qcOutcome === 'PARTIAL';
+                  const overridePaise =
+                    isPartial && typeof row.qcPartialRefundPaise === 'number'
+                      ? Math.min(
+                          Math.max(0, row.qcPartialRefundPaise),
+                          fullRefundPaise,
+                        )
+                      : fullRefundPaise;
+                  const valueFraction =
+                    isPartial && fullRefundPaise > 0
+                      ? overridePaise / fullRefundPaise
+                      : 1;
                   return (
                     <div
                       key={row.returnItemId}
@@ -1755,6 +1907,45 @@ export default function AdminReturnDetailPage() {
                           />
                         </div>
                       </div>
+                      {isPartial && (
+                        <div style={{ marginTop: 8 }}>
+                          <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>
+                            Customer refund amount (₹) — partial, max ₹
+                            {(fullRefundPaise / 100).toFixed(2)}
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            max={fullRefundPaise / 100}
+                            step="0.01"
+                            value={overridePaise / 100}
+                            onChange={(e) => {
+                              const rupees = Math.max(
+                                0,
+                                Math.min(
+                                  fullRefundPaise / 100,
+                                  Number(e.target.value) || 0,
+                                ),
+                              );
+                              setQcRows((prev) =>
+                                prev.map((r, i) =>
+                                  i === idx
+                                    ? {
+                                        ...r,
+                                        qcPartialRefundPaise: Math.round(rupees * 100),
+                                      }
+                                    : r,
+                                ),
+                              );
+                            }}
+                            style={{ ...qcInputStyle, marginTop: 2 }}
+                          />
+                          <div style={{ fontSize: 10, color: '#6b7280', marginTop: 3 }}>
+                            The customer is refunded this amount; GST reversal &amp;
+                            seller commission scale to match.
+                          </div>
+                        </div>
+                      )}
                       <div style={{ marginTop: 8 }}>
                         <label
                           style={{
@@ -1816,19 +2007,22 @@ export default function AdminReturnDetailPage() {
                             Refund preview
                           </div>
                           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 16, rowGap: 4 }}>
-                            <div style={{ color: '#374151' }}>Gross ({approvedQty}/{purchasedQty})</div>
-                            <div style={{ textAlign: 'right' }}>₹{(preview.gross / 100).toFixed(2)}</div>
+                            <div style={{ color: '#374151' }}>
+                              Gross ({approvedQty}/{purchasedQty})
+                              {isPartial && valueFraction < 1 ? ' · partial' : ''}
+                            </div>
+                            <div style={{ textAlign: 'right' }}>₹{((preview.gross * valueFraction) / 100).toFixed(2)}</div>
                             <div style={{ color: '#dc2626' }}>Allocated discount</div>
-                            <div style={{ textAlign: 'right', color: '#dc2626' }}>−₹{(preview.discount / 100).toFixed(2)}</div>
+                            <div style={{ textAlign: 'right', color: '#dc2626' }}>−₹{((preview.discount * valueFraction) / 100).toFixed(2)}</div>
                             <div style={{ color: '#374151', fontWeight: 600 }}>Net taxable refundable</div>
-                            <div style={{ textAlign: 'right', fontWeight: 600 }}>₹{(preview.taxable / 100).toFixed(2)}</div>
+                            <div style={{ textAlign: 'right', fontWeight: 600 }}>₹{((preview.taxable * valueFraction) / 100).toFixed(2)}</div>
                             {preview.totalTax > 0 && (
                               <>
                                 <div style={{ color: '#6b7280' }}>
                                   GST reversal{preview.cgst > 0 ? ' (CGST + SGST)' : ' (IGST)'}
                                 </div>
                                 <div style={{ textAlign: 'right' }}>
-                                  +₹{(preview.totalTax / 100).toFixed(2)}
+                                  +₹{((preview.totalTax * valueFraction) / 100).toFixed(2)}
                                 </div>
                               </>
                             )}
@@ -1844,7 +2038,7 @@ export default function AdminReturnDetailPage() {
                                 fontSize: 13,
                               }}
                             >
-                              ₹{(preview.refund / 100).toFixed(2)}
+                              ₹{((preview.refund * valueFraction) / 100).toFixed(2)}
                             </div>
                           </div>
                         </div>
@@ -1862,9 +2056,17 @@ export default function AdminReturnDetailPage() {
                           }}
                         >
                           Legacy order — no per-item discount snapshot. Refund will use
-                          gross unit price × {approvedQty} ={' '}
+                          gross unit price × {approvedQty}
+                          {isPartial && valueFraction < 1
+                            ? ` × ${Math.round(valueFraction * 100)}%`
+                            : ''}{' '}
+                          ={' '}
                           <strong>
-                            ₹{((Number(item?.orderItem?.unitPrice ?? 0) || 0) * approvedQty).toFixed(2)}
+                            ₹{(
+                              (Number(item?.orderItem?.unitPrice ?? 0) || 0) *
+                              approvedQty *
+                              valueFraction
+                            ).toFixed(2)}
                           </strong>
                         </div>
                       )}
@@ -1962,7 +2164,7 @@ export default function AdminReturnDetailPage() {
                 </div>
               </div>
               <div style={{ marginTop: 12 }}>
-                <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Overall notes (optional)</label>
+                <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Overall notes</label>
                 <textarea
                   value={qcOverallNotes}
                   onChange={(e) => setQcOverallNotes(e.target.value)}

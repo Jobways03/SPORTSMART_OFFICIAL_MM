@@ -15,6 +15,8 @@ import { buildCreateShipmentRequest } from '../mappers/sub-order-to-shipment.map
 import { buildOrderReference } from '../order-reference.util';
 import { signLabelToken } from '../label-token.util';
 import type { DomainShipment } from '../ports/outbound/courier-gateway.port';
+import { HtmlToPdfService } from '../../../tax/infrastructure/pdf/html-to-pdf.service';
+import { SPORTSMART_LOGO_PNG_BASE64 } from './sportsmart-logo.asset';
 
 // pdfkit's STANDALONE build embeds its font metrics (virtual-fs). The default
 // build reads .afm files from js/data/ via __dirname, which breaks once webpack
@@ -35,6 +37,10 @@ const PDFDocument = require('pdfkit/js/pdfkit.standalone.js') as typeof import('
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const bwipjs = require('bwip-js') as {
   toSVG(opts: Record<string, unknown>): string;
+  toBuffer(
+    opts: Record<string, unknown>,
+    cb: (err: Error | null, png: Buffer) => void,
+  ): void;
 };
 
 const PAGE_W = 288; // 4 inch @ 72pt
@@ -46,7 +52,10 @@ const CW = PAGE_W - M * 2; // content width
 export class ShippingLabelPdfService {
   private readonly logger = new Logger(ShippingLabelPdfService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly htmlToPdf: HtmlToPdfService,
+  ) {}
 
   /**
    * The public URL the frontend opens for our label — a no-auth, signed-token
@@ -198,7 +207,19 @@ export class ShippingLabelPdfService {
     const orderRef = buildOrderReference(req.shipment.orderNumber, subOrderId);
 
     try {
-      return await this.render({ awb, courier, orderRef, s: req.shipment });
+      // Primary: HTML → Puppeteer (renders the real PNG logo). Falls back to
+      // the pdfkit vector label if Chromium is unavailable; the controller
+      // falls back to the carrier's own label if this returns null.
+      try {
+        return await this.renderHtml({ awb, courier, orderRef, s: req.shipment });
+      } catch (htmlErr) {
+        this.logger.warn(
+          `HTML label render failed for ${subOrderId}; falling back to pdfkit: ${
+            (htmlErr as Error).message
+          }`,
+        );
+        return await this.render({ awb, courier, orderRef, s: req.shipment });
+      }
     } catch (e) {
       this.logger.error(
         `Custom label render failed for ${subOrderId} (AWB ${awb}): ${
@@ -219,6 +240,152 @@ export class ShippingLabelPdfService {
       paddingwidth: 0,
       paddingheight: 0,
     });
+  }
+
+  /** Code-128 barcode as a PNG data URI for the HTML (Puppeteer) label. */
+  private barcodePngDataUri(text: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      bwipjs.toBuffer(
+        {
+          bcid: 'code128',
+          text,
+          scale: 3,
+          height: 12,
+          includetext: false,
+          paddingwidth: 0,
+          paddingheight: 0,
+        },
+        (err, png) =>
+          err
+            ? reject(err)
+            : resolve(`data:image/png;base64,${png.toString('base64')}`),
+      );
+    });
+  }
+
+  /** Minimal HTML-escape for values interpolated into the label template. */
+  private esc(v: unknown): string {
+    return String(v ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  /**
+   * HTML → Puppeteer label (renders the real PNG logo, which pdfkit's bundled
+   * standalone build cannot). 4x6in page; same data as the pdfkit label.
+   */
+  private async renderHtml(data: {
+    awb: string;
+    courier: string;
+    orderRef: string;
+    s: DomainShipment;
+  }): Promise<Buffer> {
+    const { awb, courier, orderRef, s } = data;
+    const [awbPng, refPng] = await Promise.all([
+      this.barcodePngDataUri(awb),
+      this.barcodePngDataUri(orderRef),
+    ]);
+    const html = this.buildLabelHtml({ awb, courier, orderRef, s, awbPng, refPng });
+    return this.htmlToPdf.render(html, { width: '4in', height: '6in' });
+  }
+
+  private buildLabelHtml(d: {
+    awb: string;
+    courier: string;
+    orderRef: string;
+    s: DomainShipment;
+    awbPng: string;
+    refPng: string;
+  }): string {
+    const { awb, courier, orderRef, s, awbPng, refPng } = d;
+    const e = (v: unknown) => this.esc(v);
+    const courierUp = e((courier || 'Delhivery').toUpperCase());
+    // Pricing intentionally omitted per request — show only the payment mode
+    // (COD / PREPAID). The destination PIN stays on the right of the band.
+    const payLine = s.paymentMode === 'cod' ? 'COD' : 'PREPAID';
+    const dropAddr = [s.shipping.line1, s.shipping.line2]
+      .filter(Boolean)
+      .map(e)
+      .join(', ');
+    const sellerCol =
+      s.sellerName || s.sellerAddress
+        ? `<div class="col">
+             <span class="k">FROM / SELLER</span>
+             ${s.sellerName ? `<div class="nm">${e(s.sellerName)}</div>` : ''}
+             ${s.sellerAddress ? `<div class="ad">${e(s.sellerAddress)}</div>` : ''}
+             ${s.sellerGstin ? `<div class="ad">GSTIN: ${e(s.sellerGstin)}</div>` : ''}
+           </div>`
+        : '';
+    const returnAddr = e(s.sellerAddress || s.sellerName || 'Pickup warehouse');
+    const logo = `data:image/png;base64,${SPORTSMART_LOGO_PNG_BASE64}`;
+
+    return `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+      @page { size: 4in 6in; margin: 0; }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 4in; height: 6in; font-family: Helvetica, Arial, sans-serif; color: #0f172a; -webkit-print-color-adjust: exact; }
+      .pad { width: 4in; height: 6in; padding: 7px; }
+      .frame { height: 100%; border: 1px solid #cbd5e1; border-radius: 9px; overflow: hidden; display: flex; flex-direction: column; }
+      .k { display: block; font-size: 7.5px; font-weight: 700; letter-spacing: 1px; color: #94a3b8; }
+      .head { display: flex; align-items: center; justify-content: space-between; padding: 11px 14px 10px; }
+      .head img { height: 60px; width: auto; max-width: 66%; object-fit: contain; }
+      .head .courier { font-weight: 800; font-size: 11px; letter-spacing: 1px; color: #0b1f3a; }
+      .route { display: flex; align-items: stretch; border-top: 2px solid #0b1f3a; border-bottom: 1px solid #e2e8f0; }
+      .route .pay { flex: 0 0 36%; background: #0b1f3a; color: #fff; font-weight: 800; font-size: 16px; letter-spacing: .5px; display: flex; align-items: center; padding: 8px 14px; }
+      .route .pin { flex: 1; padding: 6px 14px; display: flex; flex-direction: column; justify-content: center; }
+      .route .pin .v { font-size: 20px; font-weight: 800; letter-spacing: 1px; color: #0b1f3a; line-height: 1.05; }
+      .awb { text-align: center; padding: 9px 12px 8px; border-bottom: 1px solid #e2e8f0; }
+      .awb img { display: block; margin: 4px auto 0; height: 44px; }
+      .awb .v { font-weight: 700; font-size: 13px; letter-spacing: 2px; margin-top: 2px; }
+      .body { flex: 1; padding: 11px 14px; display: flex; flex-direction: column; justify-content: center; }
+      .to .nm { font-weight: 800; font-size: 15px; margin-top: 2px; }
+      .to .ad { font-size: 10.5px; color: #1e293b; margin-top: 3px; line-height: 1.45; }
+      .meta { display: flex; gap: 16px; margin-top: 14px; padding-top: 10px; border-top: 1px solid #e2e8f0; }
+      .meta .col { flex: 1; }
+      .meta .nm { font-weight: 700; font-size: 10px; color: #0f172a; margin-top: 2px; }
+      .meta .ad { font-size: 8.5px; color: #475569; margin-top: 1px; line-height: 1.35; }
+      .ref { text-align: center; padding: 8px 12px 3px; border-top: 1px dashed #cbd5e1; }
+      .ref img { display: block; margin: 4px auto 0; height: 30px; }
+      .ref .v { font-weight: 700; font-size: 9px; letter-spacing: .5px; margin-top: 1px; }
+      .foot { text-align: center; font-size: 7px; color: #94a3b8; padding: 3px 0 7px; }
+    </style></head><body>
+      <div class="pad"><div class="frame">
+        <div class="head">
+          <img src="${logo}" alt="SportSmart"/>
+          <div class="courier">${courierUp}</div>
+        </div>
+        <div class="route">
+          <div class="pay">${payLine}</div>
+          <div class="pin"><span class="k">DESTINATION PIN</span><span class="v">${e(s.shipping.pincode)}</span></div>
+        </div>
+        <div class="awb">
+          <span class="k">AIRWAY BILL NO.</span>
+          <img src="${awbPng}" alt="AWB"/>
+          <div class="v">${e(awb)}</div>
+        </div>
+        <div class="body">
+          <div class="to">
+            <span class="k">DELIVER TO</span>
+            <div class="nm">${e(s.shipping.name)}</div>
+            <div class="ad">${dropAddr}<br/>${e(s.shipping.city)}, ${e(s.shipping.state)} - ${e(s.shipping.pincode)}<br/>Ph: ${e(s.shipping.phone)}</div>
+          </div>
+          <div class="meta">
+            ${sellerCol}
+            <div class="col">
+              <span class="k">RETURN TO</span>
+              <div class="ad">${returnAddr}</div>
+            </div>
+          </div>
+        </div>
+        <div class="ref">
+          <span class="k">ORDER REFERENCE</span>
+          <img src="${refPng}" alt="Order ref"/>
+          <div class="v">${e(orderRef)}</div>
+        </div>
+        <div class="foot">SportSmart Logistics &nbsp;&middot;&nbsp; ${courierUp} &nbsp;&middot;&nbsp; Handle with care</div>
+      </div></div>
+    </body></html>`;
   }
 
   private async render(data: {
@@ -296,17 +463,36 @@ export class ShippingLabelPdfService {
       .strokeColor('#0b1f3a')
       .stroke();
 
-    // ── Header (brand + courier) + accent bar ───────────────
-    doc.font('Helvetica-Bold').fontSize(15).fillColor('#0b1f3a').text('SPORTSMART', M, y);
+    // ── Header — SportSmart wordmark, drawn as VECTOR (the bundled
+    // pdfkit.standalone can't render raster images; its fs is shimmed out, so
+    // doc.image() throws — same reason barcodes are drawn as vector bars). ─
+    const RED = '#ED1C24';
+    const logoY = y;
+    // Soccer-ball mark (red disc + navy ring + white seams).
+    doc.circle(M + 8, logoY + 9, 7).fill(RED);
+    doc.lineWidth(1).circle(M + 8, logoY + 9, 7).stroke('#0b1f3a');
+    doc.save().lineWidth(0.7).strokeColor('#ffffff');
+    doc.moveTo(M + 8, logoY + 3).lineTo(M + 8, logoY + 15).stroke();
+    doc.moveTo(M + 3, logoY + 7).lineTo(M + 13, logoY + 12).stroke();
+    doc.restore();
+    // Wordmark + .com (Helvetica-BoldOblique ≈ the logo's slanted bold).
+    const wmX = M + 21;
+    doc.font('Helvetica-BoldOblique').fontSize(16).fillColor(RED).text('SPORTSMART', wmX, logoY + 1, { lineBreak: false });
+    const wmW = doc.widthOfString('SPORTSMART');
+    doc.font('Helvetica-Bold').fontSize(7).fillColor(RED).text('.com', wmX + wmW + 1, logoY + 3, { lineBreak: false });
+    // Tagline
+    doc
+      .font('Helvetica-Bold')
+      .fontSize(6)
+      .fillColor('#334155')
+      .text('PLAY SMART  ·  STAY FIT', wmX, logoY + 20, { characterSpacing: 1, lineBreak: false });
+    // Courier (right)
     doc
       .font('Helvetica-Bold')
       .fontSize(9)
       .fillColor('#0b1f3a')
-      .text((courier || 'Delhivery').toUpperCase(), M, y + 4, {
-        width: CW,
-        align: 'right',
-      });
-    y += 21;
+      .text((courier || 'Delhivery').toUpperCase(), M, logoY + 7, { width: CW, align: 'right' });
+    y = logoY + 30;
     doc.rect(M, y, CW, 2.2).fill('#0b1f3a');
     y += 10;
 
@@ -318,10 +504,8 @@ export class ShippingLabelPdfService {
     block(awb, 'Helvetica-Bold', 13, '#000', { align: 'center', gap: 8 });
 
     // ── Payment + destination PIN band (filled) ─────────────
-    const payLine =
-      s.paymentMode === 'cod'
-        ? `COD  Rs.${s.codAmount ?? s.totalAmount}`
-        : 'PREPAID';
+    // Pricing omitted per request — payment mode only (matches the HTML label).
+    const payLine = s.paymentMode === 'cod' ? 'COD' : 'PREPAID';
     const bandH = 24;
     doc.rect(M, y, CW, bandH).fill('#0b1f3a');
     doc.font('Helvetica-Bold').fontSize(12).fillColor('#ffffff').text(payLine, M + 9, y + 7);

@@ -275,6 +275,87 @@ export class AdminRefundApprovalsController {
       }
     }
 
+    // ── Universal context (Phase 253) ──────────────────────────────────────
+    // Resolve the order, the customer and who raised the instruction for EVERY
+    // sourceType (incl. MANUAL/GOODWILL/REPLACEMENT/VERIFICATION_REJECTION), so
+    // finance can never be asked to approve money with no context.
+    const [order, customer, firstHistory, cancelInfo] = await Promise.all([
+      row.orderId
+        ? this.prisma.masterOrder.findUnique({
+            where: { id: row.orderId },
+            select: {
+              orderNumber: true,
+              orderStatus: true,
+              paymentMethod: true,
+            },
+          })
+        : Promise.resolve(null),
+      this.prisma.user.findUnique({
+        where: { id: row.customerId },
+        select: {
+          firstName: true,
+          lastName: true,
+          email: true,
+          phone: true,
+        },
+      }),
+      // Earliest status-history row = who created/requested the instruction.
+      this.prisma.refundInstructionStatusHistory.findFirst({
+        where: { instructionId: row.id },
+        orderBy: { occurredAt: 'asc' },
+        select: { actorId: true, notes: true, occurredAt: true },
+      }),
+      // Cancellation provenance — WHO cancelled the order + WHY. Cancellation is
+      // sub-order level; take the most-recently-cancelled sub-order of this
+      // master order. `cancellationSource` discriminates ADMIN/CUSTOMER/SYSTEM;
+      // `canceller` resolves the admin's name when an admin did it.
+      row.orderId
+        ? this.prisma.subOrder.findFirst({
+            where: { masterOrderId: row.orderId, cancelledAt: { not: null } },
+            orderBy: { cancelledAt: 'desc' },
+            select: {
+              cancelledAt: true,
+              cancelReason: true,
+              cancellationSource: true,
+              canceller: { select: { name: true } },
+            },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    let requestedByName: string | null = null;
+    if (firstHistory?.actorId) {
+      const admin = await this.prisma.admin.findUnique({
+        where: { id: firstHistory.actorId },
+        select: { name: true, email: true },
+      });
+      requestedByName = admin?.name ?? admin?.email ?? null;
+    }
+
+    // Source types without a rich linked entity still get a labelled descriptor
+    // + the reason captured on the instruction, so the page never renders a
+    // bare "Source data unavailable".
+    if (!source) {
+      const LABEL: Record<string, string> = {
+        MANUAL: 'Manual refund',
+        GOODWILL: 'Goodwill credit',
+        REPLACEMENT: 'Replacement',
+        VERIFICATION_REJECTION: 'Order verification rejected',
+        RETURN: 'Return',
+        DISPUTE: 'Dispute',
+      };
+      source = {
+        sourceType: row.sourceType,
+        id: row.sourceId,
+        label: LABEL[row.sourceType] ?? row.sourceType,
+        reason:
+          row.customerVisibleReason ??
+          row.customerVisibleMessage ??
+          row.customerRemedy ??
+          null,
+      };
+    }
+
     return {
       success: true,
       message: 'RefundInstruction retrieved',
@@ -282,6 +363,33 @@ export class AdminRefundApprovalsController {
         ...row,
         amountInPaise: row.amountInPaise.toString(),
         source,
+        order: order
+          ? {
+              orderNumber: order.orderNumber,
+              orderStatus: order.orderStatus,
+              paymentMethod: order.paymentMethod,
+              // Who cancelled the order + why (null when not cancelled).
+              cancelledAt: cancelInfo?.cancelledAt ?? null,
+              cancelReason: cancelInfo?.cancelReason ?? null,
+              cancellationSource: cancelInfo?.cancellationSource ?? null,
+              cancelledByName: cancelInfo?.canceller?.name ?? null,
+            }
+          : null,
+        customer: customer
+          ? {
+              name: `${customer.firstName} ${customer.lastName}`.trim(),
+              email: customer.email,
+              phone: customer.phone,
+            }
+          : null,
+        requestedBy: firstHistory
+          ? {
+              name: requestedByName,
+              actorId: firstHistory.actorId,
+              notes: firstHistory.notes,
+              at: firstHistory.occurredAt,
+            }
+          : null,
       },
     };
   }

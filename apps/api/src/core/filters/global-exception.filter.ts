@@ -7,6 +7,23 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { Request, Response } from 'express';
+// TEMP DIAGNOSTIC (remove after QC 500 is fixed) — mirror 500s to a file
+// since the dev server's stdout isn't reachable from the tooling session.
+import { appendFileSync } from 'node:fs';
+function __tmpCaptureError(tag: string, exception: unknown, requestId: string) {
+  try {
+    const e = exception as any;
+    appendFileSync(
+      '/tmp/sm-qc-debug.log',
+      `\n===== ${tag} req=${requestId} =====\n` +
+        `name: ${e?.name}\ncode: ${e?.code}\nmessage: ${e?.message}\n` +
+        `meta: ${JSON.stringify(e?.meta ?? null)}\n` +
+        `stack:\n${e?.stack ?? String(exception)}\n`,
+    );
+  } catch {
+    /* best-effort */
+  }
+}
 import { AppException } from '../exceptions/app.exception';
 import { DuplicateCaseException } from '../exceptions/duplicate-case.exception';
 import { AppLoggerService } from '../../bootstrap/logging/app-logger.service';
@@ -278,6 +295,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           detail: 'The operation would break a required relation',
         };
       default:
+        __tmpCaptureError('UNMAPPED_PRISMA', err, requestId);
         this.logger.error(
           `Unmapped Prisma error ${err.code}: ${err.message} req=${requestId}`,
           err.stack,
@@ -295,6 +313,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     exception: unknown,
     requestId = '',
   ): NormalizedError {
+    __tmpCaptureError('UNHANDLED', exception, requestId);
     this.logger.error(
       `Unhandled exception: ${
         exception instanceof Error ? exception.message : String(exception)
