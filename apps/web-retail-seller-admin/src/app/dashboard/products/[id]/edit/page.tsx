@@ -252,7 +252,17 @@ export default function EditProductPage() {
           router.replace('/login');
           return;
         }
-        setLoadError(err.message || 'Failed to load product.');
+        if (err.status === 404) {
+          // Seller-type scope: the master product is owned by a seller of a
+          // different type, so it can't be edited from this portal. The admin
+          // can still manage their own sellers' offers (stock / SKU / approval)
+          // for it from the Products list.
+          setLoadError(
+            "This product was created by a different seller, so it can't be edited here. You can still manage your sellers' offers — stock, SKU and approvals — for it from the Products list.",
+          );
+        } else {
+          setLoadError(err.message || 'Failed to load product.');
+        }
       } else {
         setLoadError('Failed to load product.');
       }

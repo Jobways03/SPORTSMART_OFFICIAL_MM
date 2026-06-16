@@ -69,6 +69,19 @@ export class QcDecisionItemDto {
   @IsString()
   @MaxLength(500)
   qcNotes?: string;
+
+  /**
+   * Partial-VALUE refund override (gross, tax-inclusive paise). Only
+   * honoured when qcOutcome === 'PARTIAL'. When set, this item refunds
+   * this amount instead of `qcQuantityApproved × unitPrice`, and the GST
+   * reversal + seller commission reversal scale proportionally
+   * (fraction = this ÷ full line refund, clamped to [0,1]). Omit for
+   * full-quantity approvals.
+   */
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  qcRefundAmountInPaise?: number;
 }
 
 export class QcLogisticsDto {

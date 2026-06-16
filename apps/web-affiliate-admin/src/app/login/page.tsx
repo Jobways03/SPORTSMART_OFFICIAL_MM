@@ -80,7 +80,9 @@ export default function LoginPage() {
       const res = await fetch(`${apiBase}/admin/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password }),
+        // portalType lets the API reject a non-affiliate portal-specific admin
+        // role signing in here; SUPER_ADMIN + generic roles pass through.
+        body: JSON.stringify({ email, password, portalType: 'AFFILIATE' }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {

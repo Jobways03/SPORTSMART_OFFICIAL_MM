@@ -63,7 +63,12 @@ export class HtmlToPdfService implements OnModuleDestroy {
    * fetched). Page breaks are honoured, so callers can stitch several
    * documents together with `page-break-after: always`.
    */
-  async render(html: string): Promise<Buffer> {
+  async render(
+    html: string,
+    // Optional explicit page size (e.g. a 4x6 shipping label). When omitted,
+    // the default A4 + invoice margins are used (tax-invoice callers unchanged).
+    opts?: { width?: string; height?: string },
+  ): Promise<Buffer> {
     let browser: Browser;
     try {
       browser = await this.getBrowser();
@@ -81,11 +86,20 @@ export class HtmlToPdfService implements OnModuleDestroy {
       // `load` (not networkidle) — the invoice HTML is self-contained with
       // inline CSS, so there are no network requests to idle on.
       await page.setContent(html, { waitUntil: 'load' });
-      const pdf = await page.pdf({
-        format: 'A4',
-        printBackground: true,
-        margin: { top: '12mm', bottom: '14mm', left: '10mm', right: '10mm' },
-      });
+      const pdf = await page.pdf(
+        opts?.width && opts?.height
+          ? {
+              width: opts.width,
+              height: opts.height,
+              printBackground: true,
+              margin: { top: 0, bottom: 0, left: 0, right: 0 },
+            }
+          : {
+              format: 'A4',
+              printBackground: true,
+              margin: { top: '12mm', bottom: '14mm', left: '10mm', right: '10mm' },
+            },
+      );
       // puppeteer returns a Uint8Array; normalise to Buffer for Nest/Express.
       return Buffer.from(pdf);
     } finally {

@@ -39,6 +39,7 @@ export class SellerLoginController {
         password: dto.password,
         userAgent,
         ipAddress,
+        portalType: dto.portalType,
       });
 
       // Follow-up #H40 — mirror tokens into httpOnly cookies.

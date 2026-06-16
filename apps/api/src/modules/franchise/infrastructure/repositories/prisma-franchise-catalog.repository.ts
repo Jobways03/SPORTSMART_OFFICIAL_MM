@@ -236,6 +236,128 @@ export class PrismaFranchiseCatalogRepository implements FranchiseCatalogReposit
     });
   }
 
+  /**
+   * Franchise self-pause. A franchise temporarily stops selling its OWN
+   * approved mapping. Sets STOPPED + isActive=false and stamps
+   * `stoppedById = franchiseId` — that stamp is the marker that distinguishes
+   * a *self*-pause from an admin STOP (where stoppedById = the admin user id),
+   * which is what makes `resumeByFranchise` safe to scope.
+   *
+   * The guarded `updateMany` (approvalStatus='APPROVED', not removed, owned by
+   * the franchise) means a franchise can only pause a live offer it owns —
+   * it can never touch another franchise's row, and a no-match returns null.
+   */
+  async pauseByFranchise(
+    id: string,
+    franchiseId: string,
+    reason?: string | null,
+  ): Promise<any | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const res = await tx.franchiseCatalogMapping.updateMany({
+        where: {
+          id,
+          franchiseId,
+          approvalStatus: 'APPROVED',
+          removedAt: null,
+        },
+        data: {
+          approvalStatus: 'STOPPED',
+          isActive: false,
+          stoppedById: franchiseId,
+          stoppedAt: new Date(),
+          stopReason: reason ?? null,
+          version: { increment: 1 },
+        },
+      });
+      if (res.count === 0) return null;
+      const updated = await tx.franchiseCatalogMapping.findUnique({
+        where: { id },
+        include: {
+          product: {
+            include: {
+              category: true,
+              brand: true,
+              images: { where: { sortOrder: 0 }, take: 1 },
+            },
+          },
+          variant: true,
+        },
+      });
+      await tx.franchiseCatalogMappingEvent.create({
+        data: {
+          mappingId: id,
+          franchiseId,
+          productId: updated!.productId,
+          variantId: updated!.variantId,
+          action: 'STOPPED',
+          reason: reason ?? null,
+          actorId: franchiseId,
+          actorRole: 'FRANCHISE',
+        },
+      });
+      return updated;
+    });
+  }
+
+  /**
+   * Franchise self-resume. Lifts a SELF-pause (stoppedById = franchiseId) back
+   * to APPROVED + active. The `stoppedById: franchiseId` clause in the WHERE is
+   * the security guard: an admin STOP (stoppedById = admin user id) or a
+   * soft-removed row (removedAt set) will NOT match, so a franchise can never
+   * un-stop something an admin stopped — that stays an admin re-approval.
+   * Returns the updated mapping, or null when nothing self-paused matched.
+   */
+  async resumeByFranchise(
+    id: string,
+    franchiseId: string,
+  ): Promise<any | null> {
+    return this.prisma.$transaction(async (tx) => {
+      const res = await tx.franchiseCatalogMapping.updateMany({
+        where: {
+          id,
+          franchiseId,
+          approvalStatus: 'STOPPED',
+          stoppedById: franchiseId,
+          removedAt: null,
+        },
+        data: {
+          approvalStatus: 'APPROVED',
+          isActive: true,
+          stoppedById: null,
+          stoppedAt: null,
+          stopReason: null,
+          version: { increment: 1 },
+        },
+      });
+      if (res.count === 0) return null;
+      const updated = await tx.franchiseCatalogMapping.findUnique({
+        where: { id },
+        include: {
+          product: {
+            include: {
+              category: true,
+              brand: true,
+              images: { where: { sortOrder: 0 }, take: 1 },
+            },
+          },
+          variant: true,
+        },
+      });
+      await tx.franchiseCatalogMappingEvent.create({
+        data: {
+          mappingId: id,
+          franchiseId,
+          productId: updated!.productId,
+          variantId: updated!.variantId,
+          action: 'RESUMED',
+          actorId: franchiseId,
+          actorRole: 'FRANCHISE',
+        },
+      });
+      return updated;
+    });
+  }
+
   async findAvailableProducts(params: {
     page: number;
     limit: number;

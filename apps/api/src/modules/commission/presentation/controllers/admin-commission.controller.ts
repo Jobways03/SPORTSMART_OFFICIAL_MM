@@ -19,9 +19,11 @@ import {
   PermissionsGuard,
   RequiresStepUp,
   StepUpGuard,
+  AdminCommissionRecordScopeGuard,
 } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { resolveScopedTypes } from '../../../../core/authorization/seller-scope';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { CommissionProcessorService } from '../../application/services/commission-processor.service';
 import { AdjustCommissionDto } from '../dtos/adjust-commission.dto';
@@ -76,6 +78,7 @@ export class AdminCommissionController {
   @Get()
   @Permissions('settlements.read')
   async listCommissions(
+    @Req() req: Request,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('sellerId') sellerId?: string,
@@ -88,8 +91,12 @@ export class AdminCommissionController {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(50, Math.max(1, parseInt(limit || '20', 10) || 20));
 
+    // Isolation fix (2026-06-16) — hide the other seller type's commission rows
+    // from a scoped admin (null = unrestricted: super / franchise admin).
+    const allowedSellerTypes = resolveScopedTypes((req as any).user?.permissions);
+
     const { records, total } = await this.commissionService.getCommissionRecords(
-      { sellerId, search, dateFrom, dateTo, commissionType, status },
+      { sellerId, search, dateFrom, dateTo, commissionType, status, allowedSellerTypes },
       pageNum,
       limitNum,
     );
@@ -128,6 +135,8 @@ export class AdminCommissionController {
     @Query() dto: ExportCommissionDto,
   ) {
     const adminId = (req as any).adminId;
+    // Isolation fix (2026-06-16) — scope the CSV to the admin's seller type(s).
+    const allowedSellerTypes = resolveScopedTypes((req as any).user?.permissions);
     const { rows, total, truncated } =
       await this.commissionService.exportCommissionRecords(
         {
@@ -142,6 +151,7 @@ export class AdminCommissionController {
           settlementStatus: dto.settlementStatus,
           adjustedOnly: dto.adjustedOnly,
           reversedOnly: dto.reversedOnly,
+          allowedSellerTypes,
         },
         { adminId },
       );
@@ -268,8 +278,12 @@ export class AdminCommissionController {
 
   @Get('summary')
   @Permissions('settlements.read')
-  async getSummary() {
-    const summary = await this.commissionService.getAdminCommissionSummary();
+  async getSummary(@Req() req: Request) {
+    // Isolation fix (2026-06-16) — the aggregate totals reflect only the admin's
+    // seller type(s); a D2C_ADMIN's summary excludes RETAIL revenue/margin.
+    const allowedSellerTypes = resolveScopedTypes((req as any).user?.permissions);
+    const summary =
+      await this.commissionService.getAdminCommissionSummary(allowedSellerTypes);
     return {
       success: true,
       message: 'Commission summary retrieved',
@@ -289,6 +303,9 @@ export class AdminCommissionController {
   // dispute-resolution notes/reasons the basic list does not, so it gets its
   // own grant (additively re-seeded to existing settlements.read holders).
   @Permissions('settlements.history.read')
+  // Isolation fix (2026-06-16) — a scoped admin may only read the history of a
+  // commission record belonging to a seller of their own type; cross-type → 404.
+  @UseGuards(AdminCommissionRecordScopeGuard)
   async getHistory(@Param('id') id: string) {
     const data = await this.commissionService.getCommissionHistory(id);
     return {

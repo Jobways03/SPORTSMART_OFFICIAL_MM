@@ -115,9 +115,35 @@ export class PortalPushService implements OnModuleInit, OnModuleDestroy {
       this.subClient.on('error', (e: Error) =>
         this.logger.warn(`Portal SSE Redis subscriber error: ${e.message}`),
       );
-      await this.subClient.subscribe(REDIS_CHANNEL);
-      this.bridgeActive = true;
-      this.logger.log('Portal SSE Redis bridge active (multi-replica fan-out)');
+      // Re-arm on every (re)connect rather than resolving the bridge ONCE.
+      // ioredis emits 'ready' on the initial connect AND after each reconnect,
+      // so if Redis is unreachable at boot (e.g. mid-failover) the bridge is no
+      // longer latched OFF forever — this replica rejoins multi-replica fan-out
+      // the moment Redis recovers. SUBSCRIBE is idempotent, so re-issuing it on
+      // a reconnect (ioredis also auto-resubscribes) is harmless.
+      this.subClient.on('ready', () => {
+        this.subClient
+          ?.subscribe(REDIS_CHANNEL)
+          .then(() => {
+            if (!this.bridgeActive) {
+              this.bridgeActive = true;
+              this.logger.log(
+                'Portal SSE Redis bridge active (multi-replica fan-out)',
+              );
+            }
+          })
+          .catch((e: Error) =>
+            this.logger.warn(
+              `Portal SSE bridge subscribe failed: ${e.message}`,
+            ),
+          );
+      });
+      // On a (transient) disconnect, mark the bridge inactive so publishes
+      // degrade to local fan-out IMMEDIATELY rather than paying the per-command
+      // timeout against a dead socket. 'ready' re-arms it on reconnect.
+      this.subClient.on('close', () => {
+        this.bridgeActive = false;
+      });
     } catch (e) {
       this.bridgeActive = false;
       this.logger.warn(

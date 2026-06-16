@@ -216,14 +216,24 @@ export default function BrowseCatalogPage() {
 
     // For variant products, validate each variant has stock
     if (variantStocks.length > 0) {
-      const hasAnyStock = variantStocks.some(v => Number(v.stockQty) > 0);
-      if (!hasAnyStock) {
+      const sellable = variantStocks.filter(v => Number(v.stockQty) > 0);
+      if (sellable.length === 0) {
         setMapError('At least one variant must have stock greater than 0.');
+        return;
+      }
+      // Internal SKU is required for every variant being added (stock > 0).
+      // 0-stock variants are skipped, so their SKU doesn't matter.
+      if (sellable.some(v => !v.sellerInternalSku.trim())) {
+        setMapError('Internal SKU is required for each variant you add (stock greater than 0).');
         return;
       }
     } else {
       if (!mapForm.stockQty || Number(mapForm.stockQty) < 0) {
         setMapError('Stock quantity is required and must be 0 or more.');
+        return;
+      }
+      if (!mapForm.sellerInternalSku.trim()) {
+        setMapError('Internal SKU is required.');
         return;
       }
     }
@@ -434,7 +444,7 @@ export default function BrowseCatalogPage() {
                         style={{ padding: '7px 16px', fontSize: 12 }}
                         onClick={() => openMapModal(product)}
                       >
-                        + Add to My Products
+                        + Add
                       </button>
                     </td>
                   </tr>
@@ -542,7 +552,7 @@ export default function BrowseCatalogPage() {
                         <tr style={{ background: '#f9fafb' }}>
                           <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid #e5e7eb' }}>Variant</th>
                           <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid #e5e7eb', width: 100 }}>Stock</th>
-                          <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid #e5e7eb', width: 120 }}>Internal SKU</th>
+                          <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 600, borderBottom: '1px solid #e5e7eb', width: 120 }}>Internal SKU <span style={{ color: '#ef4444' }}>*</span></th>
                         </tr>
                       </thead>
                       <tbody>
@@ -572,7 +582,7 @@ export default function BrowseCatalogPage() {
                                 type="text"
                                 className="form-input"
                                 style={{ padding: '6px 10px', fontSize: 13 }}
-                                placeholder="Optional"
+                                placeholder={Number(v.stockQty) > 0 ? 'Required' : 'Optional'}
                                 value={v.sellerInternalSku}
                                 onChange={(e) => {
                                   const updated = [...variantStocks];
@@ -607,7 +617,7 @@ export default function BrowseCatalogPage() {
               {/* Internal SKU — only shown for simple products (variant products have it in the table) */}
               {variantStocks.length === 0 && (
                 <div className="form-group">
-                  <label className="form-label">Internal SKU (optional)</label>
+                  <label className="form-label">Internal SKU <span className="required">*</span></label>
                   <input
                     type="text"
                     className="form-input"
@@ -619,32 +629,11 @@ export default function BrowseCatalogPage() {
                 </div>
               )}
 
-              <div className="form-group">
-                <label className="form-label">Pickup Pincode</label>
-                <input
-                  type="text"
-                  className="form-input"
-                  placeholder="e.g. 400001"
-                  maxLength={6}
-                  value={mapForm.pickupPincode}
-                  onChange={(e) => handleMapFormChange('pickupPincode', e.target.value)}
-                />
-                <span className="form-hint">{defaultPincode ? 'Auto-filled from your profile. Change if shipping from a different location.' : 'Where this product will ship from.'}</span>
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">Dispatch SLA (days)</label>
-                <input
-                  type="number"
-                  className="form-input"
-                  placeholder="2"
-                  min="1"
-                  max="30"
-                  value={mapForm.dispatchSla}
-                  onChange={(e) => handleMapFormChange('dispatchSla', e.target.value)}
-                />
-                <span className="form-hint">Maximum days to dispatch after order placement. Default: 2 days.</span>
-              </div>
+              {/* Pickup Pincode and Dispatch SLA are no longer shown in this
+                  form — sellers don't set them here. They're still persisted
+                  silently via the submit payload: the pickup pincode is
+                  auto-filled from the seller profile (needed for delivery
+                  serviceability) and the dispatch SLA defaults to 2 days. */}
             </div>
             <div className="variant-modal-footer">
               <button className="form-btn" onClick={closeMapModal} disabled={mapLoading}>

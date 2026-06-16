@@ -25,7 +25,20 @@ interface AdminLoginInput {
   password: string;
   userAgent?: string;
   ipAddress?: string;
+  /** Which admin portal the login came from; gates portal-specific roles. */
+  portalType?: 'D2C' | 'RETAIL' | 'FRANCHISE' | 'AFFILIATE' | 'SUPER';
 }
+
+// Portal-specific admin roles → the portal each is bound to. A role NOT in this
+// map (SUPER_ADMIN, the generic SELLER_ADMIN, SELLER_OPERATIONS, SELLER_SUPPORT)
+// may sign in at ANY portal — so the gate only rejects a portal-bound role used
+// at the wrong portal, never a legitimate cross-portal/ops/super login.
+const ROLE_HOME_PORTAL: Record<string, string> = {
+  D2C_ADMIN: 'D2C',
+  RETAILER_ADMIN: 'RETAIL',
+  FRANCHISE_ADMIN: 'FRANCHISE',
+  AFFILIATE_ADMIN: 'AFFILIATE',
+};
 
 export interface AdminLoginSession {
   mfaRequired?: false;
@@ -109,7 +122,7 @@ export class AdminLoginUseCase {
   }
 
   async execute(input: AdminLoginInput): Promise<AdminLoginResult> {
-    const { email, password, userAgent, ipAddress } = input;
+    const { email, password, userAgent, ipAddress, portalType } = input;
 
     const admin = await this.adminRepo.findAdminByEmail(email);
 
@@ -195,6 +208,28 @@ export class AdminLoginUseCase {
       failedLoginAttempts: 0,
       lockUntil: null,
     });
+
+    // Portal gate (2026-06-16): reject a PORTAL-SPECIFIC admin role used at the
+    // wrong portal (e.g. a RETAILER_ADMIN signing into the D2C-admin portal).
+    // Checked AFTER the password so a guesser never learns which role an email
+    // is. SUPER_ADMIN + generic/ops roles aren't in ROLE_HOME_PORTAL → allowed
+    // anywhere. portalType undefined ⇒ no gate (safe degradation). Placed before
+    // the rehash/MFA branch so a wrong-portal login short-circuits cleanly.
+    const homePortal = ROLE_HOME_PORTAL[admin.role];
+    if (portalType && homePortal && homePortal !== portalType) {
+      this.auditLogin(
+        admin.id,
+        admin.role,
+        'ADMIN_LOGIN_BLOCKED',
+        { reason: 'wrong_portal', portalType, homePortal },
+        ipAddress,
+        userAgent,
+      );
+      throw new ForbiddenAppException(
+        `This account belongs to the ${homePortal} admin portal. Please sign in there.`,
+        'WRONG_ADMIN_PORTAL',
+      );
+    }
 
     // Phase 13 (2026-05-16) — opportunistic rehash. Done BEFORE the
     // MFA branch so an admin who's enrolled MFA but logged in last

@@ -35,6 +35,22 @@ export class AdminGetFranchiseUseCase {
       })
       .catch(() => null);
 
+    // Logistics pickup readiness — mirrors the seller flow. A franchise sub-order
+    // ships only once its store is registered as a courier "warehouse" (shipping-
+    // public.facade resolvePickupWarehouse keys off a non-null `warehouseName`,
+    // set by the admin "Add pickup location" flow). Surface a derived flag so the
+    // admin franchise detail page can flag an APPROVED franchise that still can't
+    // fulfil online orders.
+    const partnerRegs = await this.prisma.franchisePartnerRegistration
+      .findMany({
+        where: { franchiseId },
+        select: { partner: true, status: true, warehouseName: true },
+      })
+      .catch(() => [] as { partner: string; status: string; warehouseName: string | null }[]);
+    const registeredPartners = partnerRegs
+      .filter((r) => !!r.warehouseName)
+      .map((r) => r.partner);
+
     return {
       id: franchise.id,
       franchiseId: franchise.id,
@@ -74,6 +90,11 @@ export class AdminGetFranchiseUseCase {
       bankAccountHolderName: bank?.accountHolderName ?? null,
       bankAccountLast4: bank?.accountNumberLast4 ?? null,
       bankIfscCode: bank?.ifscCode ?? null,
+      // Logistics pickup readiness (the main gate for online order delivery).
+      selfDeliveryEnabled: (franchise as any).selfDeliveryEnabled ?? false,
+      logisticsPickupRegistered: registeredPartners.length > 0,
+      logisticsRegisteredPartners: registeredPartners,
+      logisticsPartnerAttempts: partnerRegs.length,
     };
   }
 }

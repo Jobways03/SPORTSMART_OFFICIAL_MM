@@ -142,6 +142,20 @@ export class PrismaOrderRepository implements OrderRepository {
       OR: [
         { orderStatus: { in: ['CANCELLED', 'REJECTED'] as any } },
         { paymentStatus: { in: ['CANCELLED', 'EXPIRED', 'VOIDED'] as any } },
+        // Sub-order-aware: the master orderStatus can lag behind a cancel (e.g. a
+        // sub-order cancelled while the master is still DISPATCHED/EXCEPTION_QUEUE).
+        // Treat an order whose every non-rejected sub-order is CANCELLED as
+        // cancelled — matches the client's grouping, so cancelled orders don't
+        // leak into the "In progress" (active) bucket.
+        {
+          subOrders: {
+            some: {},
+            none: {
+              acceptStatus: { not: 'REJECTED' as any },
+              fulfillmentStatus: { not: 'CANCELLED' as any },
+            },
+          },
+        },
       ],
     };
     switch (bucket) {

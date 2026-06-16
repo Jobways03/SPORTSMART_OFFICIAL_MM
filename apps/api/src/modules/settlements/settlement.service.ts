@@ -1701,12 +1701,25 @@ export class SettlementService {
   }
 
   /* ── T5: Admin per-seller breakdown ── */
-  async getAdminSellerBreakdown(page: number, limit: number) {
+  async getAdminSellerBreakdown(
+    page: number,
+    limit: number,
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
+  ) {
     const skip = (page - 1) * limit;
+
+    // Isolation fix (2026-06-16) — restrict the per-seller breakdown to the
+    // admin's seller type(s) via the owning-seller relation. null/empty =
+    // unrestricted (super / franchise admin).
+    const scopeWhere =
+      allowedSellerTypes && allowedSellerTypes.length > 0
+        ? { seller: { sellerType: { in: allowedSellerTypes } } }
+        : undefined;
 
     // Get unique sellers with commission records
     const sellers = await this.prisma.commissionRecord.groupBy({
       by: ['sellerId', 'sellerName'],
+      ...(scopeWhere ? { where: scopeWhere } : {}),
       _sum: {
         totalPlatformAmount: true,
         totalSettlementAmount: true,
@@ -1720,6 +1733,7 @@ export class SettlementService {
 
     const total = await this.prisma.commissionRecord.groupBy({
       by: ['sellerId'],
+      ...(scopeWhere ? { where: scopeWhere } : {}),
       _count: { id: true },
     });
 

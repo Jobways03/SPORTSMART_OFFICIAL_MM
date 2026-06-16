@@ -61,14 +61,21 @@ function stableStringify(value: unknown): string {
 
 /**
  * Extract the actor identity that the auth guard already attached to
- * req. Falls back to ANONYMOUS — currently unused (every idempotent
- * route is gated by an auth guard) but kept as a safety net so a
- * future public-API route doesn't crash on missing actor.
+ * req. Falls back to ANONYMOUS for the unauthenticated @Idempotent routes
+ * (e.g. POST /auth/register). NOTE: the idempotency interceptor discriminates
+ * ANONYMOUS callers by client IP when composing the stored key — the constant
+ * id '-' here would otherwise put every anonymous client in one shared
+ * idempotency namespace.
  */
 export function extractActor(req: Request): { type: string; id: string } {
   const r = req as unknown as Record<string, unknown>;
   if (typeof r.adminId === 'string') return { type: 'ADMIN', id: r.adminId };
   if (typeof r.sellerId === 'string') return { type: 'SELLER', id: r.sellerId };
+  // Franchise-staff sessions set both franchiseId and staffId; key on the
+  // staff id so two cashiers in one franchise don't share a namespace (a
+  // shared key would 409 them against each other on POS/procurement routes).
+  if (typeof r.staffId === 'string' && typeof r.franchiseId === 'string')
+    return { type: 'FRANCHISE_STAFF', id: r.staffId };
   if (typeof r.franchiseId === 'string')
     return { type: 'FRANCHISE', id: r.franchiseId };
   if (typeof r.affiliateId === 'string')

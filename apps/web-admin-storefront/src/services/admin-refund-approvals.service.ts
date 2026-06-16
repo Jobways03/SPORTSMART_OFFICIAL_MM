@@ -95,10 +95,16 @@ export interface RefundInstructionSourceMessage {
 }
 
 export interface RefundInstructionSource {
-  sourceType: 'DISPUTE' | 'RETURN';
+  sourceType: RefundSourceType;
   id: string;
-  number: string;
-  status: string;
+  // Optional: MANUAL / GOODWILL / REPLACEMENT / VERIFICATION_REJECTION have no
+  // linked entity — they carry a `label` + `reason` instead of number/status.
+  number?: string;
+  status?: string;
+  /** Human label for source types without a rich entity. */
+  label?: string | null;
+  /** Reason captured on the instruction (generic-source fallback). */
+  reason?: string | null;
   // Dispute-specific
   kind?: string | null;
   summary?: string | null;
@@ -121,8 +127,36 @@ export interface RefundInstructionSource {
   returnNumber?: string | null;
 }
 
+export interface RefundInstructionOrder {
+  orderNumber: string;
+  orderStatus: string;
+  paymentMethod: string;
+  // Cancellation provenance (null unless the order was cancelled).
+  cancelledAt: string | null;
+  cancelReason: string | null;
+  cancellationSource: string | null; // ADMIN | CUSTOMER | SYSTEM
+  cancelledByName: string | null;
+}
+
+export interface RefundInstructionCustomer {
+  name: string;
+  email: string;
+  phone: string | null;
+}
+
+export interface RefundInstructionRequestedBy {
+  name: string | null;
+  actorId: string | null;
+  notes: string | null;
+  at: string;
+}
+
 export interface RefundInstructionDetail extends RefundInstructionRow {
   source: RefundInstructionSource | null;
+  /** Phase 253 — resolved context so finance never approves blind. */
+  order: RefundInstructionOrder | null;
+  customer: RefundInstructionCustomer | null;
+  requestedBy: RefundInstructionRequestedBy | null;
 }
 
 export interface RefundInstructionListPage {

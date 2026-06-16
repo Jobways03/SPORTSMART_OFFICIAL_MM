@@ -57,7 +57,13 @@ export class AdminFranchiseSettlementsController {
   }
 
   @Get()
-  @Permissions('settlements.read')
+  // Isolation fix (2026-06-16) — was `settlements.read`, the GENERIC marketplace
+  // settlement perm that D2C_ADMIN / RETAILER_ADMIN / SELLER_ADMIN all hold, so
+  // a seller-type admin could read the FRANCHISE settlement register. Gate on
+  // the franchise-domain perm instead: SUPER_ADMIN + FRANCHISE_ADMIN + the
+  // platform finance-ops role (SELLER_OPERATIONS, which also adjusts franchise
+  // settlements) hold it; marketplace seller-type admins do not.
+  @Permissions('franchise.finance.read')
   async listSettlements(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -100,7 +106,9 @@ export class AdminFranchiseSettlementsController {
   // Phase 159v (audit #11) — declared BEFORE the `:id` route so `/export`
   // isn't captured as an id. Finance/Tally CSV of the settlement register.
   @Get('export')
-  @Permissions('settlements.read')
+  // Isolation fix (2026-06-16) — see listSettlements: franchise-domain perm so
+  // a marketplace seller-type admin can't pull the franchise CSV register.
+  @Permissions('franchise.finance.read')
   async exportSettlements(
     @Res() res: Response,
     @Query('cycleId') cycleId?: string,
@@ -184,7 +192,8 @@ export class AdminFranchiseSettlementsController {
   }
 
   @Get(':id')
-  @Permissions('settlements.read')
+  // Isolation fix (2026-06-16) — see listSettlements: franchise-domain perm.
+  @Permissions('franchise.finance.read')
   async getSettlementDetail(@Param('id') id: string) {
     const data = await this.settlementService.getSettlementDetail(id);
 

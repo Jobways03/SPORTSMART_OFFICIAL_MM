@@ -24,42 +24,14 @@ export class ReturnAutoApprovalService {
    * - Returns: { autoApprove: boolean, reason: string }
    */
   evaluateAutoApproval(
-    returnRecord: any,
+    _returnRecord: any,
   ): { autoApprove: boolean; reason: string } {
-    // Calculate total return value
-    let totalValue = 0;
-    let allReasonsTrusted = true;
-
-    const items = returnRecord?.items ?? [];
-    for (const item of items) {
-      const orderItem = item.orderItem;
-      if (orderItem) {
-        totalValue += Number(orderItem.unitPrice) * item.quantity;
-      }
-      if (!this.AUTO_APPROVE_REASONS.includes(item.reasonCategory)) {
-        allReasonsTrusted = false;
-      }
-    }
-
-    if (totalValue > this.AUTO_APPROVE_VALUE_THRESHOLD) {
-      return {
-        autoApprove: false,
-        reason: `Return value Rs ${totalValue} exceeds auto-approval threshold Rs ${this.AUTO_APPROVE_VALUE_THRESHOLD}`,
-      };
-    }
-
-    if (!allReasonsTrusted) {
-      return {
-        autoApprove: false,
-        reason:
-          'Some items have non-trusted return reasons (CHANGED_MIND, SIZE_FIT_ISSUE, etc.) — admin review required',
-      };
-    }
-
+    // Policy: auto-approval is DISABLED — every return must be reviewed and
+    // approved by an admin, regardless of reason / value / risk. (Previously
+    // trusted reasons up to Rs 5,000 auto-approved; turned off per request.)
     return {
-      autoApprove: true,
-      reason:
-        'All items qualify for auto-approval (trusted reason + value below threshold)',
+      autoApprove: false,
+      reason: 'Auto-approval disabled — admin approval required for all returns',
     };
   }
 }

@@ -28,7 +28,7 @@ export interface ProductListItem {
   primaryImageUrl: string | null;
   variantCount: number;
   productCode: string | null;
-  seller: { id: string; sellerName: string; sellerShopName: string; email: string; } | null;
+  seller: { id: string; sellerName: string; sellerShopName: string; email: string; sellerType?: string | null; } | null;
   category: { id: string; name: string; } | null;
   brand: { id: string; name: string; } | null;
   potentialDuplicateOf: string | null;

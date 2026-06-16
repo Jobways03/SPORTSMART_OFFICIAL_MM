@@ -1,0 +1,7 @@
+# Backend config for staging — pass at init:
+#   terraform init -backend-config=staging.s3.tfbackend
+bucket         = "sportsmart-tfstate"
+key            = "envs/staging/terraform.tfstate"
+region         = "ap-south-1"
+dynamodb_table = "sportsmart-tflock"
+encrypt        = true

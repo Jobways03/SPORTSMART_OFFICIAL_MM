@@ -115,6 +115,14 @@ export interface SubmitQcDecisionInput {
     qcOutcome: 'APPROVED' | 'REJECTED' | 'PARTIAL' | 'DAMAGED';
     qcQuantityApproved: number;
     qcNotes?: string;
+    /**
+     * Partial-VALUE refund override (gross, tax-inclusive paise). Only
+     * honoured when qcOutcome === 'PARTIAL'. When set, this item refunds
+     * this amount instead of qty × unitPrice, and the GST reversal +
+     * seller commission are reversed proportionally. Clamped to the full
+     * line refund; omit for full-quantity approvals.
+     */
+    qcRefundAmountInPaise?: number;
   }>;
   overallNotes?: string;
   // Phase 13 — required when any item is approved/partial. The service
@@ -184,6 +192,30 @@ export interface ConfirmRefundInput {
 }
 
 const REFUND_MAX_RETRY_ATTEMPTS = 5;
+
+/**
+ * Scale a tax-reversal snapshot by a partial-VALUE fraction (0..1). Used
+ * when an admin issues a partial-amount refund on a PARTIAL QC outcome: the
+ * GST reversal / credit-note amounts must shrink in lock-step with the
+ * customer refund so the ledger reconciles. `gstRateBps` is a rate (not an
+ * amount) so it is preserved as-is. All paise fields are BigInt.
+ */
+function scaleReversalSnapshot(snapshot: any, fraction: number): any {
+  if (!snapshot) return snapshot;
+  const scale = (v: bigint | number) =>
+    BigInt(Math.round(Number(v) * fraction));
+  return {
+    grossReturnedInPaise: scale(snapshot.grossReturnedInPaise),
+    discountReversalInPaise: scale(snapshot.discountReversalInPaise),
+    taxableReversalInPaise: scale(snapshot.taxableReversalInPaise),
+    cgstReversalInPaise: scale(snapshot.cgstReversalInPaise),
+    sgstReversalInPaise: scale(snapshot.sgstReversalInPaise),
+    igstReversalInPaise: scale(snapshot.igstReversalInPaise),
+    totalTaxReversalInPaise: scale(snapshot.totalTaxReversalInPaise),
+    totalCreditNoteInPaise: scale(snapshot.totalCreditNoteInPaise),
+    gstRateBps: snapshot.gstRateBps,
+  };
+}
 
 // Phase 106 (2026-05-23) — Phase 102 audit Gap #14 closure.
 //
@@ -1943,13 +1975,37 @@ export class ReturnService {
           }
         }
 
-        const refundAmount =
+        // Full (qty-derived) refund for this line before any partial-VALUE
+        // override — the discount-aware credit-note total when a snapshot
+        // exists, else gross (qty × unitPrice). REJECTED / DAMAGED stay 0.
+        const fullRefundPaise =
           prorated !== null
-            ? Number(prorated.totalRefundInPaise) / 100
+            ? Number(prorated.totalRefundInPaise)
             : decision.qcOutcome === 'REJECTED' ||
                 decision.qcOutcome === 'DAMAGED'
               ? 0
-              : grossRefund;
+              : Math.round(grossRefund * 100);
+
+        // Partial-VALUE refund: the admin chose to give back a specific
+        // gross (tax-inclusive) amount for this item instead of the whole
+        // line. Only for PARTIAL outcomes with a positive full refund. The
+        // fraction (clamped to [0,1]) scales the customer refund, the GST
+        // reversal snapshot, AND the seller commission reversal in lock-step
+        // so the ledger stays internally consistent.
+        let refundValueFraction = 1;
+        if (
+          decision.qcOutcome === 'PARTIAL' &&
+          typeof decision.qcRefundAmountInPaise === 'number' &&
+          fullRefundPaise > 0
+        ) {
+          const overridePaise = Math.min(
+            Math.max(0, Math.round(decision.qcRefundAmountInPaise)),
+            fullRefundPaise,
+          );
+          refundValueFraction = overridePaise / fullRefundPaise;
+        }
+
+        const refundAmount = (fullRefundPaise * refundValueFraction) / 100;
 
         return {
           returnItemId: decision.returnItemId,
@@ -1957,9 +2013,19 @@ export class ReturnService {
           qcQuantityApproved: decision.qcQuantityApproved,
           qcNotes: decision.qcNotes,
           refundAmount,
+          // Drives the proportional commission reversal for partial-VALUE
+          // refunds (1 = full line; <1 = give back only this share).
+          refundValueFraction,
           // Carries through to the QC tx so we can write the
-          // ReturnTaxReversalLine row + reverse liability ledger.
-          reversalSnapshot: prorated?.reversalSnapshot ?? null,
+          // ReturnTaxReversalLine row + reverse liability ledger. Scaled to
+          // the partial fraction so the GST credit note matches the refund.
+          reversalSnapshot:
+            prorated?.reversalSnapshot && refundValueFraction < 1
+              ? scaleReversalSnapshot(
+                  prorated.reversalSnapshot,
+                  refundValueFraction,
+                )
+              : (prorated?.reversalSnapshot ?? null),
           orderItemId: orderItemId ?? null,
         };
       }),
@@ -2133,7 +2199,14 @@ export class ReturnService {
             (d) => d.returnItemId === it.id,
           );
           return decision
-            ? { ...it, qcQuantityApproved: decision.qcQuantityApproved }
+            ? {
+                ...it,
+                qcQuantityApproved: decision.qcQuantityApproved,
+                // Partial-VALUE fraction (1 = full) — commission reversal
+                // scales the seller chargeback by this so a partial refund
+                // only claws back a proportional slice of the margin.
+                refundValueFraction: decision.refundValueFraction ?? 1,
+              }
             : it;
         }),
       };
@@ -2243,7 +2316,14 @@ export class ReturnService {
             (d) => d.returnItemId === it.id,
           );
           return decision
-            ? { ...it, qcQuantityApproved: decision.qcQuantityApproved }
+            ? {
+                ...it,
+                qcQuantityApproved: decision.qcQuantityApproved,
+                // Partial-VALUE fraction (1 = full) — commission reversal
+                // scales the seller chargeback by this so a partial refund
+                // only claws back a proportional slice of the margin.
+                refundValueFraction: decision.refundValueFraction ?? 1,
+              }
             : it;
         }),
       };
@@ -2724,7 +2804,16 @@ export class ReturnService {
       const orderItem = item.orderItem;
       if (!orderItem) continue;
       const approvedQty = item.qcQuantityApproved || 0;
-      total += approvedQty * Number(orderItem.unitPrice);
+      // Partial-VALUE refunds scale the line total by the same fraction the
+      // QC step applied (1 = full); keeps the franchise refund consistent
+      // with the customer credit and the GST reversal.
+      const valueFraction =
+        typeof item.refundValueFraction === 'number' &&
+        item.refundValueFraction >= 0 &&
+        item.refundValueFraction <= 1
+          ? item.refundValueFraction
+          : 1;
+      total += approvedQty * Number(orderItem.unitPrice) * valueFraction;
     }
     return Math.round(total * 100) / 100;
   }

@@ -182,3 +182,83 @@ describe('RedisService — fenced lock primitives (PR 1.7)', () => {
     // The successor lock is NOT touched.
   });
 });
+
+describe('RedisService — delPattern uses non-blocking SCAN + UNLINK (not KEYS)', () => {
+  // KEYS is O(N) over the whole keyspace and blocks the single-threaded
+  // server (stalling lock acquires + the health ping cluster-wide). This
+  // pins the cursor-based SCAN + async UNLINK contract so a regression back
+  // to KEYS is caught.
+  function buildWithScan(batches: string[][]) {
+    const scanStream = jest.fn(() =>
+      (async function* () {
+        for (const b of batches) yield b;
+      })(),
+    );
+    const unlink = jest.fn().mockResolvedValue(1);
+    const keys = jest.fn(); // must NOT be called — KEYS blocks the server
+    const client = { scanStream, unlink, keys } as any;
+
+    const service = Object.create(RedisService.prototype) as RedisService;
+    (service as any).client = client;
+    (service as any).logger = { log: jest.fn(), warn: jest.fn(), error: jest.fn() };
+
+    return { service, scanStream, unlink, keys };
+  }
+
+  it('SCANs the pattern and UNLINKs each batch — never calls blocking KEYS', async () => {
+    const { service, scanStream, unlink, keys } = buildWithScan([
+      ['catalog:cache:a', 'catalog:cache:b'],
+      ['catalog:cache:c'],
+    ]);
+
+    await service.delPattern('catalog:cache:*');
+
+    expect(scanStream).toHaveBeenCalledWith({
+      match: 'catalog:cache:*',
+      count: 200,
+    });
+    expect(unlink).toHaveBeenCalledWith('catalog:cache:a', 'catalog:cache:b');
+    expect(unlink).toHaveBeenCalledWith('catalog:cache:c');
+    expect(keys).not.toHaveBeenCalled();
+  });
+
+  it('no matching keys → no UNLINK and no error', async () => {
+    const { service, unlink } = buildWithScan([[]]);
+
+    await expect(service.delPattern('none:*')).resolves.toBeUndefined();
+    expect(unlink).not.toHaveBeenCalled();
+  });
+});
+
+describe('RedisService — fenced lease renewal (watchdog primitive)', () => {
+  it('renewLockWithToken PEXPIREs (in ms) when the CAS matches our token', async () => {
+    const { service, evalScript } = buildService({ evalReturn: 1 });
+
+    const renewed = await service.renewLockWithToken('cron-lock:job1', 'tok-1', 60);
+
+    expect(renewed).toBe(true);
+    expect(evalScript).toHaveBeenCalledWith(
+      expect.stringContaining('PEXPIRE'),
+      1,
+      'cron-lock:job1',
+      'tok-1',
+      '60000', // ttlSeconds → ms
+    );
+  });
+
+  it('returns false when the lock is no longer ours (CAS miss → 0): never extends a successor lock', async () => {
+    const { service } = buildService({ evalReturn: 0 });
+    expect(await service.renewLockWithToken('k', 'tok-stale', 60)).toBe(false);
+  });
+
+  it('returns false on an empty token without a Redis round-trip', async () => {
+    const { service, evalScript } = buildService({});
+    expect(await service.renewLockWithToken('k', '', 60)).toBe(false);
+    expect(evalScript).not.toHaveBeenCalled();
+  });
+
+  it('returns false (does NOT throw) on a Redis error', async () => {
+    const { service } = buildService({ evalThrows: new Error('connection lost') });
+    expect(await service.renewLockWithToken('k', 'tok', 60)).toBe(false);
+  });
+});

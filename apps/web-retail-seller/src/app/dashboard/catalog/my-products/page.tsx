@@ -44,6 +44,10 @@ interface MappedProduct {
   gstRateBps?: number;
   defaultUqcCode?: string | null;
   mappings: MappingRow[];
+  // 2026-06-15 — this seller's product-level offer state (derived server-side):
+  // SELLING (a live offer → can Pause), PAUSED (self-paused → can Resume),
+  // NONE (nothing to pause/resume). Drives the My Products Pause/Resume action.
+  sellerOfferState?: 'SELLING' | 'PAUSED' | 'NONE';
 }
 
 interface Pagination {
@@ -394,6 +398,45 @@ export default function MyProductsPage() {
     setDeleteProduct(null);
   };
 
+  // 2026-06-15 — pause/resume THIS seller's offer for the whole product (all
+  // variants). Only this seller's mappings change; other sellers keep selling
+  // and the shared product stays live. Resume lifts only the seller's own pause.
+  const handlePauseSales = async (product: MappedProduct) => {
+    if (
+      !window.confirm(
+        `Pause your sales for "${product.title}"? It will stop selling from your account until you resume. Other sellers are unaffected.`,
+      )
+    )
+      return;
+    try {
+      const token = sessionStorage.getItem('accessToken') || '';
+      await sellerProductService.pauseSales(token, product.id);
+      showToast('success', 'Your sales are paused for this product.');
+      fetchProducts({ page: pagination.page });
+    } catch (err: any) {
+      if (err instanceof ApiError && err.status === 401) {
+        router.replace('/login');
+        return;
+      }
+      showToast('error', err?.body?.message || 'Failed to pause sales.');
+    }
+  };
+
+  const handleResumeSales = async (product: MappedProduct) => {
+    try {
+      const token = sessionStorage.getItem('accessToken') || '';
+      await sellerProductService.resumeSales(token, product.id);
+      showToast('success', 'Your sales are live again for this product.');
+      fetchProducts({ page: pagination.page });
+    } catch (err: any) {
+      if (err instanceof ApiError && err.status === 401) {
+        router.replace('/login');
+        return;
+      }
+      showToast('error', err?.body?.message || 'Failed to resume sales.');
+    }
+  };
+
   const handleDelete = async () => {
     if (!deleteProduct) return;
     setDeleteLoading(true);
@@ -545,7 +588,7 @@ export default function MyProductsPage() {
                   <th>Variants</th>
                   <th>Total Stock</th>
                   <th>Status</th>
-                  <th style={{ width: 100 }}>Actions</th>
+                  <th style={{ width: 1, whiteSpace: 'nowrap' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -677,6 +720,12 @@ export default function MyProductsPage() {
                       </td>
                       <td>
                         <div className="variant-table-actions" onClick={(e) => e.stopPropagation()}>
+                          {product.sellerOfferState === 'SELLING' && (
+                            <button onClick={() => handlePauseSales(product)}>Pause sales</button>
+                          )}
+                          {product.sellerOfferState === 'PAUSED' && (
+                            <button onClick={() => handleResumeSales(product)}>Resume sales</button>
+                          )}
                           <button className="danger" onClick={() => openDeleteConfirm(product)}>Remove</button>
                         </div>
                       </td>

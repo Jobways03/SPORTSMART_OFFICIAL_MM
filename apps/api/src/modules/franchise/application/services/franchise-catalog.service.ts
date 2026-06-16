@@ -48,7 +48,21 @@ export class FranchiseCatalogService {
       approvalStatus?: string;
     },
   ) {
-    return this.catalogRepo.findByFranchiseId(franchiseId, params);
+    const result = await this.catalogRepo.findByFranchiseId(franchiseId, params);
+    // Derive per-row offer controls so the UI can show Pause / Resume without
+    // having to know the franchise's own id. `canResume` is true only for a
+    // SELF-pause (stoppedById === this franchise) — an admin STOP stays
+    // admin-only to lift.
+    const mappings = (result.mappings ?? []).map((m: any) => ({
+      ...m,
+      canPause:
+        m.approvalStatus === 'APPROVED' && m.isActive === true && !m.removedAt,
+      canResume:
+        m.approvalStatus === 'STOPPED' &&
+        m.stoppedById === franchiseId &&
+        !m.removedAt,
+    }));
+    return { ...result, mappings };
   }
 
   async addMapping(
@@ -241,6 +255,65 @@ export class FranchiseCatalogService {
 
     // Soft-remove (not hard delete) so history + references survive.
     await this.catalogRepo.softRemove(mappingId, franchiseId);
+  }
+
+  /**
+   * Franchise self-pause — temporarily stops THIS franchise selling the SKU
+   * without touching the shared Product or any other franchise's / seller's
+   * offer. Only an APPROVED, live mapping the franchise owns can be paused.
+   */
+  async pauseMapping(franchiseId: string, mappingId: string, reason?: string) {
+    const mapping = await this.catalogRepo.findById(mappingId);
+    if (!mapping || mapping.franchiseId !== franchiseId) {
+      throw new NotFoundAppException('Catalog mapping not found');
+    }
+    if (mapping.approvalStatus !== 'APPROVED') {
+      throw new BadRequestAppException(
+        'Only an approved, live product can be paused.',
+      );
+    }
+    const updated = await this.catalogRepo.pauseByFranchise(
+      mappingId,
+      franchiseId,
+      reason ?? null,
+    );
+    if (!updated) {
+      // Lost a race (e.g. an admin decision changed the state first).
+      throw new ConflictAppException(
+        'This product could not be paused — its status changed. Refresh and try again.',
+      );
+    }
+    return updated;
+  }
+
+  /**
+   * Franchise self-resume — lifts a self-pause back to APPROVED + active. A
+   * mapping an ADMIN stopped (stoppedById !== this franchise) cannot be
+   * resumed here; it must be re-approved by an admin.
+   */
+  async resumeMapping(franchiseId: string, mappingId: string) {
+    const mapping = await this.catalogRepo.findById(mappingId);
+    if (!mapping || mapping.franchiseId !== franchiseId) {
+      throw new NotFoundAppException('Catalog mapping not found');
+    }
+    if (
+      mapping.approvalStatus !== 'STOPPED' ||
+      mapping.stoppedById !== franchiseId
+    ) {
+      throw new BadRequestAppException(
+        'Only a product you paused yourself can be resumed. A product stopped by an admin must be re-approved by an admin.',
+      );
+    }
+    const updated = await this.catalogRepo.resumeByFranchise(
+      mappingId,
+      franchiseId,
+    );
+    if (!updated) {
+      throw new ConflictAppException(
+        'This product could not be resumed — its status changed. Refresh and try again.',
+      );
+    }
+    return updated;
   }
 
   async getMapping(franchiseId: string, mappingId: string) {

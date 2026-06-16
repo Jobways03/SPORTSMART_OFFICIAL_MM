@@ -16,11 +16,11 @@ describe('classifyReasonForSellerResponse', () => {
     });
   });
 
-  describe('non-seller reasons → NOT_REQUIRED', () => {
+  describe('every reason now requires a response (auto-approval removed)', () => {
     it.each([['CHANGED_MIND'], ['SIZE_FIT_ISSUE'], ['DAMAGED_IN_TRANSIT']])(
-      '%s alone is NOT_REQUIRED',
+      '%s alone is REQUIRED',
       (reason) => {
-        expect(classifyReasonForSellerResponse([reason])).toBe('NOT_REQUIRED');
+        expect(classifyReasonForSellerResponse([reason])).toBe('REQUIRED');
       },
     );
   });
@@ -32,14 +32,14 @@ describe('classifyReasonForSellerResponse', () => {
       ).toBe('REQUIRED');
     });
 
-    it('all non-SELLER reasons stays NOT_REQUIRED', () => {
+    it('formerly-exempt reasons now require a response', () => {
       expect(
         classifyReasonForSellerResponse([
           'CHANGED_MIND',
           'SIZE_FIT_ISSUE',
           'DAMAGED_IN_TRANSIT',
         ]),
-      ).toBe('NOT_REQUIRED');
+      ).toBe('REQUIRED');
     });
 
     it('all SELLER reasons stays REQUIRED', () => {

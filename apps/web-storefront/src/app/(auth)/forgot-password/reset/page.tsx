@@ -3,14 +3,42 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { Eye, EyeOff, AlertCircle, CheckCircle2, ArrowRight, Loader2 } from 'lucide-react';
 import { authService } from '@/services/auth.service';
 import { ApiError } from '@/lib/api-client';
 import { validatePassword, validateConfirmPassword } from '@/lib/validators';
-import '../forgot-password.css';
 
 interface FormErrors {
   newPassword?: string;
   confirmPassword?: string;
+}
+
+/**
+ * Shared shell for the reset page's two states (form + success).
+ * Declared at MODULE scope, not inside the component — a component
+ * defined inside another is a new type on every render, which would
+ * remount this subtree (and drop input focus) on each keystroke.
+ */
+function AuthShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="min-h-screen bg-ink-50 flex flex-col">
+      <header className="flex items-center justify-between px-6 lg:px-10 py-6">
+        <Link
+          href="/"
+          className="font-display text-2xl tracking-wide italic leading-none"
+        >
+          <span className="text-sale">SPORTSMART</span>
+          <span className="text-ink-900">.com</span>
+        </Link>
+      </header>
+      <main className="flex-1 px-6 lg:px-10 py-8 flex items-start sm:items-center justify-center">
+        <div className="w-full max-w-md">{children}</div>
+      </main>
+      <footer className="px-6 py-5 border-t border-ink-200 text-caption text-ink-500 text-center">
+        &copy; {new Date().getFullYear()} Sportsmart. All rights reserved.
+      </footer>
+    </div>
+  );
 }
 
 export default function ResetPasswordPage() {
@@ -101,115 +129,168 @@ export default function ResetPasswordPage() {
     }
   };
 
+  const inputClass = (hasError: boolean, extra = '') =>
+    `w-full h-12 px-4 ${extra} border bg-white text-body-lg placeholder:text-ink-400 focus:outline-none transition-colors rounded-full ${
+      hasError
+        ? 'border-danger focus:border-danger'
+        : 'border-ink-300 hover:border-ink-500 focus:border-ink-900'
+    }`;
+
   if (success) {
     return (
-      <div className="auth-page">
-        <div className="auth-card">
-          <div className="auth-header">
-            <h1 className="auth-logo">SPORTSMART</h1>
-            <h2 className="auth-title">Password Reset</h2>
-          </div>
-          <div className="alert alert-success" role="status">
-            Your password has been reset successfully. You can now sign in with your new password.
-          </div>
-          <Link href="/login">
-            <button className="btn-submit">Go to Sign In</button>
-          </Link>
+      <AuthShell>
+        <h1 className="font-display text-h1 text-ink-900 leading-none">
+          Password reset
+        </h1>
+        <div
+          role="status"
+          className="mt-6 flex items-start gap-2 p-3 border border-success/30 bg-green-50 text-[#15803D] text-body rounded-2xl"
+        >
+          <CheckCircle2 className="size-4 mt-0.5 shrink-0" />
+          Your password has been reset. You can now sign in with your new
+          password.
         </div>
-      </div>
+        <Link
+          href="/login"
+          className="mt-6 w-full h-12 bg-ink-900 text-white font-semibold hover:bg-ink-800 inline-flex items-center justify-center gap-2 transition-colors rounded-full"
+        >
+          Go to sign in <ArrowRight className="size-4" />
+        </Link>
+      </AuthShell>
     );
   }
 
   if (!resetToken) return null;
 
   return (
-    <div className="auth-page">
-      <div className="auth-card">
-        <div className="auth-header">
-          <h1 className="auth-logo">SPORTSMART</h1>
-          <h2 className="auth-title">Set New Password</h2>
-          <p className="auth-subtitle">
-            Create a strong password for your account.
-          </p>
+    <AuthShell>
+      <h1 className="font-display text-h1 text-ink-900 leading-none">
+        Set a new password
+      </h1>
+      <p className="mt-3 text-body-lg text-ink-600">
+        Create a strong password for your account.
+      </p>
+
+      {serverError && (
+        <div
+          role="alert"
+          className="mt-6 flex items-start gap-2 p-3 border border-danger/30 bg-red-50 text-[#B91C1C] text-body rounded-2xl"
+        >
+          <AlertCircle className="size-4 mt-0.5 shrink-0" />
+          {serverError}
         </div>
+      )}
 
-        {serverError && (
-          <div className="alert alert-error" role="alert">
-            {serverError}
-          </div>
-        )}
-
-        <form onSubmit={handleSubmit} noValidate>
-          <div className="form-group">
-            <label htmlFor="newPassword">New Password *</label>
-            <div className="password-wrapper">
+      <form onSubmit={handleSubmit} noValidate className="mt-7 space-y-4">
+        <fieldset disabled={isSubmitting} className="space-y-4 border-0 p-0 m-0">
+          <div>
+            <label
+              htmlFor="newPassword"
+              className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2"
+            >
+              New password
+            </label>
+            <div className="relative">
               <input
                 id="newPassword"
                 type={showPassword ? 'text' : 'password'}
-                placeholder="At least 8 characters"
+                placeholder="Create a password"
                 value={newPassword}
+                maxLength={128}
                 onChange={(e) => setNewPassword(e.target.value)}
                 onBlur={() => handleBlur('newPassword')}
                 aria-invalid={!!errors.newPassword}
-                aria-describedby={errors.newPassword ? 'newPassword-error' : undefined}
-                disabled={isSubmitting}
+                aria-describedby={
+                  errors.newPassword ? 'newPassword-error' : 'newPassword-hint'
+                }
                 autoComplete="new-password"
                 autoFocus
+                className={inputClass(!!errors.newPassword, 'pr-12')}
               />
               <button
                 type="button"
-                className="password-toggle"
                 onClick={() => setShowPassword(!showPassword)}
                 aria-label={showPassword ? 'Hide password' : 'Show password'}
                 tabIndex={-1}
+                className="absolute right-2 top-1/2 -translate-y-1/2 size-8 grid place-items-center text-ink-500 hover:text-ink-900"
               >
-                {showPassword ? 'Hide' : 'Show'}
+                {showPassword ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
               </button>
             </div>
-            {errors.newPassword && (
-              <span id="newPassword-error" className="field-error" role="alert">
-                {errors.newPassword}
-              </span>
+            {errors.newPassword ? (
+              <p
+                id="newPassword-error"
+                role="alert"
+                className="mt-1.5 text-caption text-danger flex items-center gap-1"
+              >
+                <AlertCircle className="size-3" /> {errors.newPassword}
+              </p>
+            ) : (
+              <p id="newPassword-hint" className="mt-1.5 text-caption text-ink-600">
+                Use 8+ characters with upper &amp; lower case, a number and a symbol.
+              </p>
             )}
           </div>
 
-          <div className="form-group">
-            <label htmlFor="confirmPassword">Confirm Password *</label>
-            <div className="password-wrapper">
-              <input
-                id="confirmPassword"
-                type={showPassword ? 'text' : 'password'}
-                placeholder="Re-enter your new password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                onBlur={() => handleBlur('confirmPassword')}
-                aria-invalid={!!errors.confirmPassword}
-                aria-describedby={errors.confirmPassword ? 'confirmPassword-error' : undefined}
-                disabled={isSubmitting}
-                autoComplete="new-password"
-              />
-            </div>
+          <div>
+            <label
+              htmlFor="confirmPassword"
+              className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2"
+            >
+              Confirm password
+            </label>
+            <input
+              id="confirmPassword"
+              type={showPassword ? 'text' : 'password'}
+              placeholder="Re-enter your new password"
+              value={confirmPassword}
+              maxLength={128}
+              onChange={(e) => setConfirmPassword(e.target.value)}
+              onBlur={() => handleBlur('confirmPassword')}
+              aria-invalid={!!errors.confirmPassword}
+              aria-describedby={
+                errors.confirmPassword ? 'confirmPassword-error' : undefined
+              }
+              autoComplete="new-password"
+              className={inputClass(!!errors.confirmPassword)}
+            />
             {errors.confirmPassword && (
-              <span id="confirmPassword-error" className="field-error" role="alert">
-                {errors.confirmPassword}
-              </span>
+              <p
+                id="confirmPassword-error"
+                role="alert"
+                className="mt-1.5 text-caption text-danger flex items-center gap-1"
+              >
+                <AlertCircle className="size-3" /> {errors.confirmPassword}
+              </p>
             )}
           </div>
 
           <button
             type="submit"
-            className="btn-submit"
-            disabled={isSubmitting}
             aria-busy={isSubmitting}
+            className="w-full h-12 bg-ink-900 text-white font-semibold hover:bg-ink-800 disabled:opacity-50 inline-flex items-center justify-center gap-2 transition-colors rounded-full"
           >
-            {isSubmitting ? 'Resetting...' : 'Reset Password'}
+            {isSubmitting ? (
+              <>
+                <Loader2 className="size-4 animate-spin" /> Resetting…
+              </>
+            ) : (
+              <>
+                Reset password <ArrowRight className="size-4" />
+              </>
+            )}
           </button>
-        </form>
+        </fieldset>
+      </form>
 
-        <p className="auth-footer">
-          <Link href="/login">Back to Sign In</Link>
-        </p>
-      </div>
-    </div>
+      <p className="mt-8 text-body text-ink-600 text-center">
+        <Link
+          href="/login"
+          className="text-accent-dark hover:text-ink-900 hover:underline underline-offset-2"
+        >
+          Back to sign in
+        </Link>
+      </p>
+    </AuthShell>
   );
 }

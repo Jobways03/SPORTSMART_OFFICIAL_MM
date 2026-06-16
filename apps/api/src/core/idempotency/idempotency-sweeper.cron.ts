@@ -13,14 +13,16 @@ import { CronInstrumentationService } from '../cron-observability/cron-instrumen
  *     crashed handlers — the interceptor's normal release path
  *     handles graceful errors but a process kill can't run finally).
  *
- * Fast and lock-friendly: deletes in batches of 1000, runs every
- * `IDEMPOTENCY_SWEEP_INTERVAL_MINUTES` minutes (default 15). Skips
- * entirely when IDEMPOTENCY_ENABLED is false (no rows to clean up).
+ * Runs every minute so a crashed-handler PENDING orphan becomes
+ * reclaimable within ~60-120s of its 60s grace window (the interceptor
+ * 409s retries against a live PENDING row until then). A 10-minute cadence
+ * left orphaned keys un-retryable for up to 10 minutes. Leader-elected so
+ * only one replica sweeps per tick; skipped entirely when
+ * IDEMPOTENCY_ENABLED is false.
  */
 @Injectable()
 export class IdempotencySweeperCron {
   private static readonly PENDING_GRACE_MS = 60_000;
-  private static readonly BATCH_SIZE = 1000;
   private readonly logger = new Logger(IdempotencySweeperCron.name);
 
   constructor(
@@ -37,12 +39,14 @@ export class IdempotencySweeperCron {
     private readonly instr: CronInstrumentationService,
   ) {}
 
-  @Cron(CronExpression.EVERY_10_MINUTES)
+  @Cron(CronExpression.EVERY_MINUTE)
   async sweep() {
     if (!this.env.getBoolean('IDEMPOTENCY_ENABLED', false)) return;
 
-    // 10-minute tick × 2 = 20-minute lock TTL.
-    await this.leader.run('idempotency-sweeper', 20 * 60, async () => {
+    // 50s lock TTL — under the 1-minute cadence, so a sweep whose holder
+    // dies mid-run releases the lock before the next tick (a fast batched
+    // deleteMany completes well within this).
+    await this.leader.run('idempotency-sweeper', 50, async () => {
       try {
         await this.instr.wrap('idempotency-sweeper', async () => {
           const now = new Date();

@@ -14,6 +14,22 @@ import { useModal } from '@sportsmart/ui';
 
 type ModalType = 'reject' | 'requestChanges' | 'delete' | null;
 
+// A seller-type-scoped admin (RETAILER_ADMIN / D2C_ADMIN) can only manage MASTER
+// products owned by their own seller type; an unrestricted admin (SUPER_ADMIN /
+// generic SELLER_ADMIN) manages all. Mirrors the backend owner-based product
+// scope guard so we don't surface edit/approve/delete actions that would 404.
+// (Offers/mappings for products owned by another type are still managed via the
+// expandable seller list — only the master-product actions are hidden.)
+const SCOPED_ADMIN_SELLER_TYPE: Record<string, string> = {
+  RETAILER_ADMIN: 'RETAIL',
+  D2C_ADMIN: 'D2C',
+};
+function canEditMasterProduct(adminRole: string, ownerType?: string | null): boolean {
+  const myType = SCOPED_ADMIN_SELLER_TYPE[adminRole];
+  if (!myType) return true; // unrestricted admin
+  return !!ownerType && ownerType === myType;
+}
+
 interface Pagination {
   page: number;
   limit: number;
@@ -419,13 +435,6 @@ const router = useRouter();
           )}
         </h1>
         <div style={{ display: 'flex', gap: 8 }}>
-          <Link
-            href="/dashboard/products/bulk-tax-config"
-            className="products-add-btn"
-            style={{ background: '#f3f4f6', color: '#111' }}
-          >
-            Bulk tax config
-          </Link>
           <Link href="/dashboard/products/new" className="products-add-btn">
             + ADD PRODUCT
           </Link>
@@ -667,18 +676,28 @@ const router = useRouter();
         ) : (
           <>
             <div role="list" style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {products.map((product) => (
+              {products.map((product) => {
+                // Master-product actions (edit/approve/delete) are owner-gated.
+                // For a product owned by another seller type, hide them and make
+                // a row click expand the offers instead of opening the (404-ing)
+                // edit page — the admin manages their offers via the expand.
+                const editable = canEditMasterProduct(adminRole, product.seller?.sellerType);
+                return (
                 <ProductCard
                   key={product.id}
                   product={product}
                   expanded={expandedRows.has(product.id)}
                   inventoryData={inventoryCache[product.id]}
                   onToggleExpand={() => toggleExpanded(product.id)}
-                  onOpen={() => router.push(`/dashboard/products/${product.id}/edit`)}
+                  onOpen={() =>
+                    editable
+                      ? router.push(`/dashboard/products/${product.id}/edit`)
+                      : toggleExpanded(product.id)
+                  }
                   formatPrice={formatPrice}
                   formatStatus={formatStatus}
                   actions={
-                    product.seller ? (
+                    product.seller && editable ? (
                       <ActionMenu
                         product={product}
                         adminRole={adminRole}
@@ -690,7 +709,7 @@ const router = useRouter();
                         onStatusChange={(status) => handleStatusChange(product, status)}
                         onDelete={() => openModal('delete', product)}
                       />
-                    ) : (
+                    ) : !product.seller ? (
                       <button
                         style={{
                           padding: '6px 14px',
@@ -708,10 +727,11 @@ const router = useRouter();
                       >
                         View
                       </button>
-                    )
+                    ) : null
                   }
                 />
-              ))}
+                );
+              })}
             </div>
 
             {/* Pagination */}

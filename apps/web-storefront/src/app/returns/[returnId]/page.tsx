@@ -60,22 +60,6 @@ const { returnId } = useParams<{ returnId: string }>();
     }
   };
 
-  const handleHandedOver = async () => {if (!(await confirmDialog('Confirm that you have handed over the package to the courier?'))) return;
-    setActionLoading(true);
-    try {
-      const res = await returnsService.markHandedOver(returnId);
-      if (res.success) {
-        fetchReturn();
-      } else {
-        void notify(res.message || 'Failed to update return');
-      }
-    } catch {
-      void notify('Failed to update return');
-    } finally {
-      setActionLoading(false);
-    }
-  };
-
   /**
    * Phase 13 (P1.14) — exchange payment flow.
    *
@@ -247,7 +231,8 @@ const { returnId } = useParams<{ returnId: string }>();
   // Only show the "Package handed over" button once admin has actually
   // scheduled a pickup. Before that, the customer shouldn't be able to
   // mark it handed over — there's no courier to hand it to yet.
-  const canMarkHandedOver = ret.status === 'PICKUP_SCHEDULED';
+  // 'Mark handed over to courier' is a courier/ops action — not something the
+  // customer should do, so no customer-facing control for it.
 
   return (
     <StorefrontShell>
@@ -1053,9 +1038,26 @@ const { returnId } = useParams<{ returnId: string }>();
           >
             <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 12 }}>Status Timeline</h3>
             <div style={{ position: 'relative', paddingLeft: 20 }}>
-              {ret.statusHistory.map((entry, idx) => {
+              {(() => {
+                // A reschedule appends a fresh PICKUP_SCHEDULED row, leaving a
+                // stale one with the old (often "today") date. Show only the
+                // latest pickup-scheduled so the customer sees one current
+                // pickup date instead of an outdated duplicate.
+                const pickups = ret.statusHistory!.filter(
+                  (e) => e.toStatus === 'PICKUP_SCHEDULED',
+                );
+                const latestPickupId = pickups.length
+                  ? pickups.reduce((a, b) =>
+                      new Date(a.createdAt) >= new Date(b.createdAt) ? a : b,
+                    ).id
+                  : null;
+                const visibleHistory = ret.statusHistory!.filter(
+                  (e) =>
+                    e.toStatus !== 'PICKUP_SCHEDULED' || e.id === latestPickupId,
+                );
+                return visibleHistory.map((entry, idx) => {
                 const entryColor = getReturnStatusColor(entry.toStatus);
-                const isLast = idx === ret.statusHistory!.length - 1;
+                const isLast = idx === visibleHistory.length - 1;
                 return (
                   <div
                     key={entry.id}
@@ -1102,13 +1104,14 @@ const { returnId } = useParams<{ returnId: string }>();
                     )}
                   </div>
                 );
-              })}
+                });
+              })()}
             </div>
           </div>
         )}
 
         {/* Actions */}
-        {(canCancel || canMarkHandedOver) && (
+        {canCancel && (
           <div
             style={{
               display: 'flex',
@@ -1135,25 +1138,6 @@ const { returnId } = useParams<{ returnId: string }>();
                 }}
               >
                 {actionLoading ? 'Cancelling...' : 'Cancel Return'}
-              </button>
-            )}
-            {canMarkHandedOver && (
-              <button
-                onClick={handleHandedOver}
-                disabled={actionLoading}
-                style={{
-                  padding: '10px 24px',
-                  fontSize: 14,
-                  fontWeight: 600,
-                  border: '1px solid #2563eb',
-                  background: '#2563eb',
-                  color: '#fff',
-                  borderRadius: 8,
-                  cursor: actionLoading ? 'not-allowed' : 'pointer',
-                  opacity: actionLoading ? 0.7 : 1,
-                }}
-              >
-                {actionLoading ? 'Updating...' : 'Mark Handed Over to Courier'}
               </button>
             )}
           </div>

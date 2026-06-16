@@ -254,6 +254,10 @@ export const adminReturnsService = {
         qcOutcome: QcOutcome;
         qcQuantityApproved: number;
         qcNotes?: string;
+        // Partial-VALUE refund override (gross paise). Only honoured for
+        // PARTIAL outcomes; reduces the customer refund + scales GST and
+        // seller commission proportionally.
+        qcRefundAmountInPaise?: number;
       }>;
       overallNotes?: string;
       liabilityParty?: LiabilityParty;
@@ -263,6 +267,25 @@ export const adminReturnsService = {
     return apiClient(`/admin/returns/${returnId}/qc-decision`, {
       method: 'PATCH',
       body: JSON.stringify(payload),
+    });
+  },
+
+  // Upload an admin QC-inspection photo for the return. Multipart — the
+  // shared apiClient detects the FormData body and skips the JSON
+  // Content-Type. Mirrors the seller portal's /qc-evidence upload so an
+  // admin can satisfy the RETURN_QC_MIN_EVIDENCE gate when the seller /
+  // warehouse didn't contribute a photo. Requires `returns.uploadQcEvidence`.
+  uploadQcEvidence(
+    returnId: string,
+    file: File,
+    description?: string,
+  ): Promise<ApiResponse> {
+    const formData = new FormData();
+    formData.append('image', file);
+    if (description) formData.append('description', description);
+    return apiClient(`/admin/returns/${returnId}/qc-evidence`, {
+      method: 'POST',
+      body: formData,
     });
   },
 

@@ -85,6 +85,22 @@ export class HealthController {
   }
 
   /**
+   * Readiness probe — k8s-style `/ready` sibling of `/live`.
+   *
+   * infra/ci-cd/k8s/api.deployment.yaml points its readinessProbe at
+   * /api/v1/health/ready. Semantically identical to the LB-facing root
+   * `/health` check: dependency-aware (DB + Redis; external probes OFF
+   * by default) and returns 503 when a dependency is down, so the pod is
+   * removed from Service endpoints WITHOUT being restarted — a DB blip
+   * must de-route traffic, not crash-loop every replica. Delegates to
+   * `check` so the readiness contract stays in one place.
+   */
+  @Get('ready')
+  async ready(@Res({ passthrough: true }) res: Response) {
+    return this.check(res);
+  }
+
+  /**
    * Phase 11 (2026-05-16) — dedicated external-deps probe.
    *
    * Returns Razorpay / R2 status without touching DB or

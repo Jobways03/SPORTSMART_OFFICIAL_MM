@@ -70,6 +70,7 @@ describe('IdempotencyInterceptor', () => {
     method?: string;
     path?: string;
     actor?: { type: string; id: string };
+    ip?: string;
   }): { ctx: ExecutionContext; res: any } => {
     const res = {
       statusCode: 200,
@@ -84,6 +85,7 @@ describe('IdempotencyInterceptor', () => {
       route: { path: opts.path ?? '/customer/returns' },
     };
     if (opts.actor?.type === 'CUSTOMER') req.userId = opts.actor.id;
+    if (opts.ip) req.ip = opts.ip;
 
     const handler: any = function namedHandler() {};
     if (opts.isIdempotent) {
@@ -181,7 +183,10 @@ describe('IdempotencyInterceptor', () => {
     expect(prismaMock.idempotencyKey.create).toHaveBeenCalledTimes(1);
     expect(prismaMock.idempotencyKey.create.mock.calls[0][0].data).toEqual(
       expect.objectContaining({
-        key: 'idemkey-12345',
+        // Stored key is namespaced per actor (<type>:<id>:<clientKey>) to
+        // prevent cross-actor collision on the global @unique; the raw actor
+        // is still in the actorType/actorId columns.
+        key: 'CUSTOMER:user-1:idemkey-12345',
         actorType: 'CUSTOMER',
         actorId: 'user-1',
         endpoint: 'POST /customer/returns',
@@ -198,6 +203,69 @@ describe('IdempotencyInterceptor', () => {
         responseBody: { ok: 1 },
       }),
     });
+  });
+
+  it('namespaces the stored key per actor — same X-Idempotency-Key, different principals do NOT collide', async () => {
+    // Regression for the cross-actor collision: with a global @unique on the
+    // raw key, two authenticated principals reusing the same client key would
+    // collide (replay one actor's response to the other, or 409). The stored
+    // key is now <actorType>:<actorId>:<clientKey>.
+    prismaMock.idempotencyKey.create.mockResolvedValue({ id: 'idem-x' });
+    prismaMock.idempotencyKey.update.mockResolvedValue({});
+
+    const sharedKey = 'shared-key-1234';
+    const run = async (actorId: string) => {
+      const { ctx } = buildContext({
+        isIdempotent: true,
+        headers: { 'x-idempotency-key': sharedKey },
+        body: { foo: 'bar' },
+        actor: { type: 'CUSTOMER', id: actorId },
+      });
+      await lastValueFrom(interceptor.intercept(ctx, buildHandler({ ok: 1 })));
+    };
+
+    await run('user-1');
+    await run('user-2');
+
+    const storedKeys = prismaMock.idempotencyKey.create.mock.calls.map(
+      (c) => c[0].data.key,
+    );
+    expect(storedKeys).toEqual([
+      'CUSTOMER:user-1:shared-key-1234',
+      'CUSTOMER:user-2:shared-key-1234',
+    ]);
+    expect(storedKeys[0]).not.toEqual(storedKeys[1]);
+  });
+
+  it('namespaces ANONYMOUS callers by client IP (no shared global anon namespace)', async () => {
+    // POST /auth/register is @Idempotent AND unauthenticated → ANONYMOUS actor
+    // (id '-'). Without IP discrimination every anon client would share one
+    // namespace (cross-client 409 DoS). Same key + different IPs → distinct
+    // stored keys.
+    prismaMock.idempotencyKey.create.mockResolvedValue({ id: 'idem-a' });
+    prismaMock.idempotencyKey.update.mockResolvedValue({});
+
+    const sharedKey = 'anon-key-1234';
+    const run = async (ip: string) => {
+      const { ctx } = buildContext({
+        isIdempotent: true,
+        headers: { 'x-idempotency-key': sharedKey },
+        body: { foo: 'bar' },
+        ip, // no actor → ANONYMOUS
+      });
+      await lastValueFrom(interceptor.intercept(ctx, buildHandler({ ok: 1 })));
+    };
+
+    await run('1.1.1.1');
+    await run('2.2.2.2');
+
+    const storedKeys = prismaMock.idempotencyKey.create.mock.calls.map(
+      (c) => c[0].data.key,
+    );
+    expect(storedKeys).toEqual([
+      'ANONYMOUS:1.1.1.1:anon-key-1234',
+      'ANONYMOUS:2.2.2.2:anon-key-1234',
+    ]);
   });
 
   it('releases the claim if the handler throws', async () => {

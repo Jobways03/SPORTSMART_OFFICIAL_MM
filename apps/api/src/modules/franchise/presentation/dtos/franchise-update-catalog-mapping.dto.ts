@@ -1,10 +1,8 @@
 import { IsOptional, IsString, MaxLength, IsBoolean } from 'class-validator';
 
 export class FranchiseUpdateCatalogMappingDto {
-  @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  franchiseSku?: string;
+  // No per-franchise SKU override: the SKU is always the master / global
+  // (super-admin) SKU. (franchiseSku removed — not editable.)
 
   @IsOptional()
   @IsString()

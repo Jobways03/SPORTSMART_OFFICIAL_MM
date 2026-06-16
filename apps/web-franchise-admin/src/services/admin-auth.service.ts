@@ -46,11 +46,14 @@ export const adminAuthService = {
   login(
     payload: AdminLoginPayload,
   ): Promise<ApiResponse<AdminLoginResponseData | AdminLoginMfaChallenge>> {
+    // portalType identifies THIS portal so the API can reject a portal-specific
+    // admin role (D2C_ADMIN / RETAILER_ADMIN / AFFILIATE_ADMIN) that tries to
+    // sign in here. SUPER_ADMIN + generic roles are allowed from any portal.
     return apiClient<AdminLoginResponseData | AdminLoginMfaChallenge>(
       '/admin/auth/login',
       {
         method: 'POST',
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, portalType: 'FRANCHISE' }),
       },
     );
   },

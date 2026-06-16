@@ -15,6 +15,10 @@
 
 export type SellerType = 'D2C' | 'RETAIL';
 
+/** Every seller type that exists. An admin holding the scope key for ALL of
+ *  them is effectively unrestricted (see resolveSellerScope). */
+export const ALL_SELLER_TYPES: readonly SellerType[] = ['D2C', 'RETAIL'];
+
 /** Maps a seller type to the permission key that grants access to it. */
 export const SELLER_SCOPE_PERMISSION: Record<SellerType, string> = {
   D2C: 'sellers.scope.d2c',
@@ -39,7 +43,15 @@ export function resolveSellerScope(
   const allowed: SellerType[] = [];
   if (perms.includes(SELLER_SCOPE_PERMISSION.D2C)) allowed.push('D2C');
   if (perms.includes(SELLER_SCOPE_PERMISSION.RETAIL)) allowed.push('RETAIL');
-  return allowed.length === 0
+  // Holding NONE → unrestricted (legacy default). Holding EVERY seller type's
+  // key → also effectively unrestricted: SUPER_ADMIN gets both via
+  // ALL_PERMISSION_KEYS, and a scope of "all types" must NOT behave like a
+  // partial filter — otherwise the `sellerType IN [...]` filters silently hide
+  // null-owner / platform / franchise-fulfilled rows (orders, returns,
+  // platform products) from the super admin. Only a STRICT SUBSET (e.g. just
+  // D2C) is a real restriction. (Not keyed on the role string, so a custom
+  // role granted both keys behaves identically.)
+  return allowed.length === 0 || allowed.length === ALL_SELLER_TYPES.length
     ? { unrestricted: true, allowed: [] }
     : { unrestricted: false, allowed };
 }

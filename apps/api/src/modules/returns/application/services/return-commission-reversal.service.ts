@@ -42,6 +42,18 @@ export class ReturnCommissionReversalService {
   }
 
   /**
+   * Per-item partial-VALUE fraction (0..1). Set by the QC step when an
+   * admin refunds only part of an item's value; defaults to 1 (full) for
+   * every normal full-quantity / partial-quantity reversal. Scales both
+   * the customer refund and the seller commission clawback so a partial
+   * refund only claws back a proportional slice of the margin.
+   */
+  private valueFractionOf(item: any): number {
+    const f = item?.refundValueFraction;
+    return typeof f === 'number' && f >= 0 && f <= 1 ? f : 1;
+  }
+
+  /**
    * Calculate refund amount and reverse commission proportionally.
    * Returns total refund amount (sum of approvedQty * unitPrice across all items).
    *
@@ -77,8 +89,11 @@ export class ReturnCommissionReversalService {
       const orderItem = item.orderItem;
       if (!orderItem) continue;
       const approvedQty = item.qcQuantityApproved || 0;
+      const valueFraction = this.valueFractionOf(item);
       totalRefund = totalRefund.add(
-        new Prisma.Decimal(orderItem.unitPrice).mul(approvedQty),
+        new Prisma.Decimal(orderItem.unitPrice)
+          .mul(approvedQty)
+          .mul(valueFraction),
       );
     }
 
@@ -134,6 +149,7 @@ export class ReturnCommissionReversalService {
         if (!orderItem) continue;
         const approvedQty = item.qcQuantityApproved || 0;
         if (approvedQty === 0) continue;
+        const valueFraction = this.valueFractionOf(item);
 
         const commissionRecord = await db.commissionRecord.findUnique({
           where: { orderItemId: orderItem.id },
@@ -173,7 +189,12 @@ export class ReturnCommissionReversalService {
           0,
         );
         const cumulativeApprovedQty = priorApprovedQty + approvedQty;
-        const isFullyRefunded = cumulativeApprovedQty >= totalQty;
+        // A partial-VALUE refund (fraction < 1) never fully refunds the
+        // commission even when the whole quantity is "returned" — the seller
+        // keeps the margin on the un-refunded value. Only treat as fully
+        // refunded when the quantity is exhausted AND the value is whole.
+        const isFullyRefunded =
+          cumulativeApprovedQty >= totalQty && valueFraction >= 1;
 
         const platformMarginDec = new Prisma.Decimal(
           commissionRecord.platformMargin,
@@ -188,6 +209,7 @@ export class ReturnCommissionReversalService {
           : platformMarginDec
               .mul(approvedQty)
               .div(totalQty)
+              .mul(valueFraction)
               .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
         const refundedMargin = refundedMarginDec.toNumber();
 
@@ -213,6 +235,7 @@ export class ReturnCommissionReversalService {
         // `refundedAdminEarning` is a running sum of these rows.
         const itemRefund = new Prisma.Decimal(orderItem.unitPrice)
           .mul(approvedQty)
+          .mul(valueFraction)
           .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
           .toNumber();
         await db.commissionReversalRecord.create({
@@ -228,9 +251,11 @@ export class ReturnCommissionReversalService {
             actorId: opts?.actorId ?? null,
             note:
               opts?.note ??
-              (approvedQty === totalQty
-                ? 'Full return — commission marked REFUNDED'
-                : `Partial return (${approvedQty}/${totalQty})`),
+              (valueFraction < 1
+                ? `Partial-value refund (${Math.round(valueFraction * 100)}% of qty ${approvedQty}/${totalQty})`
+                : approvedQty === totalQty
+                  ? 'Full return — commission marked REFUNDED'
+                  : `Partial return (${approvedQty}/${totalQty})`),
           },
         });
 
