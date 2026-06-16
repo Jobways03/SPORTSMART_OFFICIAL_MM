@@ -340,6 +340,9 @@ const taxPdfStorageProvider = {
     GstnReVerificationCron,
   ],
   exports: [
+    // Exported so the shipping module (which imports TaxModule) can reuse the
+    // same Puppeteer renderer for the HTML shipping label (single browser).
+    HtmlToPdfService,
     PlaceOfSupplyService,
     TaxConfigService,
     TaxSnapshotService,

@@ -10,9 +10,9 @@
  *     If no response by the deadline, the cron flips PENDING → EXPIRED
  *     and QC defaults to seller liability.
  *
- *   NOT_REQUIRED — claim is unrelated to the seller (CHANGED_MIND,
- *     SIZE_FIT_ISSUE) or routes through a different liability path
- *     (DAMAGED_IN_TRANSIT → courier claim, not seller debit).
+ *   NOT_REQUIRED — (historical) no reason is exempt anymore. Since
+ *     auto-approval was removed, EVERY reason now REQUIRES a seller
+ *     response, so the exempt set below is intentionally empty.
  *
  * "Mixed" carts (some items REQUIRED, some not) escalate to REQUIRED
  * — fairness gate fires whenever any item could land on the seller.
@@ -23,19 +23,23 @@
 
 export type SellerResponseRequirement = 'REQUIRED' | 'NOT_REQUIRED';
 
+// Policy (auto-approval removed): EVERY return reason now requires a seller
+// response — the seller must accept ("my fault") or contest ("not my fault")
+// before QC attributes liability. Previously CHANGED_MIND / SIZE_FIT_ISSUE /
+// DAMAGED_IN_TRANSIT skipped the seller window; they no longer do.
 const REASONS_REQUIRING_SELLER_RESPONSE = new Set([
   'DEFECTIVE',
   'WRONG_ITEM',
   'NOT_AS_DESCRIBED',
   'QUALITY_ISSUE',
   'OTHER',
-]);
-
-const REASONS_NOT_REQUIRING_SELLER_RESPONSE = new Set([
   'CHANGED_MIND',
   'SIZE_FIT_ISSUE',
   'DAMAGED_IN_TRANSIT',
 ]);
+
+// No reason is exempt anymore (kept for the classifier's fall-through check).
+const REASONS_NOT_REQUIRING_SELLER_RESPONSE = new Set<string>();
 
 export function classifyReasonForSellerResponse(
   reasonCategories: string[],

@@ -201,11 +201,164 @@ export default function RefundApprovalDetailPage() {
       <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: 16, marginTop: 20 }}>
         {/* LEFT — source context (read-only) */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Phase 253 — universal context so finance always knows WHAT they're
+              approving, for EVERY source type (incl. MANUAL / GOODWILL). */}
+          <Card title="Context">
+            {/* What — source + order */}
+            <KV
+              label="Source"
+              value={
+                row.isGoodwill
+                  ? 'Goodwill credit (platform expense)'
+                  : src?.label ?? src?.sourceType ?? row.sourceType
+              }
+            />
+            <KV
+              label="Order"
+              value={
+                row.order ? (
+                  row.orderId ? (
+                    <Link
+                      href={`/dashboard/orders/${row.orderId}`}
+                      style={{ color: '#2563eb', fontWeight: 600 }}
+                    >
+                      {row.order.orderNumber}
+                    </Link>
+                  ) : (
+                    row.order.orderNumber
+                  )
+                ) : (
+                  'Not linked to an order'
+                )
+              }
+            />
+            {row.order && (
+              <KV
+                label="Order status"
+                value={`${row.order.orderStatus
+                  .replace(/_/g, ' ')
+                  .toLowerCase()} · ${row.order.paymentMethod}`}
+              />
+            )}
+
+            {/* Why — cancellation callout (the reason a cancelled-order refund
+                exists). Amber so it draws the eye to the decision-critical fact. */}
+            {row.order &&
+              (row.order.cancelledByName ||
+                row.order.cancellationSource ||
+                row.order.cancelReason) && (
+                <div
+                  style={{
+                    marginTop: 14,
+                    padding: '12px 14px',
+                    background: '#fff7ed',
+                    border: '1px solid #fed7aa',
+                    borderRadius: 10,
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, fontWeight: 700, color: '#9a3412', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.25" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <circle cx="12" cy="12" r="10" />
+                      <path d="m15 9-6 6" />
+                      <path d="m9 9 6 6" />
+                    </svg>
+                    Order cancelled
+                  </div>
+                  <div style={{ fontSize: 13, color: '#7c2d12', marginTop: 6 }}>
+                    by{' '}
+                    <strong>
+                      {row.order.cancellationSource === 'CUSTOMER'
+                        ? 'Customer'
+                        : row.order.cancellationSource === 'SYSTEM'
+                          ? 'System'
+                          : row.order.cancelledByName
+                            ? `${row.order.cancelledByName} (admin)`
+                            : row.order.cancellationSource ?? '—'}
+                    </strong>
+                    {row.order.cancelledAt && (
+                      <> · {new Date(row.order.cancelledAt).toLocaleString('en-IN')}</>
+                    )}
+                  </div>
+                  {row.order.cancelReason && (
+                    <div style={{ fontSize: 13, color: '#7c2d12', marginTop: 6, whiteSpace: 'pre-wrap', fontStyle: 'italic' }}>
+                      “{row.order.cancelReason}”
+                    </div>
+                  )}
+                </div>
+              )}
+
+            {/* Who — customer mini-profile */}
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid #F3F4F6', display: 'flex', gap: 12, alignItems: 'center' }}>
+              <div
+                style={{
+                  width: 40,
+                  height: 40,
+                  borderRadius: '50%',
+                  background: '#eef2ff',
+                  color: '#4338ca',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  fontWeight: 700,
+                  fontSize: 14,
+                  flexShrink: 0,
+                }}
+              >
+                {(row.customer?.name || '?')
+                  .split(' ')
+                  .filter(Boolean)
+                  .map((w) => w[0])
+                  .slice(0, 2)
+                  .join('')
+                  .toUpperCase() || '?'}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <div style={{ fontWeight: 600, fontSize: 14, color: '#0F1115' }}>
+                  {row.customer?.name || '—'}
+                </div>
+                {row.customer?.email && (
+                  <div style={{ fontSize: 12, color: '#6b7280', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {row.customer.email}
+                  </div>
+                )}
+                {row.customer?.phone && (
+                  <div style={{ fontSize: 12, color: '#6b7280' }}>{row.customer.phone}</div>
+                )}
+              </div>
+            </div>
+
+            {/* Provenance — who raised the refund + any instruction-level reason */}
+            {row.requestedBy && (
+              <div style={{ marginTop: 12, fontSize: 12, color: '#6b7280' }}>
+                Refund raised by{' '}
+                <strong style={{ color: '#374151' }}>{row.requestedBy.name ?? 'System'}</strong>
+                {' · '}
+                {new Date(row.requestedBy.at).toLocaleString('en-IN')}
+              </div>
+            )}
+            {(src?.reason ||
+              row.customerVisibleReason ||
+              row.customerRemedy ||
+              row.requestedBy?.notes) && (
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #F3F4F6' }}>
+                <div style={{ fontSize: 11, color: '#525A65', textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 4 }}>
+                  Refund reason
+                </div>
+                <div style={{ fontSize: 13, color: '#0F1115', whiteSpace: 'pre-wrap', background: '#FAFAFA', padding: 10, borderRadius: 8 }}>
+                  {src?.reason ||
+                    row.customerVisibleReason ||
+                    row.customerRemedy ||
+                    row.requestedBy?.notes}
+                </div>
+              </div>
+            )}
+          </Card>
+
           {src && src.sourceType === 'DISPUTE' && (
             <Card title="Dispute summary">
-              <KV label="Dispute number" value={src.number} />
+              <KV label="Dispute number" value={src.number ?? '—'} />
               <KV label="Kind" value={src.kind ?? '—'} />
-              <KV label="Status" value={src.status.replace(/_/g, ' ').toLowerCase()} />
+              <KV label="Status" value={(src.status ?? '').replace(/_/g, ' ').toLowerCase()} />
               <KV label="Filed by" value={`${src.filedByName ?? '—'} (${(src.filedByType ?? '').toLowerCase()})`} />
               {src.orderNumber && <KV label="Order" value={src.orderNumber} />}
               {src.returnNumber && <KV label="Return" value={src.returnNumber} />}
@@ -283,8 +436,8 @@ export default function RefundApprovalDetailPage() {
 
           {src && src.sourceType === 'RETURN' && (
             <Card title="Return summary">
-              <KV label="Return number" value={src.number} />
-              <KV label="Status" value={src.status.replace(/_/g, ' ').toLowerCase()} />
+              <KV label="Return number" value={src.number ?? '—'} />
+              <KV label="Status" value={(src.status ?? '').replace(/_/g, ' ').toLowerCase()} />
               {src.orderNumber && <KV label="Order" value={src.orderNumber} />}
               {src.refundAmount && <KV label="Approved refund" value={`₹${src.refundAmount}`} />}
               {src.customerNotes && (
@@ -310,13 +463,9 @@ export default function RefundApprovalDetailPage() {
             </Card>
           )}
 
-          {!src && (
-            <Card title="Source">
-              <p style={{ margin: 0, fontSize: 13, color: '#7A828F' }}>
-                Source data unavailable ({row.sourceType} {row.sourceId.slice(0, 8)}…).
-              </p>
-            </Card>
-          )}
+          {/* Phase 253 — the universal Context card above always shows the
+              source + reason, so the old "Source data unavailable" fallback
+              (which left finance with nothing for MANUAL/GOODWILL) is removed. */}
         </div>
 
         {/* RIGHT — money + actions */}
