@@ -25,11 +25,11 @@ import {
   AdminAuthGuard,
   PermissionsGuard,
   AdminMappingSellerScopeGuard,
-  AdminProductSellerScopeGuard,
 } from '../../../../../core/guards';
 import {
   resolveSellerScope,
   scopeAllowsType,
+  resolveScopedTypes,
 } from '../../../../../core/authorization/seller-scope';
 import { Permissions } from '../../../../../core/decorators/permissions.decorator';
 import { Idempotent } from '../../../../../core/decorators/idempotent.decorator';
@@ -80,14 +80,18 @@ const STALE_REPAIR_LOCK_TTL_SECONDS = 60;
 @Controller('admin')
 // Seller-type scope enforcement (Phase 38 boundary, extended here). The mapping
 // guard scopes every `:mappingId` route (approve/reject/stop/reapprove/update)
-// by the mapping's owning seller type; the product guard scopes the
-// `products/:productId/seller-mappings` read. Bulk routes carry no id param —
-// both guards no-op there and the handlers filter out-of-scope ids per-row.
+// by the mapping's owning seller type. List routes + the
+// `products/:productId/seller-mappings` read self-scope per-row (handlers pass
+// resolveScopedTypes to the repo), so a D2C/RETAIL admin sees only its own
+// type's rows. We deliberately do NOT use the OWNER-based product scope guard
+// here: it 404'd the read for a shared product owned by a different-type seller
+// but mapped by one of the admin's sellers (e.g. a retail seller offering a
+// D2C-owned product — the retail admin must still see & manage that offer).
+// Product *write* routes keep the owner-based guard on admin-products.controller.
 @UseGuards(
   AdminAuthGuard,
   PermissionsGuard,
   AdminMappingSellerScopeGuard,
-  AdminProductSellerScopeGuard,
 )
 export class AdminSellerMappingsController {
   constructor(
@@ -191,6 +195,7 @@ export class AdminSellerMappingsController {
   @Permissions('catalog.read')
   async getMappingsForProduct(
     @Param('productId') productId: string,
+    @Req() req?: any,
   ) {
     const product = await this.productRepo.findByIdBasic(productId);
 
@@ -204,7 +209,12 @@ export class AdminSellerMappingsController {
       await this.autoRepairStaleMappings(productId);
     }
 
-    const mappings = await this.sellerMappingRepo.findByProduct(productId);
+    // Seller-type scope: a D2C/RETAIL-scoped admin only sees its own type's
+    // seller mappings (and SKUs) here (super admin = both types = all).
+    const mappings = await this.sellerMappingRepo.findByProduct(
+      productId,
+      resolveScopedTypes(req?.user?.permissions),
+    );
 
     const data = mappings.map((m: any) => {
       const availableQty = m.stockQty - m.reservedQty;
@@ -273,6 +283,7 @@ export class AdminSellerMappingsController {
     @Query('isActive') isActive?: string,
     @Query('approvalStatus') approvalStatus?: string,
     @Query('search') search?: string,
+    @Req() req?: any,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '10', 10) || 10));
@@ -285,6 +296,8 @@ export class AdminSellerMappingsController {
       isActive: isActive !== undefined && isActive !== '' ? isActive === 'true' : undefined,
       approvalStatus,
       search,
+      // Seller-type scope: confine D2C/RETAIL-scoped admins to their own type.
+      sellerTypes: resolveScopedTypes(req?.user?.permissions),
     });
 
     const enrichedMappings = mappings.map((m: any) => {
@@ -335,11 +348,19 @@ export class AdminSellerMappingsController {
   async listPendingMappings(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: any,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '20', 10) || 20));
 
-    const { mappings, total } = await this.sellerMappingRepo.findPendingPaginated(pageNum, limitNum);
+    // Seller-type scope: a D2C/RETAIL-scoped admin only sees its own type's
+    // pending approvals (super admin = unrestricted = sees all).
+    const scopedTypes = resolveScopedTypes(req?.user?.permissions);
+    const { mappings, total } = await this.sellerMappingRepo.findPendingPaginated(
+      pageNum,
+      limitNum,
+      scopedTypes,
+    );
 
     return {
       success: true,

@@ -14,7 +14,12 @@ import {
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import type { Response } from 'express';
-import { AdminAuthGuard, PermissionsGuard } from '../../../../core/guards';
+import {
+  AdminAuthGuard,
+  PermissionsGuard,
+  AdminSellerIdScopeGuard,
+} from '../../../../core/guards';
+import { resolveScopedTypes } from '../../../../core/authorization/seller-scope';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { escapeCsvField } from '../../../../core/utils/csv.util';
@@ -79,7 +84,10 @@ export class AccountsDashboardController {
   @Get('sellers')
   async getSellerOverview(@Req() req: any, @Query() query: AccountsDateRangeDto) {
     const { from, to } = parseAccountsRange(query);
-    const data = await this.dashboardService.getSellerOverview(from, to);
+    // Isolation fix (2026-06-16) — a scoped admin's seller overview reflects only
+    // their seller type(s) (null = unrestricted: super / franchise admin).
+    const allowed = resolveScopedTypes(req?.user?.permissions);
+    const data = await this.dashboardService.getSellerOverview(from, to, allowed);
     await this.logView(req, 'sellers', { fromDate: query.fromDate ?? null, toDate: query.toDate ?? null });
     return { success: true, message: 'Seller financial overview retrieved', data };
   }
@@ -139,7 +147,9 @@ export class AccountsDashboardController {
     const { from, to } = parseAccountsRange({ fromDate, toDate });
     const m = this.parseMetric(metric);
     const nt = this.parseNodeType(nodeType);
-    const data = await this.dashboardService.getTopPerformers(limitNum, from, to, pageNum, m, nt);
+    // Isolation fix (2026-06-16) — scope the seller leaderboard to the admin.
+    const allowed = resolveScopedTypes(req?.user?.permissions);
+    const data = await this.dashboardService.getTopPerformers(limitNum, from, to, pageNum, m, nt, allowed);
     await this.logView(req, 'top-performers', { fromDate: fromDate ?? null, toDate: toDate ?? null, page: pageNum, limit: limitNum, metric: m, nodeType: nt });
     return { success: true, message: 'Top performers retrieved', data };
   }
@@ -160,7 +170,9 @@ export class AccountsDashboardController {
     const { from, to } = parseAccountsRange({ fromDate, toDate });
     const m = this.parseMetric(metric);
     const nt = this.parseNodeType(nodeType);
-    const data = await this.dashboardService.getTopPerformers(limitNum, from, to, 1, m, nt);
+    // Isolation fix (2026-06-16) — scope the exported leaderboard to the admin.
+    const allowed = resolveScopedTypes(req?.user?.permissions);
+    const data = await this.dashboardService.getTopPerformers(limitNum, from, to, 1, m, nt, allowed);
     await this.logView(req, 'top-performers-export', { metric: m, nodeType: nt, limit: limitNum });
     res.setHeader('Content-Disposition', `attachment; filename="top-performers-${m.toLowerCase()}.csv"`);
     const rows: string[][] = [
@@ -184,6 +196,9 @@ export class AccountsDashboardController {
    * accounts.read gate + throttle; audited (#12).
    */
   @Get('sellers/:sellerId/overview')
+  // Isolation fix (2026-06-16) — a scoped admin (D2C_ADMIN / RETAILER_ADMIN)
+  // may only drill into a seller of their own type; cross-type → 404.
+  @UseGuards(AdminSellerIdScopeGuard)
   async getSellerAccounts(
     @Req() req: any,
     @Param('sellerId', new ParseUUIDPipe()) sellerId: string,
@@ -197,6 +212,7 @@ export class AccountsDashboardController {
 
   /* #11 — paginated commission-record drill-down for a seller. */
   @Get('sellers/:sellerId/commission-records')
+  @UseGuards(AdminSellerIdScopeGuard) // isolation fix (2026-06-16) — own-type only
   async getSellerCommission(
     @Req() req: any,
     @Param('sellerId', new ParseUUIDPipe()) sellerId: string,
@@ -214,6 +230,7 @@ export class AccountsDashboardController {
 
   /* #11 — paginated settlement drill-down for a seller. */
   @Get('sellers/:sellerId/settlements')
+  @UseGuards(AdminSellerIdScopeGuard) // isolation fix (2026-06-16) — own-type only
   async getSellerSettlementsList(
     @Req() req: any,
     @Param('sellerId', new ParseUUIDPipe()) sellerId: string,
@@ -232,6 +249,7 @@ export class AccountsDashboardController {
   /* #14 — per-seller summary CSV export (every field formula-escaped). */
   @Get('sellers/:sellerId/export.csv')
   @Header('Content-Type', 'text/csv')
+  @UseGuards(AdminSellerIdScopeGuard) // isolation fix (2026-06-16) — own-type only
   async exportSellerCsv(
     @Req() req: any,
     @Param('sellerId', new ParseUUIDPipe()) sellerId: string,

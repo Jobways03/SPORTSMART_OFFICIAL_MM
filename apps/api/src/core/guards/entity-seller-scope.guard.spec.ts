@@ -4,6 +4,9 @@ import {
   AdminReturnSellerScopeGuard,
   AdminProductSellerScopeGuard,
   AdminMappingSellerScopeGuard,
+  AdminSellerIdScopeGuard,
+  AdminSettlementSellerScopeGuard,
+  AdminCommissionRecordScopeGuard,
 } from './entity-seller-scope.guard';
 import { NotFoundAppException } from '../exceptions/not-found.exception';
 
@@ -136,6 +139,93 @@ describe('AdminMappingSellerScopeGuard', () => {
       guard.canActivate(makeCtx({ user: { permissions: ['catalog.approve'] }, params: { mappingId: 'm1' } })),
     ).resolves.toBe(true);
     expect(prisma.sellerProductMapping.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+// Isolation fix (2026-06-16) — guards for the financial drill-downs.
+describe('AdminSellerIdScopeGuard', () => {
+  const guardWith = (seller: any) => {
+    const prisma = { seller: { findUnique: jest.fn(async () => seller) } } as any;
+    return { guard: new AdminSellerIdScopeGuard(prisma), prisma };
+  };
+
+  it('allows a D2C-scoped admin to drill into a D2C seller', async () => {
+    const { guard } = guardWith({ sellerType: 'D2C' });
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['sellers.scope.d2c'] }, params: { sellerId: 's1' } })),
+    ).resolves.toBe(true);
+  });
+
+  it('404s a D2C-scoped admin drilling into a RETAIL seller', async () => {
+    const { guard } = guardWith({ sellerType: 'RETAIL' });
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['sellers.scope.d2c'] }, params: { sellerId: 's1' } })),
+    ).rejects.toBeInstanceOf(NotFoundAppException);
+  });
+
+  it('404s when the seller is missing', async () => {
+    const { guard } = guardWith(null);
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['sellers.scope.retail'] }, params: { sellerId: 'gone' } })),
+    ).rejects.toBeInstanceOf(NotFoundAppException);
+  });
+
+  it('allows an unrestricted admin without a DB hit', async () => {
+    const { guard, prisma } = guardWith({ sellerType: 'RETAIL' });
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['accounts.read'] }, params: { sellerId: 's1' } })),
+    ).resolves.toBe(true);
+    expect(prisma.seller.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('no-ops on a route without a sellerId param', async () => {
+    const { guard, prisma } = guardWith(null);
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['sellers.scope.d2c'] }, params: {} })),
+    ).resolves.toBe(true);
+    expect(prisma.seller.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('AdminSettlementSellerScopeGuard', () => {
+  const guardWith = (settlement: any) => {
+    const prisma = { sellerSettlement: { findUnique: jest.fn(async () => settlement) } } as any;
+    return { guard: new AdminSettlementSellerScopeGuard(prisma), prisma };
+  };
+
+  it('allows a RETAIL-scoped admin on a RETAIL settlement', async () => {
+    const { guard } = guardWith({ seller: { sellerType: 'RETAIL' } });
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['sellers.scope.retail'] }, params: { settlementId: 'x1' } })),
+    ).resolves.toBe(true);
+  });
+
+  it('404s a RETAIL-scoped admin on a D2C settlement', async () => {
+    const { guard } = guardWith({ seller: { sellerType: 'D2C' } });
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['sellers.scope.retail'] }, params: { settlementId: 'x1' } })),
+    ).rejects.toBeInstanceOf(NotFoundAppException);
+  });
+});
+
+describe('AdminCommissionRecordScopeGuard', () => {
+  const guardWith = (record: any) => {
+    const prisma = { commissionRecord: { findUnique: jest.fn(async () => record) } } as any;
+    return { guard: new AdminCommissionRecordScopeGuard(prisma), prisma };
+  };
+
+  it('allows a D2C-scoped admin on a D2C commission record history', async () => {
+    const { guard } = guardWith({ seller: { sellerType: 'D2C' } });
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['sellers.scope.d2c'] }, params: { id: 'c1' } })),
+    ).resolves.toBe(true);
+  });
+
+  it('404s a D2C-scoped admin on a RETAIL commission record history', async () => {
+    const { guard } = guardWith({ seller: { sellerType: 'RETAIL' } });
+    await expect(
+      guard.canActivate(makeCtx({ user: { permissions: ['sellers.scope.d2c'] }, params: { id: 'c1' } })),
+    ).rejects.toBeInstanceOf(NotFoundAppException);
   });
 });
 

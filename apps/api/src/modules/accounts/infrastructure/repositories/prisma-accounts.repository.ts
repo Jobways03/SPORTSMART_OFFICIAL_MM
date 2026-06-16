@@ -188,9 +188,23 @@ export class PrismaAccountsRepository implements AccountsRepository {
   async getSellerFinanceSummary(params?: {
     fromDate?: Date;
     toDate?: Date;
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null;
   }) {
     const created = dateRange('createdAt', params?.fromDate, params?.toDate);
     const paid = dateRange('paidAt', params?.fromDate, params?.toDate);
+
+    // Isolation fix (2026-06-16) — scope the seller-side aggregates to the
+    // admin's seller type(s). `typeFilter` keys Seller directly (count); `rel`
+    // keys the owning-seller relation on the financial rows. null/empty =
+    // unrestricted (super / franchise admin).
+    const scoped =
+      !!params?.allowedSellerTypes && params.allowedSellerTypes.length > 0;
+    const typeFilter = scoped
+      ? { sellerType: { in: params!.allowedSellerTypes! } }
+      : {};
+    const rel = scoped
+      ? { seller: { sellerType: { in: params!.allowedSellerTypes! } } }
+      : {};
 
     const [
       totalSellers,
@@ -200,12 +214,12 @@ export class PrismaAccountsRepository implements AccountsRepository {
       pendingAgg,
       settledAgg,
     ] = await Promise.all([
-      this.prisma.seller.count({ where: { isDeleted: false } }),
+      this.prisma.seller.count({ where: { isDeleted: false, ...typeFilter } }),
       this.prisma.seller.count({
-        where: { isDeleted: false, status: 'ACTIVE' },
+        where: { isDeleted: false, status: 'ACTIVE', ...typeFilter },
       }),
       this.prisma.commissionRecord.aggregate({
-        where: created,
+        where: { ...created, ...rel },
         _sum: {
           totalPlatformAmount: true,
           totalSettlementAmount: true,
@@ -213,14 +227,14 @@ export class PrismaAccountsRepository implements AccountsRepository {
           refundedAdminEarning: true,
         },
       }),
-      this.prisma.commissionRecord.count({ where: created }),
+      this.prisma.commissionRecord.count({ where: { ...created, ...rel } }),
       this.prisma.commissionRecord.aggregate({
-        where: { ...created, status: 'PENDING' },
+        where: { ...created, ...rel, status: 'PENDING' },
         _sum: { totalSettlementAmount: true },
       }),
       // Phase 175 (#4) — settled scoped to settlements PAID in the window.
       this.prisma.sellerSettlement.aggregate({
-        where: { status: 'PAID', ...paid },
+        where: { status: 'PAID', ...paid, ...rel },
         _sum: { totalSettlementAmount: true },
       }),
     ]);
@@ -622,8 +636,16 @@ export class PrismaAccountsRepository implements AccountsRepository {
     toDate?: Date,
     offset = 0,
     metric: 'REVENUE' | 'MARGIN' = 'REVENUE', // Phase 179 (#1)
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null, // isolation fix 2026-06-16
   ) {
     const where = dateRange('createdAt', fromDate, toDate);
+
+    // Isolation fix (2026-06-16) — limit the leaderboard to the admin's seller
+    // type(s) via the owning-seller relation. null/empty = unrestricted.
+    const rel =
+      allowedSellerTypes && allowedSellerTypes.length > 0
+        ? { seller: { sellerType: { in: allowedSellerTypes } } }
+        : {};
 
     // Phase 179 (#16) — exclude internal/demo/test sellers from the leaderboard.
     const internal = await this.prisma.seller.findMany({
@@ -634,7 +656,7 @@ export class PrismaAccountsRepository implements AccountsRepository {
 
     const sellers = await this.prisma.commissionRecord.groupBy({
       by: ['sellerId', 'sellerName'],
-      where: { ...where, ...(internalIds.length ? { sellerId: { notIn: internalIds } } : {}) },
+      where: { ...where, ...rel, ...(internalIds.length ? { sellerId: { notIn: internalIds } } : {}) },
       _sum: {
         totalPlatformAmount: true,
         platformMargin: true,

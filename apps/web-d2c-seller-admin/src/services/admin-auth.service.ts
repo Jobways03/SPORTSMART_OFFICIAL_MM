@@ -53,9 +53,12 @@ export interface AdminMeResponseData {
 
 export const adminAuthService = {
   login(payload: AdminLoginPayload): Promise<ApiResponse<AdminLoginResponseData>> {
+    // portalType identifies THIS portal so the API can reject a portal-specific
+    // admin role (RETAILER_ADMIN / FRANCHISE_ADMIN / AFFILIATE_ADMIN) that tries
+    // to sign in here. SUPER_ADMIN + generic roles are allowed from any portal.
     return apiClient<AdminLoginResponseData>('/admin/auth/login', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, portalType: 'D2C' }),
     });
   },
 

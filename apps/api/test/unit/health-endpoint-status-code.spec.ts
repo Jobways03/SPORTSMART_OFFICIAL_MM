@@ -91,4 +91,31 @@ describe('HealthController — HTTP status reflects dep health', () => {
     // and returns without awaiting — the absence of a call is implicit
     // in the return type, but this test documents the contract.)
   });
+
+  // Regression: infra/ci-cd/k8s/api.deployment.yaml's readinessProbe
+  // targets /api/v1/health/ready. Before Phase 0 that route did not
+  // exist — only @Get(), @Get('deps'), @Get('live') — so every pod
+  // 404'd readiness forever and never joined the Service. /ready must
+  // exist AND be dependency-aware (unlike /live).
+  describe('/health/ready (k8s readiness probe)', () => {
+    it('returns HTTP 200 + healthy when both deps pass', async () => {
+      const { ctrl, res, captured } = buildController({ db: true, redis: true });
+      const body = await ctrl.ready(res);
+      expect(captured.status).toBe(HttpStatus.OK);
+      expect(body).toMatchObject({ success: true, status: 'healthy' });
+    });
+
+    it('returns HTTP 503 when the database is down (dep-aware, unlike /live)', async () => {
+      const { ctrl, res, captured } = buildController({ db: false, redis: true });
+      const body = await ctrl.ready(res);
+      expect(captured.status).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+      expect(body.checks).toMatchObject({ database: 'error', redis: 'ok' });
+    });
+
+    it('returns HTTP 503 when redis is down', async () => {
+      const { ctrl, res, captured } = buildController({ db: true, redis: false });
+      await ctrl.ready(res);
+      expect(captured.status).toBe(HttpStatus.SERVICE_UNAVAILABLE);
+    });
+  });
 });

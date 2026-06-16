@@ -9,6 +9,9 @@ import {
   AdminReturnSellerScopeGuard,
   AdminProductSellerScopeGuard,
   AdminMappingSellerScopeGuard,
+  AdminSellerIdScopeGuard,
+  AdminSettlementSellerScopeGuard,
+  AdminCommissionRecordScopeGuard,
 } from './entity-seller-scope.guard';
 import { PolicyEvaluatorService } from '../authorization/policy-evaluator.service';
 import { AuthorizationAuditService } from '../authorization/authorization-audit.service';
@@ -49,6 +52,9 @@ import { BlockedWhileImpersonatingGuard } from '../impersonation/blocked-while-i
     AdminReturnSellerScopeGuard,
     AdminProductSellerScopeGuard,
     AdminMappingSellerScopeGuard,
+    AdminSellerIdScopeGuard,
+    AdminSettlementSellerScopeGuard,
+    AdminCommissionRecordScopeGuard,
     PolicyEvaluatorService,
     AuthorizationAuditService,
     AuthzModeService,
@@ -75,6 +81,9 @@ import { BlockedWhileImpersonatingGuard } from '../impersonation/blocked-while-i
     AdminReturnSellerScopeGuard,
     AdminProductSellerScopeGuard,
     AdminMappingSellerScopeGuard,
+    AdminSellerIdScopeGuard,
+    AdminSettlementSellerScopeGuard,
+    AdminCommissionRecordScopeGuard,
     PolicyEvaluatorService,
     AuthorizationAuditService,
     AuthzModeService,

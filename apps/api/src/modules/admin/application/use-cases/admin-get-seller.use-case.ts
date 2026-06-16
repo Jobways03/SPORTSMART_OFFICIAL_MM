@@ -63,6 +63,8 @@ export class AdminGetSellerUseCase {
       gstVerifiedBy: true,
       gstVerificationNotes: true,
       panVerified: true,
+      // Logistics entitlement — the self-delivery toggle the admin flips.
+      selfDeliveryEnabled: true,
     });
 
     if (!seller || seller.isDeleted) {
@@ -82,6 +84,23 @@ export class AdminGetSellerUseCase {
         },
       })
       .catch(() => null);
+
+    // Logistics pickup readiness. A sub-order can only be shipped once the
+    // seller's pickup address is registered as a courier "warehouse" (see
+    // shipping-public.facade resolvePickupWarehouse — it keys off a non-null
+    // `warehouseName`, set by the admin "Add pickup location" flow). We surface
+    // a derived `logisticsPickupRegistered` so the admin detail page can flag an
+    // APPROVED seller that still can't fulfil orders. Truthful to the actual
+    // ship gate: keyed on warehouseName, not just the status string.
+    const partnerRegs = await this.prisma.sellerPartnerRegistration
+      .findMany({
+        where: { sellerId },
+        select: { partner: true, status: true, warehouseName: true },
+      })
+      .catch(() => [] as { partner: string; status: string; warehouseName: string | null }[]);
+    const registeredPartners = partnerRegs
+      .filter((r) => !!r.warehouseName)
+      .map((r) => r.partner);
 
     return {
       sellerId: seller.id,
@@ -133,6 +152,11 @@ export class AdminGetSellerUseCase {
       bankAccountHolderName: bank?.accountHolderName ?? null,
       bankAccountLast4: bank?.accountNumberLast4 ?? null,
       bankIfscCode: bank?.ifscCode ?? null,
+      // Logistics pickup readiness (the main gate for product delivery).
+      selfDeliveryEnabled: (seller as any).selfDeliveryEnabled ?? false,
+      logisticsPickupRegistered: registeredPartners.length > 0,
+      logisticsRegisteredPartners: registeredPartners,
+      logisticsPartnerAttempts: partnerRegs.length,
     };
   }
 }

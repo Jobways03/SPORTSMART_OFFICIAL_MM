@@ -139,9 +139,11 @@ export const sellerAuthService = {
   },
 
   login(payload: SellerLoginPayload): Promise<ApiResponse<SellerLoginResponseData>> {
+    // This is the D2C seller portal — the backend rejects a non-D2C seller so a
+    // retail seller can't sign in here (and vice-versa on the retail portal).
     return apiClient<SellerLoginResponseData>('/seller/auth/login', {
       method: 'POST',
-      body: JSON.stringify(payload),
+      body: JSON.stringify({ ...payload, portalType: 'D2C' }),
     });
   },
 

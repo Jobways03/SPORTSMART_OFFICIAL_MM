@@ -4,9 +4,39 @@
 
 @layer base {
   :root {
-    --color-bg: #FFFFFF;
-    --color-ink: #0A0A0A;
-    --color-accent: #FF3B30;
+    /* Design tokens consumed across the storefront (auth flow, account
+       pages, storefront.css). These mirror the Tailwind `ink` scale +
+       semantic colors in tailwind.config.ts so plain-CSS and Tailwind
+       resolve to the SAME hexes. Previously only --color-bg was defined,
+       so every other var(--color-*) was invalid — leaving OTP borders,
+       primary buttons, links and muted text unstyled across the app.
+       (The old --color-ink / --color-accent:#FF3B30 had zero consumers
+       and disagreed with the Tailwind theme, so they were removed.) */
+
+    /* Surfaces */
+    --color-bg: #FFFFFF;            /* cards, inputs, button-text surface */
+    --color-bg-page: #FAFAFA;       /* ink-50 — page canvas behind cards */
+
+    /* Text */
+    --color-text: #0F1115;          /* ink-900 — body + headings (~19:1) */
+    --color-text-secondary: #525A65;/* ink-600 — secondary text, ~7:1 (AA) */
+
+    /* Borders / focus */
+    --color-border: #D2D6DC;        /* ink-300 — input/card borders */
+    --color-border-focus: #0F1115;  /* ink-900 — brand BLACK focus (matches ring-ink-900) */
+
+    /* Primary action — BLACK, per Button.tsx + every bg-ink-900 CTA */
+    --color-primary: #0F1115;       /* ink-900 */
+    --color-primary-hover: #1F232A; /* ink-800 */
+
+    /* Status — red = error/urgency, green = success (distinct hues) */
+    --color-error: #DC2626;
+    --color-error-bg: #FEF2F2;
+    --color-success: #16A34A;
+    --color-success-bg: #F0FDF4;
+
+    /* Shape */
+    --radius: 12px;                 /* Tailwind borderRadius DEFAULT */
   }
 
   html {

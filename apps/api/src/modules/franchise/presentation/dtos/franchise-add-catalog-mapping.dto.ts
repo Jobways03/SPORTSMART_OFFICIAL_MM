@@ -21,10 +21,8 @@ export class FranchiseAddCatalogMappingDto {
   @IsUUID()
   variantId?: string;
 
-  @IsOptional()
-  @IsString()
-  @MaxLength(50)
-  franchiseSku?: string;
+  // No per-franchise SKU override: every franchise mapping uses the master /
+  // global (super-admin) SKU resolved server-side. (franchiseSku removed.)
 
   @IsOptional()
   @IsString()

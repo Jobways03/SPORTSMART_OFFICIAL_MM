@@ -70,10 +70,21 @@ export class PrismaProductRepository implements IProductRepository {
     if (moderationStatus) where.moderationStatus = moderationStatus;
     if (categoryId) where.categoryId = categoryId;
     if (sellerId) where.sellerId = sellerId;
-    // Phase 38 (admin breadth) — scope to products whose OWNING seller is in
-    // the admin's seller-type scope.
+    // Seller-type scope: a D2C/RETAIL-scoped admin sees a product when a seller
+    // of their type OWNS it OR has a mapping (offer) to it. Owner-only scoping
+    // wrongly hid shared catalog products owned by a different-type seller but
+    // mapped by one of the admin's sellers (e.g. a retail seller offering a
+    // D2C-owned product — the retail admin must still see & manage that offer).
     if (allowedSellerTypes && allowedSellerTypes.length > 0) {
-      where.seller = { sellerType: { in: allowedSellerTypes } };
+      where.AND = [
+        ...(where.AND || []),
+        {
+          OR: [
+            { seller: { sellerType: { in: allowedSellerTypes } } },
+            { sellerMappings: { some: { seller: { sellerType: { in: allowedSellerTypes } } } } },
+          ],
+        },
+      ];
     }
     if (hasSellers) {
       where.OR = [
@@ -93,18 +104,25 @@ export class PrismaProductRepository implements IProductRepository {
       this.prisma.product.findMany({
         where,
         include: {
-          seller: { select: { id: true, sellerName: true, sellerShopName: true, email: true } },
+          // sellerType lets the seller-admin UI hide master-product actions
+          // (edit/approve/delete) for products owned by a different seller type
+          // — those actions are owner-gated on the backend and would 404.
+          seller: { select: { id: true, sellerName: true, sellerShopName: true, email: true, sellerType: true } },
           category: { select: { id: true, name: true } },
           brand: { select: { id: true, name: true } },
           images: { orderBy: { sortOrder: 'asc' }, take: 1 },
           variants: { where: { isDeleted: false }, select: { stock: true } },
           sellerMappings: {
-            // Don't filter by approvalStatus/isActive here — the
-            // controller needs to see PENDING + STOPPED rows for the
-            // inventory summary so it can compute "low stock count" and
-            // distinct-seller count correctly. The controller filters
-            // for APPROVED+isActive when computing the *headline*
-            // totals.
+            // Seller-type scope: only count/show mappings owned by sellers of
+            // the admin's type, so the per-product seller summary + count match
+            // the scoped view (a D2C admin shouldn't see retail offers here).
+            // No approvalStatus/isActive filter — the controller needs PENDING +
+            // STOPPED rows for low-stock + distinct-seller counts; it filters to
+            // APPROVED+isActive for the headline totals.
+            where:
+              allowedSellerTypes && allowedSellerTypes.length > 0
+                ? { seller: { sellerType: { in: allowedSellerTypes } } }
+                : undefined,
             select: {
               sellerId: true,
               approvalStatus: true,

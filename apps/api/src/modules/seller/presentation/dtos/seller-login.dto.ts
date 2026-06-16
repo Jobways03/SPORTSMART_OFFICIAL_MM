@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsIn, IsNotEmpty, IsOptional, IsString, MaxLength } from 'class-validator';
 import { Transform } from 'class-transformer';
 
 export class SellerLoginDto {
@@ -18,4 +18,13 @@ export class SellerLoginDto {
   @IsOptional()
   @IsString()
   captchaToken?: string;
+
+  // The seller portal this login came from. The D2C portal sends 'D2C', the
+  // Retail portal sends 'RETAIL'. The login is rejected (after password check)
+  // if the seller's own type doesn't match — so each portal only accepts its
+  // own seller type. Optional for safe degradation: a client that omits it
+  // skips the gate (login still works).
+  @IsOptional()
+  @IsIn(['D2C', 'RETAIL'])
+  portalType?: 'D2C' | 'RETAIL';
 }

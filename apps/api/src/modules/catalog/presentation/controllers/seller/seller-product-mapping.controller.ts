@@ -43,6 +43,7 @@ import {
   BulkStockUpdateDto,
   MapProductDto,
   SellerPauseMappingDto,
+  SellerPauseProductDto,
   UpdateMappingDto,
 } from './dtos/seller-mapping.dto';
 
@@ -388,18 +389,42 @@ export class SellerProductMappingController {
         'You do not have permission to pause this mapping',
       );
     }
-    // repo.stop is APPROVED-only (Phase 58 Gap #13). We reuse it so
-    // the state machine has exactly one entry path for STOPPED.
-    const updated = await this.sellerMappingRepo.stop(
-      mappingId,
-      sellerId,
-      `[SellerPause] ${dto.reason}`,
-    );
-    if (!updated) {
+    const res = await this.pauseOneMapping(existing, sellerId, dto.reason);
+    if (!res) {
       throw new BadRequestAppException(
         `Cannot pause — mapping is in ${existing.approvalStatus} status. Only APPROVED mappings can be paused.`,
       );
     }
+    this.catalogCache.invalidateProductLists().catch(() => {});
+    this.logger.log(
+      `Mapping ${mappingId} paused by seller ${sellerId} — reason="${dto.reason}" (${res.releasedCount} reservation(s) released)`,
+    );
+    return {
+      success: true,
+      message: 'Mapping paused successfully',
+      data: { ...res.updated, releasedReservations: res.releasedCount },
+    };
+  }
+
+  // 2026-06-15 — extracted per-mapping pause so the single-mapping pause and
+  // the product-scoped "pause all my offers" (My Products) share one path.
+  // Stops the mapping (APPROVED→STOPPED, stoppedBy=seller via repo.stop),
+  // releases its active reservations (+ledger +events), writes the audit row.
+  // Returns null when the mapping wasn't APPROVED (nothing to pause).
+  private async pauseOneMapping(
+    existing: any,
+    sellerId: string,
+    reason: string,
+  ): Promise<{ updated: any; releasedCount: number } | null> {
+    const mappingId = existing.id;
+    // repo.stop is APPROVED-only (Phase 58 Gap #13) — one entry path to STOPPED.
+    const updated = await this.sellerMappingRepo.stop(
+      mappingId,
+      sellerId,
+      `[SellerPause] ${reason}`,
+    );
+    if (!updated) return null;
+
     // Release active reservations on this now-stopped mapping (Gap #8).
     let releasedCount = 0;
     try {
@@ -469,7 +494,7 @@ export class SellerProductMappingController {
           productId: existing.productId,
           variantId: existing.variantId,
           sellerId,
-          reason: dto.reason,
+          reason,
           initiator: 'SELLER',
           releasedReservations: releasedCount,
         },
@@ -493,21 +518,134 @@ export class SellerProductMappingController {
           variantId: existing.variantId,
           oldStatus: existing.approvalStatus,
           newStatus: 'STOPPED',
-          reason: dto.reason,
+          reason,
           initiator: 'SELLER',
         },
       })
       .catch(() => {});
 
-    this.catalogCache.invalidateProductLists().catch(() => {});
+    return { updated, releasedCount };
+  }
 
+  // 2026-06-15 — seller resumes their OWN paused offer (STOPPED-by-seller →
+  // APPROVED+active via the stoppedBy-guarded repo method). Returns the
+  // updated row, or null when it wasn't a self-paused mapping (e.g. an admin
+  // STOP/SUSPEND, which only an admin can lift).
+  private async resumeOneMapping(existing: any, sellerId: string): Promise<any | null> {
+    const updated = await this.sellerMappingRepo.resumeBySeller(existing.id, sellerId);
+    if (!updated) return null;
+    try {
+      await this.audit.writeAuditLog({
+        actorId: sellerId,
+        actorRole: 'SELLER',
+        action: 'MAPPING_REAPPROVED',
+        module: 'catalog',
+        resource: 'SellerProductMapping',
+        resourceId: existing.id,
+        oldValue: { approvalStatus: existing.approvalStatus, isActive: existing.isActive },
+        newValue: { approvalStatus: 'APPROVED', isActive: true },
+        metadata: {
+          productId: existing.productId,
+          variantId: existing.variantId,
+          sellerId,
+          initiator: 'SELLER',
+        },
+      });
+    } catch (err) {
+      this.logger.warn(
+        `Audit write failed for seller resume on ${existing.id}: ${(err as Error).message}`,
+      );
+    }
+    this.eventBus
+      .publish({
+        eventName: 'catalog.seller_mapping.resumed',
+        aggregate: 'SellerProductMapping',
+        aggregateId: existing.id,
+        occurredAt: new Date(),
+        payload: {
+          mappingId: existing.id,
+          sellerId,
+          productId: existing.productId,
+          variantId: existing.variantId,
+          oldStatus: existing.approvalStatus,
+          newStatus: 'APPROVED',
+          initiator: 'SELLER',
+        },
+      })
+      .catch(() => {});
+    return updated;
+  }
+
+  // 2026-06-15 — "Pause sales" from My Products: pause ALL of this seller's
+  // APPROVED offers (all variants) for one product. Only this seller's
+  // mappings change — other sellers keep selling and the shared product stays
+  // live. Does NOT touch Product.status (that would hide it for everyone).
+  @Post('product/:productId/pause-sales')
+  @HttpCode(HttpStatus.OK)
+  @Idempotent()
+  async pauseSalesForProduct(
+    @Req() req: Request,
+    @Param('productId') productId: string,
+    @Body() dto: SellerPauseProductDto,
+  ) {
+    const sellerId = (req as any).sellerId;
+    const reason = dto?.reason?.trim() || 'Paused from My Products';
+    const offers = await this.sellerMappingRepo.findSellerOffersForProduct(sellerId, productId);
+    const approved = offers.filter((m) => m.approvalStatus === 'APPROVED');
+    if (approved.length === 0) {
+      throw new BadRequestAppException('No active offer to pause for this product.');
+    }
+    const pausedMappingIds: string[] = [];
+    let releasedReservations = 0;
+    for (const m of approved) {
+      const res = await this.pauseOneMapping(m, sellerId, reason);
+      if (res) {
+        pausedMappingIds.push(m.id);
+        releasedReservations += res.releasedCount;
+      }
+    }
+    this.catalogCache.invalidateProductLists().catch(() => {});
     this.logger.log(
-      `Mapping ${mappingId} paused by seller ${sellerId} — reason="${dto.reason}" (${releasedCount} reservation(s) released)`,
+      `Seller ${sellerId} paused sales for product ${productId} — ${pausedMappingIds.length} offer(s), ${releasedReservations} reservation(s) released`,
     );
     return {
       success: true,
-      message: 'Mapping paused successfully',
-      data: { ...updated, releasedReservations: releasedCount },
+      message: 'Your sales are paused for this product',
+      data: { productId, pausedMappingIds, releasedReservations },
+    };
+  }
+
+  // 2026-06-15 — "Resume sales" from My Products: resume this seller's OWN
+  // paused offers for a product. Guarded so it only lifts seller self-pauses,
+  // never an admin STOP/SUSPEND.
+  @Post('product/:productId/resume-sales')
+  @HttpCode(HttpStatus.OK)
+  @Idempotent()
+  async resumeSalesForProduct(
+    @Req() req: Request,
+    @Param('productId') productId: string,
+  ) {
+    const sellerId = (req as any).sellerId;
+    const offers = await this.sellerMappingRepo.findSellerOffersForProduct(sellerId, productId);
+    const selfPaused = offers.filter(
+      (m) => m.approvalStatus === 'STOPPED' && m.stoppedBy === sellerId,
+    );
+    if (selfPaused.length === 0) {
+      throw new BadRequestAppException('No paused offer to resume for this product.');
+    }
+    const resumedMappingIds: string[] = [];
+    for (const m of selfPaused) {
+      const updated = await this.resumeOneMapping(m, sellerId);
+      if (updated) resumedMappingIds.push(m.id);
+    }
+    this.catalogCache.invalidateProductLists().catch(() => {});
+    this.logger.log(
+      `Seller ${sellerId} resumed sales for product ${productId} — ${resumedMappingIds.length} offer(s)`,
+    );
+    return {
+      success: true,
+      message: 'Your sales are live again for this product',
+      data: { productId, resumedMappingIds },
     };
   }
 
@@ -535,7 +673,19 @@ export class SellerProductMappingController {
       sellerId, pageNum, limitNum, search,
     );
 
-    const mapped = products.map((p: any) => ({
+    const mapped = products.map((p: any) => {
+      // 2026-06-15 — derive this seller's product-level offer state for the My
+      // Products Pause/Resume toggle. SELLING = a live offer; PAUSED = the seller
+      // self-paused (stoppedBy=self, so an admin STOP resolves to NONE — no dead
+      // Resume CTA); NONE = nothing to pause/resume.
+      const liveMaps = (p.sellerMappings ?? []).filter((m: any) => !m.deletedAt);
+      const selling = liveMaps.some(
+        (m: any) => m.approvalStatus === 'APPROVED' && m.isActive,
+      );
+      const selfPaused = liveMaps.some(
+        (m: any) => m.approvalStatus === 'STOPPED' && m.stoppedBy === sellerId,
+      );
+      return {
       id: p.id,
       productCode: p.productCode,
       title: p.title,
@@ -549,10 +699,10 @@ export class SellerProductMappingController {
       hsnCode: p.hsnCode ?? null,
       gstRateBps: p.gstRateBps ?? 0,
       defaultUqcCode: p.defaultUqcCode ?? null,
+      sellerOfferState: (selling ? 'SELLING' : selfPaused ? 'PAUSED' : 'NONE'),
       // Phase 51 — exclude soft-deleted mappings from the seller's
       // own product list.
-      mappings: (p.sellerMappings ?? [])
-        .filter((m: any) => !m.deletedAt)
+      mappings: liveMaps
         .map((m: any) => ({
           id: m.id,
           variantId: m.variantId,
@@ -576,7 +726,8 @@ export class SellerProductMappingController {
           lowStockThreshold: m.lowStockThreshold,
           createdAt: m.createdAt,
         })),
-    }));
+      };
+    });
 
     return {
       success: true,

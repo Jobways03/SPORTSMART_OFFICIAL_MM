@@ -888,6 +888,11 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
     'accounts.read',
     // Phase 177 — franchise settlement adjustment (money-ops).
     'accounts.franchise.adjust',
+    // Isolation fix (2026-06-16) — the franchise settlement register reads moved
+    // off the generic `settlements.read` (which seller-type admins hold) onto
+    // `franchise.finance.read`. This finance-ops tier already adjusts franchise
+    // settlements (accounts.franchise.adjust), so it keeps read access.
+    'franchise.finance.read',
     // Phase 178 — settlement payout hold/release + partial-pay (money-ops).
     'accounts.payable.hold',
     'accounts.payable.recordPayment',
@@ -999,6 +1004,21 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
     'affiliates.payouts.approve', 'affiliates.payouts.reject',
     'affiliates.payouts.mark_paid', 'affiliates.payouts.mark_failed',
   ],
+  // D2C-portal admin — the SELLER_ADMIN seller-management surface scoped to
+  // D2C sellers via the sellers.scope.d2c key (mirror of RETAILER_ADMIN;
+  // AdminSellerScopeGuard + the list filters confine everything to D2C;
+  // holding ONLY d2c = d2c-only).
+  D2C_ADMIN: [
+    'sellers.read', 'sellers.approve', 'sellers.suspend', 'sellers.penalize',
+    'sellers.logistics.register',
+    'sellers.scope.d2c',
+    'products.read', 'products.approve',
+    'orders.read', 'returns.read',
+    'catalog.read', 'catalog.write', 'catalog.approve',
+    'analytics.read',
+    'accounts.read', 'settlements.read', 'settlements.history.read',
+    'nova.read',
+  ],
   // Retailer-portal admin — the SELLER_ADMIN seller-management surface scoped
   // to RETAIL sellers via the sellers.scope.retail key (AdminSellerScopeGuard
   // confines list/detail/actions to retail; holding ONLY retail = retail-only).
@@ -1017,8 +1037,17 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
   // franchise finance/settlement, inventory, procurement (pricing + request
   // flow), pincode territory mapping, catalog-mapping approval, and POS
   // reporting. Marketplace-wide mutations stay SUPER_ADMIN.
+  //
+  // Isolation fix C1 (2026-06-16) — DROPPED `sellers.read`. It gated the
+  // marketplace seller MANAGEMENT endpoints (/admin/sellers — seller PII, bank
+  // details, GSTIN); the franchise-admin portal never calls them, so the grant
+  // was pure unused attack surface (a FRANCHISE_ADMIN could read every D2C /
+  // RETAIL seller's bank/PII via a raw HTTP client). orders.read / returns.read
+  // are RETAINED — the portal actively uses them for the order-verification
+  // queue and returns-QC pages (a deliberate ops dual-role); scoping those to
+  // franchise-involved orders only is a separate, larger design change.
   FRANCHISE_ADMIN: [
-    'sellers.read', 'orders.read', 'returns.read',
+    'orders.read', 'returns.read',
     'analytics.read', 'audit.read', 'accounts.read',
     'franchise.read', 'franchise.approve', 'franchise.suspend',
     'franchise.finance', 'franchise.finance.read', 'franchise.penalty.approve',

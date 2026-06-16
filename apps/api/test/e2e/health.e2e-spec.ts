@@ -112,6 +112,16 @@ describe('GET /api/v1/health — healthy deps', () => {
     expect(res.body.status).toBe('alive');
   });
 
+  it('GET /api/v1/health/ready is reachable and returns 200 healthy', async () => {
+    // This is the exact path infra/ci-cd/k8s/api.deployment.yaml's
+    // readinessProbe targets. Before Phase 0 the route did not exist and
+    // this returned 404, so every pod stayed NotReady and never joined
+    // the Service.
+    const res = await request(app.getHttpServer()).get('/api/v1/health/ready');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, status: 'healthy' });
+  });
+
   it('routing respects the global api prefix — bare /health must 404', async () => {
     // If main.ts drops the global prefix, this test starts passing
     // where it should 404, flagging the drift.
@@ -146,5 +156,11 @@ describe('GET /api/v1/health — degraded deps', () => {
     // not restart every pod via the liveness path.
     const res = await request(app.getHttpServer()).get('/api/v1/health/live');
     expect(res.status).toBe(200);
+  });
+
+  it('GET /api/v1/health/ready returns 503 when a dep is down (de-route, do not restart)', async () => {
+    const res = await request(app.getHttpServer()).get('/api/v1/health/ready');
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({ success: false, status: 'degraded' });
   });
 });

@@ -140,7 +140,6 @@ const router = useRouter();
 
   // AI generation
   const [aiGenerating, setAiGenerating] = useState(false);
-  const [selfStatusSaving, setSelfStatusSaving] = useState(false);
   // Phase 249 (#4) — the generationLogId returned by the AI generate
   // endpoint (meta.generationLogId), captured only when the seller
   // actually accepts the generated draft. Echoed back on product save
@@ -800,41 +799,9 @@ const router = useRouter();
     }
   }
 
-  // ----- Seller self-service pause/resume -----
-
-  async function handleToggleSelfStatus() {if (!product) return;
-    const token = sessionStorage.getItem('accessToken');
-    if (!token) {
-      showToast('error', 'Session expired. Please log in again.');
-      return;
-    }
-    const current = product.status;
-    const target: 'ACTIVE' | 'SUSPENDED' =
-      current === 'SUSPENDED' ? 'ACTIVE' : 'SUSPENDED';
-    const prompt =
-      target === 'SUSPENDED'
-        ? 'Pause sales for this product? Customers will no longer see it on the storefront.'
-        : 'Resume sales for this product? It will go live again immediately.';
-    if (!(await confirmDialog(prompt))) return;
-
-    setSelfStatusSaving(true);
-    try {
-      await sellerProductService.setSelfStatus(token, product.id, target);
-      showToast(
-        'success',
-        target === 'SUSPENDED' ? 'Product paused.' : 'Product is live again.',
-      );
-      // Refetch to pick up the new status + updated statusHistory entry
-      const refreshed = await sellerProductService.getProduct(token, product.id);
-      if (refreshed.data) setProduct(refreshed.data);
-    } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : 'Failed to update status';
-      showToast('error', msg);
-    } finally {
-      setSelfStatusSaving(false);
-    }
-  }
+  // 2026-06-15 — the product-level self-status pause/resume was removed from
+  // the edit page (it suspended the shared product for ALL sellers). Per-seller
+  // pause now lives in My Products and acts only on this seller's offer.
 
   // ----- Status banner -----
 
@@ -876,29 +843,13 @@ const router = useRouter();
       );
     }
     if (status === 'APPROVED' || status === 'ACTIVE') {
+      // 2026-06-15 \u2014 the product-level Pause button was removed: pausing a
+      // shared catalog product would stop sales for ALL sellers. To stop
+      // selling from your own account, use "Pause sales" in My Products (it
+      // pauses only your offer; other sellers keep selling).
       return (
-        <div
-          className="status-banner active"
-          style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}
-        >
+        <div className="status-banner active">
           <span>This product is live.</span>
-          <button
-            type="button"
-            onClick={handleToggleSelfStatus}
-            disabled={selfStatusSaving}
-            style={{
-              padding: '6px 14px',
-              fontSize: 13,
-              fontWeight: 500,
-              background: '#fff',
-              border: '1px solid #9ca3af',
-              borderRadius: 6,
-              color: '#374151',
-              cursor: selfStatusSaving ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {selfStatusSaving ? 'Pausing\u2026' : 'Pause sales'}
-          </button>
         </div>
       );
     }
@@ -907,36 +858,15 @@ const router = useRouter();
         <div
           className="status-banner"
           style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: 12,
-            flexWrap: 'wrap',
             background: '#f3f4f6',
             border: '1px solid #d1d5db',
             color: '#374151',
           }}
         >
           <span>
-            <strong>Paused</strong> &mdash; this product is not visible to customers.
+            <strong>Suspended by an admin</strong> &mdash; this product is not
+            visible to customers. Contact support to restore it.
           </span>
-          <button
-            type="button"
-            onClick={handleToggleSelfStatus}
-            disabled={selfStatusSaving}
-            style={{
-              padding: '6px 14px',
-              fontSize: 13,
-              fontWeight: 500,
-              background: '#2563eb',
-              border: '1px solid #2563eb',
-              borderRadius: 6,
-              color: '#fff',
-              cursor: selfStatusSaving ? 'not-allowed' : 'pointer',
-            }}
-          >
-            {selfStatusSaving ? 'Resuming\u2026' : 'Resume sales'}
-          </button>
         </div>
       );
     }

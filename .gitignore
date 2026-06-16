@@ -40,6 +40,24 @@ result.txt
 # the directory tree on demand (mkdir -p), so no .gitkeep is needed.
 apps/api/storage/
 
+# Terraform (infra/aws/terraform) — state contains generated secrets (DB
+# password, JWT + encryption keys); NEVER commit it. The committed *.tfvars
+# and *.s3.tfbackend carry no secrets (real creds live in Secrets Manager),
+# so they stay tracked; the provider lock (.terraform.lock.hcl) is committed
+# on purpose. Auto-loaded tfvars are ignored as a guard against secret leaks.
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+*.auto.tfvars
+*.auto.tfvars.json
+
 # pnpm-lock.yaml — INTENTIONALLY committed (reproducible installs +
 # CI cache hits). Do not add to this ignore file. Listed here as a
 # guard against future regressions; remove the explicit !-rule if pnpm

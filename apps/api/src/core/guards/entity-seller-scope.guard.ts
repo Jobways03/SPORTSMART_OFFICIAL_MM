@@ -66,6 +66,69 @@ export class AdminReturnSellerScopeGuard extends EntitySellerScopeGuardBase {
   }
 }
 
+/**
+ * Isolation fix (2026-06-16) — routes keyed directly by a SELLER id
+ * (`:sellerId`), e.g. the accounts/commission/settlement per-seller drill-downs.
+ * Resolves the seller's own type and rejects (404) when it isn't in the admin's
+ * scope, so a D2C_ADMIN can't pull a specific RETAIL seller's financial bundle
+ * (and vice versa). Unrestricted admins (SUPER_ADMIN, and the cross-domain
+ * FRANCHISE_ADMIN) pass — the D2C/RETAIL axis is the only one this guard speaks.
+ */
+@Injectable()
+export class AdminSellerIdScopeGuard extends EntitySellerScopeGuardBase {
+  protected async resolveTypes(req: any) {
+    const id: string | undefined = req.params?.sellerId;
+    if (!id) return null; // non-seller route — handler self-scopes
+    const row = await this.prisma.seller.findUnique({
+      where: { id },
+      select: { sellerType: true } as any,
+    });
+    if (!row) return 'not_found' as const;
+    const t = (row as any)?.sellerType as SellerType | undefined;
+    return t ? [t] : [];
+  }
+}
+
+/**
+ * Isolation fix (2026-06-16) — routes keyed by a SELLER-SETTLEMENT id
+ * (`:settlementId`), e.g. the per-settlement commission-invoice / statement /
+ * adjustments reads. Resolves the owning seller's type; cross-type → 404.
+ */
+@Injectable()
+export class AdminSettlementSellerScopeGuard extends EntitySellerScopeGuardBase {
+  protected async resolveTypes(req: any) {
+    const id: string | undefined = req.params?.settlementId;
+    if (!id) return null;
+    const row = await this.prisma.sellerSettlement.findUnique({
+      where: { id },
+      select: { seller: { select: { sellerType: true } } } as any,
+    });
+    if (!row) return 'not_found' as const;
+    const t = (row as any)?.seller?.sellerType as SellerType | undefined;
+    return t ? [t] : [];
+  }
+}
+
+/**
+ * Isolation fix (2026-06-16) — routes keyed by a COMMISSION-RECORD id (`:id`),
+ * e.g. the per-record history timeline (which exposes dispute-resolution notes).
+ * Resolves the owning seller's type; cross-type → 404.
+ */
+@Injectable()
+export class AdminCommissionRecordScopeGuard extends EntitySellerScopeGuardBase {
+  protected async resolveTypes(req: any) {
+    const id: string | undefined = req.params?.id;
+    if (!id) return null;
+    const row = await this.prisma.commissionRecord.findUnique({
+      where: { id },
+      select: { seller: { select: { sellerType: true } } } as any,
+    });
+    if (!row) return 'not_found' as const;
+    const t = (row as any)?.seller?.sellerType as SellerType | undefined;
+    return t ? [t] : [];
+  }
+}
+
 @Injectable()
 export class AdminProductSellerScopeGuard extends EntitySellerScopeGuardBase {
   protected async resolveTypes(req: any) {

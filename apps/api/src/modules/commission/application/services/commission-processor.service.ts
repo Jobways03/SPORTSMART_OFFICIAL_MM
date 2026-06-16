@@ -538,6 +538,11 @@ export class CommissionProcessorService {
     const HARD_CAP = 50_000;
     const where: any = {};
     if (filter.sellerId) where.sellerId = filter.sellerId;
+    // Isolation fix (2026-06-16) — restrict the CSV to the admin's seller-type
+    // scope via the owning-seller relation. null/empty = unrestricted.
+    if (filter.allowedSellerTypes && filter.allowedSellerTypes.length > 0) {
+      where.seller = { sellerType: { in: filter.allowedSellerTypes } };
+    }
     if (filter.status) where.status = filter.status;
     if (filter.commissionType) where.commissionType = filter.commissionType;
     // Phase 140 — export drill-down filters.
@@ -636,8 +641,10 @@ export class CommissionProcessorService {
 
   /* ── Admin: summary ─────────────────────────────────────────────── */
 
-  async getAdminCommissionSummary() {
-    return this.commissionRepo.getAdminCommissionSummary();
+  async getAdminCommissionSummary(
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
+  ) {
+    return this.commissionRepo.getAdminCommissionSummary(allowedSellerTypes);
   }
 
   /* ── Admin: settings ────────────────────────────────────────────── */

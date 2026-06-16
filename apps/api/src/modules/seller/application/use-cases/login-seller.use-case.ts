@@ -26,6 +26,9 @@ interface LoginSellerInput {
   password: string;
   userAgent?: string;
   ipAddress?: string;
+  /** The portal this login came from ('D2C' | 'RETAIL'); when set, the seller's
+   *  own type must match or the login is rejected. Undefined = no gate. */
+  portalType?: 'D2C' | 'RETAIL';
 }
 
 @Injectable()
@@ -41,7 +44,7 @@ export class LoginSellerUseCase {
   }
 
   async execute(input: LoginSellerInput): Promise<SellerLoginResponseData> {
-    const { identifier, password, userAgent, ipAddress } = input;
+    const { identifier, password, userAgent, ipAddress, portalType } = input;
 
     // Detect identifier type
     const isEmail = identifier.includes('@');
@@ -127,6 +130,19 @@ export class LoginSellerUseCase {
       }).catch(() => {});
 
       throw new UnauthorizedAppException('Invalid credentials');
+    }
+
+    // Portal-type gate (2026-06-16): the D2C and Retail seller portals share
+    // this endpoint. Each portal sends its `portalType`; a seller may only sign
+    // in at the portal matching their own seller type. Checked AFTER the
+    // password so the wrong-portal hint is only ever revealed to the
+    // authenticated account owner (no seller-type enumeration). `portalType`
+    // undefined ⇒ no gate (safe degradation for any client that omits it).
+    if (portalType && seller.sellerType && seller.sellerType !== portalType) {
+      throw new ForbiddenAppException(
+        `This account is registered as a ${seller.sellerType} seller. Please sign in at the ${seller.sellerType} seller portal.`,
+        'WRONG_SELLER_PORTAL',
+      );
     }
 
     // Successful login — reset counters

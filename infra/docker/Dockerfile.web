@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
 # ─────────────────────────────────────────────────────────────────────
-# SPORTSMART web-* — shared production image for all 8 Next.js apps
+# SPORTSMART web-* — shared production image for all 10 Next.js web apps
 # ─────────────────────────────────────────────────────────────────────
 # Phase 9 (2026-05-16) — one Dockerfile, eight images. Each app is
 # built via the `APP` build-arg; the image tag identifies which one:
@@ -55,6 +55,13 @@ RUN --mount=type=cache,id=pnpm,target=/pnpm/store \
 # (would invalidate the layer cache across unrelated PRs).
 COPY apps/${APP} apps/${APP}
 COPY packages packages
+
+# NEXT_PUBLIC_* are inlined into the client bundle at `next build` time, so
+# the per-environment API URL must be supplied as a build-arg here (a runtime
+# env var would be too late). deploy.yml reads it from SSM and passes it per
+# target; an empty default keeps an unscoped local build working.
+ARG NEXT_PUBLIC_API_URL=""
+ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
 # Build via Next.js. The transpilePackages config in each app's
 # next.config.js handles the workspace packages.

@@ -56,6 +56,22 @@ export interface FranchiseCatalogRepository {
   // Phase 159n — soft-remove (STOPPED + isActive=false + removed actor/at).
   softRemove(id: string, actorId?: string): Promise<void>;
 
+  // Franchise self-pause: a franchise temporarily stops selling its OWN
+  // approved mapping (STOPPED + isActive=false + stoppedById=franchiseId).
+  // Returns the updated mapping, or null if no APPROVED+live row matched
+  // (guarded updateMany — the franchise can only pause its own offer).
+  pauseByFranchise(
+    id: string,
+    franchiseId: string,
+    reason?: string | null,
+  ): Promise<any | null>;
+
+  // Franchise self-resume: lifts a SELF-pause only (stoppedById=franchiseId),
+  // back to APPROVED + active. An admin STOP (stoppedById = admin user) is
+  // NOT resumable here — it must be re-approved by an admin. Returns the
+  // updated mapping, or null if no self-paused row matched.
+  resumeByFranchise(id: string, franchiseId: string): Promise<any | null>;
+
   findAvailableProducts(params: {
     page: number;
     limit: number;

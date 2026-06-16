@@ -18,15 +18,21 @@ const MAPPING_VARIANT_SELECT = {
 export class PrismaSellerMappingRepository implements ISellerMappingRepository {
   constructor(private readonly prisma: PrismaService) {}
 
-  async findByProduct(productId: string): Promise<any[]> {
+  async findByProduct(productId: string, sellerTypes?: string[] | null): Promise<any[]> {
+    const where: any = {
+      productId,
+      OR: [
+        { variantId: null },
+        { variant: { isDeleted: false } },
+      ],
+    };
+    // Seller-type scope: a D2C/RETAIL-scoped admin only sees its own type's
+    // seller mappings (and their SKUs) for the product. null = unrestricted.
+    if (sellerTypes && sellerTypes.length > 0) {
+      where.seller = { sellerType: { in: sellerTypes } };
+    }
     return this.prisma.sellerProductMapping.findMany({
-      where: {
-        productId,
-        OR: [
-          { variantId: null },
-          { variant: { isDeleted: false } },
-        ],
-      },
+      where,
       include: {
         seller: { select: MAPPING_SELLER_SELECT },
         variant: { select: MAPPING_VARIANT_SELECT },
@@ -36,7 +42,7 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
   }
 
   async findAllPaginated(params: SellerMappingListParams): Promise<{ mappings: any[]; total: number }> {
-    const { page, limit, sellerId, productId, isActive, approvalStatus, search } = params;
+    const { page, limit, sellerId, productId, isActive, approvalStatus, search, sellerTypes } = params;
     const where: any = {
       // Exclude mappings for soft-deleted variants
       OR: [
@@ -48,6 +54,11 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
     if (productId) where.productId = productId;
     if (isActive !== undefined) where.isActive = isActive;
     if (approvalStatus) where.approvalStatus = approvalStatus;
+    // Seller-type scope: a D2C/RETAIL-scoped admin only sees mappings owned by
+    // sellers of their type. null/undefined = unrestricted (super admin).
+    if (sellerTypes && sellerTypes.length > 0) {
+      where.seller = { sellerType: { in: sellerTypes } };
+    }
     if (search) {
       where.AND = [
         {
@@ -77,8 +88,12 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
     return { mappings, total };
   }
 
-  async findPendingPaginated(page: number, limit: number): Promise<{ mappings: any[]; total: number }> {
-    const where = {
+  async findPendingPaginated(
+    page: number,
+    limit: number,
+    sellerTypes?: string[] | null,
+  ): Promise<{ mappings: any[]; total: number }> {
+    const where: any = {
       approvalStatus: 'PENDING_APPROVAL' as const,
       // Hide mappings whose product is a never-submitted draft (DRAFT +
       // moderationStatus PENDING) — consistent with the admin product list.
@@ -92,6 +107,11 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
         { variant: { isDeleted: false } },
       ],
     };
+    // Seller-type scope: a D2C/RETAIL-scoped admin only sees its own type's
+    // pending approvals. null/undefined = unrestricted (super admin).
+    if (sellerTypes && sellerTypes.length > 0) {
+      where.seller = { sellerType: { in: sellerTypes } };
+    }
     const [mappings, total] = await Promise.all([
       this.prisma.sellerProductMapping.findMany({
         where,
@@ -224,6 +244,30 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
         approvedBy: adminId,
         approvedAt: new Date(),
         rejectionReason: `[Reapproved] ${reason}`,
+      },
+    });
+    if (result.count === 0) return null;
+    return this.findById(mappingId);
+  }
+
+  // 2026-06-15 — seller resumes their OWN paused offer. The stoppedBy guard
+  // matches only rows this seller paused (repo.stop was called with the
+  // sellerId), so a seller can never lift an admin STOP/SUSPEND — only an
+  // admin reapprove can. Inverse of the seller pause.
+  async resumeBySeller(mappingId: string, sellerId: string): Promise<any | null> {
+    const result = await this.prisma.sellerProductMapping.updateMany({
+      where: {
+        id: mappingId,
+        approvalStatus: 'STOPPED',
+        stoppedBy: sellerId,
+        deletedAt: null,
+      },
+      data: {
+        approvalStatus: 'APPROVED',
+        isActive: true,
+        stoppedBy: null,
+        stoppedAt: null,
+        rejectionReason: null,
       },
     });
     if (result.count === 0) return null;
@@ -451,6 +495,32 @@ export class PrismaSellerMappingRepository implements ISellerMappingRepository {
       where: { sellerId, productId, deletedAt: null },
       select: { id: true, variantId: true },
     });
+  }
+
+  async findSellerOffersForProduct(
+    sellerId: string,
+    productId: string,
+  ): Promise<
+    Array<{
+      id: string;
+      variantId: string | null;
+      productId: string;
+      approvalStatus: string;
+      isActive: boolean;
+      stoppedBy: string | null;
+    }>
+  > {
+    return this.prisma.sellerProductMapping.findMany({
+      where: { sellerId, productId, deletedAt: null },
+      select: {
+        id: true,
+        variantId: true,
+        productId: true,
+        approvalStatus: true,
+        isActive: true,
+        stoppedBy: true,
+      },
+    }) as any;
   }
 
   async create(data: any): Promise<any> {

@@ -1,77 +1,50 @@
-# Phase 9 (2026-05-16) — Terraform root module.
+# =========================================================================
+# SPORTSMART — AWS ECS Fargate environment (root module)
+# =========================================================================
+# Phase 1 (2026-06-15) — replaces the Phase-9 EKS skeleton. Target is
+# ECS Fargate (serverless containers): no cluster/node ops, native ALB +
+# Secrets Manager + CloudWatch + rolling deploy with circuit-breaker
+# rollback — the right fit for a 1–2 person team. The old EKS-oriented
+# k8s sample manifests under infra/ci-cd/k8s/ are kept as reference but
+# are NOT the deploy path.
 #
-# Stitch the per-service modules together. Each `module` block below
-# is a placeholder pointer to a sibling directory under this dir;
-# create the module bodies before `terraform init`.
+# What this module provisions per environment (staging | production):
+#   - VPC: 2 public + 2 private subnets across 2 AZs, IGW, single NAT.   (network.tf)
+#   - Security groups: alb / ecs / rds / redis, least-privilege wired.    (security.tf)
+#   - RDS Postgres 16 + ElastiCache Redis, both private.                  (data.tf)
+#   - ECR repo per service (api + 10 web apps).                          (registry.tf)
+#   - Secrets Manager app secret (DB/Redis URLs + JWT/keys generated;
+#     Razorpay/R2 left as operator-filled placeholders) + KMS CMK.       (secrets.tf)
+#   - IAM task-execution + task roles.                                   (iam.tf)
+#   - CloudWatch log group per service.                                  (logs.tf)
+#   - ALB + ACM wildcard cert + HTTPS listener + HTTP->HTTPS redirect.   (alb.tf)
+#   - ECS cluster + per-service task def / service / target group /
+#     listener rule / Route53 alias (for_each over local.services).      (ecs.tf)
+#
+# Bring-up order is documented in README.md. State lives in S3 (backend.tf);
+# bootstrap/ creates the state bucket + lock table first.
 
 provider "aws" {
   region = var.region
 
   default_tags {
     tags = {
-      Project    = "sportsmart"
-      Env        = var.env
-      ManagedBy  = "terraform"
-      Repository = "sportsmart-marketplace"
+      Project     = "sportsmart"
+      Environment = var.env
+      ManagedBy   = "terraform"
+      Repository  = "sportsmart-marketplace"
     }
   }
 }
 
-# ── ECR registries (api + 8 web-*) ────────────────────────────────
-# Helm/K8s/ECS reads the GHCR-hosted image today (see deploy.yml),
-# but mirroring into ECR is recommended for production so an outage
-# at GitHub doesn't block pod restarts.
-#
-# module "ecr" {
-#   source = "./ecr"
-#   env    = var.env
-#   repositories = [
-#     "api",
-#     "web-storefront",
-#     "web-admin",
-#     "web-admin-storefront",
-#     "web-seller",
-#     "web-franchise",
-#     "web-franchise-admin",
-#     "web-affiliate",
-#     "web-affiliate-admin",
-#   ]
-# }
+# Pick the first two AZs in the region for the 2-AZ layout.
+data "aws_availability_zones" "available" {
+  state = "available"
+}
 
-# ── RDS Postgres + read replica ───────────────────────────────────
-#
-# module "rds" {
-#   source         = "./rds"
-#   env            = var.env
-#   vpc_id         = module.vpc.vpc_id
-#   private_subnet_ids = module.vpc.private_subnet_ids
-#   instance_class = var.rds_instance_class
-#   db_name        = "sportsmart"
-# }
-
-# ── ElastiCache Redis ─────────────────────────────────────────────
-#
-# module "elasticache" {
-#   source     = "./elasticache"
-#   env        = var.env
-#   vpc_id     = module.vpc.vpc_id
-#   subnet_ids = module.vpc.private_subnet_ids
-#   node_type  = var.elasticache_node_type
-# }
-
-# ── S3 buckets (product images, invoice PDFs, KYC) ────────────────
-#
-# module "s3" {
-#   source        = "./s3"
-#   env           = var.env
-#   kms_key_alias = var.secrets_kms_key_alias
-# }
-
-# ── EKS cluster (or swap for ECS/Fargate) ─────────────────────────
-#
-# module "eks" {
-#   source     = "./eks"
-#   env        = var.env
-#   vpc_id     = module.vpc.vpc_id
-#   subnet_ids = module.vpc.private_subnet_ids
-# }
+# The public DNS zone the environment's hostnames live under. Must already
+# exist in Route53 (registrar delegation done out-of-band).
+data "aws_route53_zone" "primary" {
+  name         = var.hosted_zone_name
+  private_zone = false
+}

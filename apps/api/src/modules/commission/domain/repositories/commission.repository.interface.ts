@@ -83,6 +83,12 @@ export interface CommissionRecordFilter {
   settlementStatus?: string;
   adjustedOnly?: boolean;
   reversedOnly?: boolean;
+  // Isolation fix (2026-06-16) — the admin's seller-type scope. `null`/absent =
+  // unrestricted (SUPER_ADMIN, FRANCHISE_ADMIN); a list (e.g. ['D2C']) limits
+  // the result to records whose owning seller is of that type, so a D2C_ADMIN
+  // never sees RETAIL commission rows (and vice versa). Applied via the
+  // CommissionRecord.seller relation in buildWhere.
+  allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null;
 }
 
 export interface CommissionSettingsData {
@@ -151,7 +157,9 @@ export interface CommissionRepository {
   ): Promise<{ records: any[]; total: number }>;
 
   /* ── Admin summary ── */
-  getAdminCommissionSummary(): Promise<CommissionSummary>;
+  getAdminCommissionSummary(
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
+  ): Promise<CommissionSummary>;
 
   /* ── Settings ── */
   getCommissionSettings(): Promise<any>;

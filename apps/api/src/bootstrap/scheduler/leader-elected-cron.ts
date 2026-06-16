@@ -24,11 +24,13 @@ import { RedisService } from '../cache/redis.service';
  * Contract:
  *   - `jobName` is the Redis key suffix (`cron-lock:${jobName}`); each
  *     job must have a unique name across the cluster.
- *   - `ttlSeconds` MUST be at least `2 * expectedBodyDurationSeconds`.
- *     A too-short TTL means the lock expires mid-run and another
- *     replica picks up. A too-long TTL means a crashed leader blocks
- *     reruns until expiry. Tune per-job; default rule of thumb is
- *     `2 * tick_interval`.
+ *   - `ttlSeconds` is the lock LEASE, auto-renewed by the watchdog every
+ *     ~ttl/3s while the body runs (so a body that outlives ttlSeconds keeps
+ *     its lock instead of letting a second replica in). Pick a ttl that is a
+ *     comfortable multiple of the renew interval and survives a brief Redis
+ *     blip (a few renewals' worth, e.g. >= 30s), and small enough that a
+ *     CRASHED leader's lock expires reasonably soon (no renewals fire after a
+ *     crash, so the lease is also the crash-recovery window).
  *   - On uncaught body errors: lock is released via `finally`, then
  *     the error re-propagates so `@nestjs/schedule` records it.
  *
@@ -42,9 +44,13 @@ import { RedisService } from '../cache/redis.service';
  * expired mid-run can no longer accidentally delete a successor's
  * lock.
  *
- * NOT IMPLEMENTED YET:
- *   - Lease renewal. A long-running body that exceeds TTL gets its
- *     lock revoked. Today: tune TTL conservatively.
+ * Lease renewal (watchdog) — IMPLEMENTED. While the body runs, a timer
+ * re-extends the lock TTL every ~ttl/3s via a fenced CAS (renewLockWithToken:
+ * extend only if the value still matches our token), so a body that outlives
+ * ttlSeconds keeps its lock instead of being revoked mid-run. The timer is
+ * cleared before release. Renewal is best-effort — a sustained Redis outage
+ * can still let the lease lapse — so it shrinks the double-run window rather
+ * than being a hard distributed-lock guarantee.
  */
 @Injectable()
 export class LeaderElectedCron {
@@ -82,6 +88,29 @@ export class LeaderElectedCron {
       return { ran: false };
     }
 
+    // Lease-renewal watchdog. A body that runs longer than ttlSeconds would
+    // otherwise let the lock expire mid-run, allowing a second replica to
+    // acquire and run concurrently. Re-extend the TTL every ~ttl/3s, fenced
+    // (only if we still hold it). Renewal failure (we lost the lock, or a
+    // transient Redis error) is logged but cannot abort the in-flight body —
+    // the watchdog shrinks the double-run window for slow-but-healthy jobs; it
+    // is not a hard guarantee under sustained Redis failure.
+    const renewMs = Math.max(1000, Math.floor((ttlSeconds * 1000) / 3));
+    const watchdog = setInterval(() => {
+      void this.redis
+        .renewLockWithToken(lockKey, token, ttlSeconds)
+        .then((renewed) => {
+          if (!renewed) {
+            this.logger.warn(
+              `cron '${jobName}' lock renewal did not extend (lock lost or Redis error) — a concurrent run is possible`,
+            );
+          }
+        })
+        .catch(() => undefined);
+    }, renewMs);
+    // Don't let the watchdog timer keep the event loop alive.
+    watchdog.unref?.();
+
     const startedAt = Date.now();
     try {
       await body();
@@ -89,6 +118,10 @@ export class LeaderElectedCron {
       this.logger.log(`cron '${jobName}' completed in ${elapsedMs}ms`);
       return { ran: true };
     } finally {
+      // Stop renewing BEFORE releasing so a late renew can't re-extend a lock
+      // we're about to delete (and even if one races, its fenced CAS no-ops
+      // once the key is gone).
+      clearInterval(watchdog);
       // Fenced release — only deletes the key if our token still
       // matches. If TTL expired mid-body, the release is a no-op
       // (returns false) instead of clobbering a fresh acquirer's lock.

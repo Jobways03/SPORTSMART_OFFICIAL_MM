@@ -1,0 +1,7 @@
+# Backend config for production — pass at init:
+#   terraform init -backend-config=production.s3.tfbackend -reconfigure
+bucket         = "sportsmart-tfstate"
+key            = "envs/production/terraform.tfstate"
+region         = "ap-south-1"
+dynamodb_table = "sportsmart-tflock"
+encrypt        = true

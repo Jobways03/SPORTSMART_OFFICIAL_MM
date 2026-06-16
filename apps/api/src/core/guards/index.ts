@@ -24,6 +24,12 @@ export {
   AdminReturnSellerScopeGuard,
   AdminProductSellerScopeGuard,
   AdminMappingSellerScopeGuard,
+  // Isolation fix (2026-06-16) — scope guards for routes keyed by a SELLER id
+  // (`:sellerId`), a seller-SETTLEMENT id (`:settlementId`) or a COMMISSION
+  // RECORD id (`:id`): the accounts/commission/settlement drill-downs.
+  AdminSellerIdScopeGuard,
+  AdminSettlementSellerScopeGuard,
+  AdminCommissionRecordScopeGuard,
 } from './entity-seller-scope.guard';
 // Phase 10 (PR 10.10) — step-up auth for destructive ops. Re-export
 // from core/step-up via the guards index so callers can pick up the
