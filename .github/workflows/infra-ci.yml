@@ -46,7 +46,7 @@ jobs:
       # leaked credential before any tool setup. tfvars / TF state are exactly
       # where infra secrets tend to slip in.
       - name: Scan for secrets (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

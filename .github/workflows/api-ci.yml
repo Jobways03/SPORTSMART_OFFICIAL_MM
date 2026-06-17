@@ -59,7 +59,7 @@ jobs:
       # org, the operator must add the license secret OR swap to a
       # CLI-install step that bypasses the org-license check.
       - name: Scan for secrets (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
