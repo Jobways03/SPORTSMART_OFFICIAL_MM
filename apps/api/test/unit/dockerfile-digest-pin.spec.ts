@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import * as fs from 'fs';
 import * as path from 'path';
 
-// Phase 9 (PR 9.4) — Every Dockerfile under infra/ must pin its base
+// Phase 9 (PR 9.4) — Every Dockerfile in the repo must pin its base
 // image(s) by SHA256 digest, not just by tag.
 //
 // `FROM node:22-slim` resolves to whichever image upstream has
@@ -15,7 +15,10 @@ import * as path from 'path';
 // matches) instead of a runtime surprise.
 //
 // Detection strategy:
-//   - Walk infra/ for *.Dockerfile / Dockerfile / Dockerfile.* files.
+//   - Walk the whole repo (skipping node_modules / build output) for
+//     *.Dockerfile / Dockerfile / Dockerfile.* files — so app-level
+//     Dockerfiles (e.g. apps/logistics-facade/Dockerfile) are covered,
+//     not just the ones under infra/.
 //   - For each, find every non-commented `FROM <image>[ AS <stage>]`
 //     line.
 //   - Assert each FROM image contains `@sha256:<64 hex chars>`.
@@ -27,7 +30,18 @@ import * as path from 'path';
 // fabricated or the image was un-published).
 
 const REPO_ROOT = path.resolve(__dirname, '..', '..', '..', '..');
-const INFRA_DIR = path.join(REPO_ROOT, 'infra');
+
+// Directories that never hold our first-party Dockerfiles and would either
+// slow the walk or surface third-party / build-output Dockerfiles we don't own.
+const EXCLUDE_DIRS = new Set([
+  'node_modules',
+  '.git',
+  '.next',
+  'dist',
+  'build',
+  'coverage',
+  '.turbo',
+]);
 
 function findDockerfiles(dir: string): string[] {
   const out: string[] = [];
@@ -40,7 +54,7 @@ function findDockerfiles(dir: string): string[] {
     for (const e of entries) {
       const full = path.join(cur, e.name);
       if (e.isDirectory()) {
-        stack.push(full);
+        if (!EXCLUDE_DIRS.has(e.name)) stack.push(full);
         continue;
       }
       if (
@@ -83,10 +97,10 @@ function extractFromLines(text: string): Array<{ lineNo: number; image: string }
   return froms;
 }
 
-describe('Every Dockerfile under infra/ pins its base image by SHA256 digest (PR 9.4)', () => {
-  const dockerfiles = findDockerfiles(INFRA_DIR);
+describe('Every Dockerfile in the repo pins its base image by SHA256 digest (PR 9.4)', () => {
+  const dockerfiles = findDockerfiles(REPO_ROOT);
 
-  it('discovers at least one Dockerfile under infra/ (sanity)', () => {
+  it('discovers at least one Dockerfile in the repo (sanity)', () => {
     expect(dockerfiles.length).toBeGreaterThan(0);
   });
 

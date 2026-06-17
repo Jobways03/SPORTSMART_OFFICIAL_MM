@@ -770,6 +770,14 @@ export const envSchema = z.object({
   //   cap for back-compat.
   ROUTING_MAX_DISTANCE_KM: z.coerce.number().default(1500),
 
+  // Tiered-allocation cascade (2026-06-16) — Retail sellers are LOCAL fulfilment
+  // only: a retail seller is eligible for an order only when the customer is
+  // within this straight-line (Haversine) radius of their pickup pincode.
+  // Beyond it, the retail seller is not eligible at all (no nationwide retail
+  // fallback) and the order cascades to Franchise → D2C, which ship nationwide
+  // (no distance cap). 0 disables the radius (retail becomes nationwide too).
+  RETAIL_LOCAL_RADIUS_KM: z.coerce.number().default(50),
+
   // Phase 66 (2026-05-22) — payment intent hardening.
   //   PAYMENT_EXPIRY_SWEEP_ENABLED (audit Gap #18) gates the cron
   //     that flips PENDING_PAYMENT orders past their

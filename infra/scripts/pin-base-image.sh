@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 #
 # pin-base-image.sh — resolve a Docker image tag to its current
-# RepoDigest and patch infra/docker/Dockerfile.api in-place.
+# RepoDigest and patch ALL Dockerfiles that hardcode that base in-place.
 #
-# Phase 9 (2026-05-16) — companion to the Dockerfile.api tag-pin.
+# Phase 9 (2026-05-16) — companion to the node:22-slim tag-pin. Updates
+# every Dockerfile sharing the pin in one shot so a rotation can't leave
+# one file on a stale digest (the drift dockerfile-digest-pin.spec.ts
+# is there to catch).
 #
 # Usage:
 #   infra/scripts/pin-base-image.sh node:22-slim
@@ -11,10 +14,10 @@
 # What it does:
 #   1. Pulls the tag fresh so we capture the latest published digest.
 #   2. Reads RepoDigests[0] from `docker inspect`.
-#   3. Refuses to write the all-zeros placeholder back into the file.
-#   4. Rewrites the `FROM <image>` (or `FROM <image>@sha256:...`) line
-#      to `FROM <image>@sha256:<hex>`.
-#   5. Prints a summary diff so the operator can paste it into the PR.
+#   3. Refuses to write the all-zeros placeholder back into the files.
+#   4. Rewrites the `FROM <image>[@sha256:...] AS base` line in each
+#      target Dockerfile to `FROM <image>@sha256:<hex> AS base`.
+#   5. Prints a per-file before/after so the operator can paste the PR.
 #
 # Pre-release rotation step — runs locally, NOT in CI (CI builds use
 # the tag pin to stay green across upstream point releases).
@@ -29,16 +32,24 @@ fi
 
 IMAGE="$1"
 
-# Resolve script-relative path to the Dockerfile so the script works
-# regardless of whether the operator runs it from repo root or
-# infra/scripts/ itself.
+# Resolve script-relative paths so the script works regardless of whether
+# the operator runs it from repo root or infra/scripts/ itself. Every
+# Dockerfile here hardcodes the SAME node:22-slim base pin and must rotate
+# together — a partial rotation is the drift dockerfile-digest-pin.spec.ts
+# is there to catch.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DOCKERFILE="${SCRIPT_DIR}/../docker/Dockerfile.api"
+DOCKERFILES=(
+  "${SCRIPT_DIR}/../docker/Dockerfile.api"
+  "${SCRIPT_DIR}/../docker/Dockerfile.web"
+  "${SCRIPT_DIR}/../../apps/logistics-facade/Dockerfile"
+)
 
-if [[ ! -f "$DOCKERFILE" ]]; then
-  echo "error: Dockerfile not found at $DOCKERFILE" >&2
-  exit 1
-fi
+for f in "${DOCKERFILES[@]}"; do
+  if [[ ! -f "$f" ]]; then
+    echo "error: Dockerfile not found at $f" >&2
+    exit 1
+  fi
+done
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "error: 'docker' CLI is required but not installed" >&2
@@ -66,22 +77,24 @@ if [[ "$SHA" == "sha256:00000000000000000000000000000000000000000000000000000000
   exit 1
 fi
 
-# Show the current FROM line before patching.
-echo "▶ Current FROM line:"
-grep -nE '^FROM[[:space:]]+node:22-slim' "$DOCKERFILE" || {
-  echo "error: could not find a FROM node:22-slim line in $DOCKERFILE" >&2
-  exit 1
-}
-
-# Patch the line. macOS / BSD sed needs the -i '' form; GNU sed allows
-# bare -i. We detect the platform once and branch.
 NEW_FROM="FROM ${IMAGE}@${SHA} AS base"
-if [[ "$(uname -s)" == "Darwin" ]]; then
-  sed -i '' -E "s|^FROM[[:space:]]+node:22-slim(@sha256:[0-9a-f]{64})?([[:space:]]+AS[[:space:]]+base)?\$|${NEW_FROM}|" "$DOCKERFILE"
-else
-  sed -i -E "s|^FROM[[:space:]]+node:22-slim(@sha256:[0-9a-f]{64})?([[:space:]]+AS[[:space:]]+base)?\$|${NEW_FROM}|" "$DOCKERFILE"
-fi
+# macOS / BSD sed needs the -i '' form; GNU sed allows bare -i.
+SED_EXPR="s|^FROM[[:space:]]+node:22-slim(@sha256:[0-9a-f]{64})?([[:space:]]+AS[[:space:]]+base)?\$|${NEW_FROM}|"
 
-echo "▶ New FROM line:"
-grep -nE '^FROM[[:space:]]+node:22-slim' "$DOCKERFILE"
-echo "✓ Done. Commit the change, run a fresh \`docker build\`, and open a PR."
+for f in "${DOCKERFILES[@]}"; do
+  echo "▶ ${f}"
+  echo "  before:"
+  grep -nE '^FROM[[:space:]]+node:22-slim' "$f" || {
+    echo "error: could not find a FROM node:22-slim line in $f" >&2
+    exit 1
+  }
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    sed -i '' -E "$SED_EXPR" "$f"
+  else
+    sed -i -E "$SED_EXPR" "$f"
+  fi
+  echo "  after:"
+  grep -nE '^FROM[[:space:]]+node:22-slim' "$f"
+done
+
+echo "✓ Done. Commit the changes, run a fresh \`docker build\` for each, and open a PR."

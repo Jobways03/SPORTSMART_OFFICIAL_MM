@@ -86,6 +86,14 @@ resource "aws_ecs_task_definition" "this" {
       image     = "${aws_ecr_repository.this[each.key].repository_url}:${var.image_tag}"
       essential = true
 
+      # Run ECS's built-in init (a tini equivalent) as PID 1: reaps zombies and
+      # forwards SIGTERM cleanly to the node process on every rolling deploy /
+      # scale-in, so in-flight requests drain instead of being cut. The images
+      # use exec-form CMD already; this adds the reaper without an image change.
+      linuxParameters = {
+        initProcessEnabled = true
+      }
+
       portMappings = [
         { containerPort = each.value.container_port, protocol = "tcp" }
       ]
