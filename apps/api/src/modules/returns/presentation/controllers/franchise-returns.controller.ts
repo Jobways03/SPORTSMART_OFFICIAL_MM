@@ -12,12 +12,15 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { FranchiseAuthGuard } from '../../../../core/guards';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { ReturnService } from '../../application/services/return.service';
 import { MarkReceivedDto } from '../dtos/mark-received.dto';
+import { SellerRespondDto } from '../dtos/seller-respond.dto';
+import { SellerRescindResponseDto } from '../dtos/seller-rescind-response.dto';
 
 const QC_EVIDENCE_UPLOAD_OPTIONS = {
   limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
@@ -112,6 +115,63 @@ export class FranchiseReturnsController {
       body?.description,
     );
     return { success: true, message: 'Evidence uploaded', data };
+  }
+
+  // PATCH /franchise/returns/:returnId/respond — franchise response to a
+  // fault-attribution claim. ACCEPT (agree) or CONTEST (disagree, optionally
+  // with evidence URLs). Mirrors the seller respond; the service enforces
+  // ownership (subOrder.franchiseId), the deadline, and the PENDING-only state
+  // machine.
+  @Patch(':returnId/respond')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Idempotent()
+  async respond(
+    @Req() req: any,
+    @Param('returnId') returnId: string,
+    @Body() body: SellerRespondDto,
+  ) {
+    if (body.decision === 'CONTESTED' && !body.notes?.trim()) {
+      throw new BadRequestAppException(
+        'notes are required when contesting a claim — explain why',
+      );
+    }
+    const data = await this.returnService.respondAsSeller({
+      returnId,
+      sellerId: req.franchiseId,
+      nodeType: 'FRANCHISE',
+      decision: body.decision,
+      notes: body.notes,
+      evidenceFileUrls: body.evidenceFileUrls,
+      contestReasonCategory: body.contestReasonCategory,
+      itemDecisions: body.itemDecisions,
+    });
+    return { success: true, message: 'Response recorded', data };
+  }
+
+  // PATCH /franchise/returns/:returnId/respond/rescind — franchise flips its
+  // prior ACCEPTED↔CONTESTED while still within the original window + 1h grace.
+  @Patch(':returnId/respond/rescind')
+  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  @Idempotent()
+  async rescindResponse(
+    @Req() req: any,
+    @Param('returnId') returnId: string,
+    @Body() body: SellerRescindResponseDto,
+  ) {
+    if (body.newDecision === 'CONTESTED' && !body.notes?.trim()) {
+      throw new BadRequestAppException(
+        'notes are required when rescinding to CONTESTED — explain why',
+      );
+    }
+    const data = await this.returnService.rescindSellerResponse({
+      returnId,
+      sellerId: req.franchiseId,
+      nodeType: 'FRANCHISE',
+      newDecision: body.newDecision,
+      notes: body.notes,
+      contestReasonCategory: body.contestReasonCategory,
+    });
+    return { success: true, message: 'Response rescinded', data };
   }
 
   // QC DECISION — intentionally admin-only.

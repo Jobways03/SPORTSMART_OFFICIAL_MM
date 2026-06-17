@@ -170,7 +170,12 @@ export class DisputeService {
    */
   private async assertFilerOwnsLinks(args: FileDisputeArgs): Promise<void> {
     const { filer } = args;
-    if (filer.type !== 'CUSTOMER' && filer.type !== 'SELLER') return;
+    if (
+      filer.type !== 'CUSTOMER' &&
+      filer.type !== 'SELLER' &&
+      filer.type !== 'FRANCHISE'
+    )
+      return;
 
     let derivedMasterOrderId: string | null = null;
     let derivedSubOrderId: string | null = null;
@@ -186,14 +191,16 @@ export class DisputeService {
       if (filer.type === 'CUSTOMER' && ret.customerId !== filer.id) {
         throw new ForbiddenAppException('Linked return does not belong to you');
       }
-      if (filer.type === 'SELLER') {
+      if (filer.type === 'SELLER' || filer.type === 'FRANCHISE') {
         const sub = ret.subOrderId
           ? await this.prisma.subOrder.findUnique({
               where: { id: ret.subOrderId },
-              select: { sellerId: true },
+              select: { sellerId: true, franchiseId: true },
             })
           : null;
-        if (!sub || sub.sellerId !== filer.id) {
+        const ownerId =
+          filer.type === 'SELLER' ? sub?.sellerId : sub?.franchiseId;
+        if (!sub || ownerId !== filer.id) {
           throw new ForbiddenAppException(
             'Linked return is not for one of your sub-orders',
           );
@@ -211,6 +218,7 @@ export class DisputeService {
         where: { id: args.subOrderId },
         select: {
           sellerId: true,
+          franchiseId: true,
           masterOrderId: true,
           masterOrder: { select: { customerId: true } },
         },
@@ -223,6 +231,11 @@ export class DisputeService {
         );
       }
       if (filer.type === 'SELLER' && sub.sellerId !== filer.id) {
+        throw new ForbiddenAppException(
+          'Linked sub-order does not belong to you',
+        );
+      }
+      if (filer.type === 'FRANCHISE' && sub.franchiseId !== filer.id) {
         throw new ForbiddenAppException(
           'Linked sub-order does not belong to you',
         );
@@ -243,11 +256,15 @@ export class DisputeService {
       if (filer.type === 'CUSTOMER' && order.customerId !== filer.id) {
         throw new ForbiddenAppException('Linked order does not belong to you');
       }
-      // A seller can't dispute a bare (multi-seller) master order — they must
-      // anchor on a sub-order or return they fulfil.
-      if (filer.type === 'SELLER' && !args.subOrderId && !args.returnId) {
+      // A seller/franchise can't dispute a bare (multi-node) master order —
+      // they must anchor on a sub-order or return they fulfil.
+      if (
+        (filer.type === 'SELLER' || filer.type === 'FRANCHISE') &&
+        !args.subOrderId &&
+        !args.returnId
+      ) {
         throw new ForbiddenAppException(
-          'Sellers must link a sub-order or return, not a bare order',
+          'A sub-order or return must be linked, not a bare order',
         );
       }
     }
@@ -808,18 +825,25 @@ export class DisputeService {
     if (!actor.isAdmin) {
       const isFiler =
         dispute.filedByType === actor.type && dispute.filedById === actor.id;
-      // Sellers also see disputes filed against their sub-order, even
-      // when the buyer was the filer. Cross-check via the sub_orders
+      // Sellers / franchises also see disputes filed against their sub-order,
+      // even when the buyer was the filer. Cross-check via the sub_orders
       // table (cheap point lookup, only runs when isFiler is false).
-      let isAffectedSeller = false;
-      if (!isFiler && actor.type === 'SELLER' && dispute.subOrderId) {
+      let isAffectedNode = false;
+      if (
+        !isFiler &&
+        (actor.type === 'SELLER' || actor.type === 'FRANCHISE') &&
+        dispute.subOrderId
+      ) {
         const sub = await this.prisma.subOrder.findUnique({
           where: { id: dispute.subOrderId },
-          select: { sellerId: true },
+          select: { sellerId: true, franchiseId: true },
         });
-        isAffectedSeller = sub?.sellerId === actor.id;
+        isAffectedNode =
+          actor.type === 'SELLER'
+            ? sub?.sellerId === actor.id
+            : sub?.franchiseId === actor.id;
       }
-      if (!isFiler && !isAffectedSeller) {
+      if (!isFiler && !isAffectedNode) {
         throw new ForbiddenAppException('Not allowed');
       }
     }
@@ -892,6 +916,40 @@ export class DisputeService {
     return { items, total, page, limit };
   }
 
+  async listAgainstFranchise(
+    franchiseId: string,
+    page = 1,
+    limit = 20,
+    status?: DisputeStatus,
+  ) {
+    const skip = (page - 1) * limit;
+    // Resolve the sub-order ids belonging to this franchise, then filter
+    // disputes whose subOrderId is in that set OR whose filedBy is the
+    // franchise themselves (covers both "filed against me" and "I filed").
+    const subs = await this.prisma.subOrder.findMany({
+      where: { franchiseId },
+      select: { id: true },
+    });
+    const subIds = subs.map((s) => s.id);
+    const where: Prisma.DisputeWhereInput = {
+      OR: [
+        { subOrderId: { in: subIds } },
+        { filedByType: 'FRANCHISE', filedById: franchiseId },
+      ],
+    };
+    if (status) (where as any).status = status;
+    const [items, total] = await Promise.all([
+      this.prisma.dispute.findMany({
+        where,
+        orderBy: [{ severity: 'desc' }, { createdAt: 'desc' }],
+        skip,
+        take: limit,
+      }),
+      this.prisma.dispute.count({ where }),
+    ]);
+    return { items, total, page, limit };
+  }
+
   async listAdmin(filter: {
     page: number;
     limit: number;
@@ -949,16 +1007,24 @@ export class DisputeService {
       const isOwner =
         dispute.filedByType === args.sender.type &&
         dispute.filedById === args.sender.id;
-      // Sellers may also reply on disputes filed against their sub-order.
-      let isAffectedSeller = false;
-      if (!isOwner && args.sender.type === 'SELLER' && dispute.subOrderId) {
+      // Sellers / franchises may also reply on disputes filed against their
+      // sub-order.
+      let isAffectedNode = false;
+      if (
+        !isOwner &&
+        (args.sender.type === 'SELLER' || args.sender.type === 'FRANCHISE') &&
+        dispute.subOrderId
+      ) {
         const sub = await this.prisma.subOrder.findUnique({
           where: { id: dispute.subOrderId },
-          select: { sellerId: true },
+          select: { sellerId: true, franchiseId: true },
         });
-        isAffectedSeller = sub?.sellerId === args.sender.id;
+        isAffectedNode =
+          args.sender.type === 'SELLER'
+            ? sub?.sellerId === args.sender.id
+            : sub?.franchiseId === args.sender.id;
       }
-      if (!isOwner && !isAffectedSeller) {
+      if (!isOwner && !isAffectedNode) {
         throw new ForbiddenAppException('Not allowed');
       }
     }

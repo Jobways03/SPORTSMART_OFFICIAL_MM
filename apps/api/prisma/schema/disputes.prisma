@@ -28,6 +28,7 @@ enum DisputeActorType {
   CUSTOMER
   SELLER
   ADMIN
+  FRANCHISE
 }
 
 // Phase 12 (post-Phase-11) — see ADR-016. Records who pays for the

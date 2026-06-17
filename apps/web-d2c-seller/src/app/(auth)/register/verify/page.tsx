@@ -211,7 +211,7 @@ function VerifyRegistrationOtpForm() {
             className="auth-logo"
             style={{ height: 56, width: 'auto', display: 'block' }}
           />
-          <p className="auth-badge">Seller Portal</p>
+          <p className="auth-badge">D2C Seller Portal</p>
           <h2 className="auth-title">Verify your email</h2>
           <p className="auth-subtitle">
             Enter the 6-digit code we sent to{' '}

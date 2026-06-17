@@ -60,7 +60,7 @@ export default function ForgotPasswordPage() {
       <div className="auth-card">
         <div className="auth-header">
           <h1 className="auth-logo">SPORTSMART</h1>
-          <p className="auth-badge">Seller Portal</p>
+          <p className="auth-badge">D2C Seller Portal</p>
           <h2 className="auth-title">Forgot your password?</h2>
           <p className="auth-subtitle">
             Enter your registered email address and we&apos;ll send you a verification code to reset

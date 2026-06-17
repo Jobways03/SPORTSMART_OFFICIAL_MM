@@ -96,8 +96,12 @@ model FranchisePartner {
   contractEndDate   DateTime? @map("contract_end_date")
 
   // Warehouse
-  warehouseAddress String? @map("warehouse_address")
-  warehousePincode String? @map("warehouse_pincode")
+  warehouseAddress  String? @map("warehouse_address")
+  warehousePincode  String? @map("warehouse_pincode")
+  warehouseCity     String? @map("warehouse_city")
+  warehouseState    String? @map("warehouse_state")
+  warehouseLocality String? @map("warehouse_locality")
+  warehouseCountry  String? @map("warehouse_country")
 
   // Phase 231 (Eligible-node listing audit) — per-franchise dispatch SLA in
   // days. Pre-231 the allocator hard-coded `dispatchSla = 1` for EVERY

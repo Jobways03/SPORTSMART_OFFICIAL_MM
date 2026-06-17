@@ -57,6 +57,9 @@ import { RefundStatusPollerCron } from './application/jobs/refund-status-poller.
 import { SellerReversalService } from './application/services/seller-reversal.service';
 import { SellerReversalsController } from './presentation/controllers/seller-reversals.controller';
 import { AdminSellerReversalsController } from './presentation/controllers/admin-seller-reversals.controller';
+import { FranchiseReversalService } from './application/services/franchise-reversal.service';
+import { FranchiseReversalsController } from './presentation/controllers/franchise-reversals.controller';
+import { AdminFranchiseReversalsController } from './presentation/controllers/admin-franchise-reversals.controller';
 import { MoneyModule } from '../../core/money/money.module';
 
 @Module({
@@ -81,6 +84,8 @@ import { MoneyModule } from '../../core/money/money.module';
     RazorpayRefundWebhookController,
     SellerReversalsController,
     AdminSellerReversalsController,
+    FranchiseReversalsController,
+    AdminFranchiseReversalsController,
   ],
   providers: [
     { provide: RETURN_REPOSITORY, useClass: PrismaReturnRepository },
@@ -105,6 +110,7 @@ import { MoneyModule } from '../../core/money/money.module';
     RazorpayRefundWebhookService,
     RefundStatusPollerCron,
     SellerReversalService,
+    FranchiseReversalService,
     UserAuthGuard,
     AdminAuthGuard,
     SellerAuthGuard,

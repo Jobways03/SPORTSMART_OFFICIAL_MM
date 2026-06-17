@@ -108,7 +108,7 @@ test('VERIFIED + PENDING status → awaiting-admin banner', () => {
   assert.match(banner!.text, /Awaiting admin approval/i);
 });
 
-test('APPROVED status → add-bank-details banner', () => {
+test('APPROVED status without bank details → add-bank-details banner', () => {
   const banner = deriveBanner(
     fr({
       isEmailVerified: true,
@@ -116,12 +116,27 @@ test('APPROVED status → add-bank-details banner', () => {
       panNumber: 'ABCDE1234F',
       verificationStatus: 'VERIFIED',
       status: 'APPROVED',
+      hasBankDetails: false,
     }),
   );
   assert.ok(banner);
   assert.equal(banner!.kind, 'warning');
   assert.match(banner!.text, /Add bank details/i);
   assert.equal(banner!.ctaHref, '/dashboard/profile');
+});
+
+test('APPROVED status WITH bank details → no banner', () => {
+  const banner = deriveBanner(
+    fr({
+      isEmailVerified: true,
+      gstNumber: '29ABCDE1234F1Z5',
+      panNumber: 'ABCDE1234F',
+      verificationStatus: 'VERIFIED',
+      status: 'APPROVED',
+      hasBankDetails: true,
+    }),
+  );
+  assert.equal(banner, null);
 });
 
 test('SUSPENDED status → error banner, no CTA', () => {

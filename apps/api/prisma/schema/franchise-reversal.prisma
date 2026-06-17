@@ -1,0 +1,59 @@
+// B2B / off-platform franchise return reversal — franchise mirror of the
+// SellerReversal subsystem (see seller-reversal.prisma).
+//
+// A reversal is a persisted, admin-approved request — NOT a self-credit.
+// Lifecycle: PENDING_APPROVAL → APPROVED | REJECTED | CANCELLED. All financial
+// + inventory effects happen ONLY on approval (admin tooling), inside one
+// transaction. The franchise portal can request / list / cancel; the binding
+// approval stays with the marketplace admin (neutral arbiter), exactly like the
+// seller flow.
+//
+// Customer impact: none — the customer kept the goods. Only the reversal row
+// tracks the lifecycle for dashboards.
+
+enum FranchiseReversalStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model FranchiseReversal {
+  id                   String                  @id @default(uuid())
+  subOrderId           String                  @map("sub_order_id")
+  franchiseId          String                  @map("franchise_id")
+  masterOrderId        String                  @map("master_order_id")
+  status               FranchiseReversalStatus @default(PENDING_APPROVAL)
+  reason               String // Free text, 5-500 chars
+  reversalValueInPaise BigInt                  @map("reversal_value_in_paise") // Gross value snapshot
+  requestedAt          DateTime                @default(now()) @map("requested_at")
+  decidedByAdminId     String?                 @map("decided_by_admin_id")
+  decidedAt            DateTime?               @map("decided_at")
+  rejectionReason      String?                 @map("rejection_reason")
+  // Link to the FranchiseFinanceLedger row created on approval (admin tooling).
+  financeLedgerId      String?                 @map("finance_ledger_id")
+  idempotencyKey       String?                 @unique @map("idempotency_key")
+  createdAt            DateTime                @default(now()) @map("created_at")
+  updatedAt            DateTime                @updatedAt @map("updated_at")
+  items                FranchiseReversalItem[]
+
+  @@index([franchiseId, status, requestedAt(sort: Desc)])
+  @@index([status, requestedAt(sort: Desc)])
+  @@index([subOrderId])
+  @@map("franchise_reversals")
+}
+
+model FranchiseReversalItem {
+  id               String            @id @default(uuid())
+  reversalId       String            @map("reversal_id")
+  orderItemId      String            @map("order_item_id")
+  productId        String            @map("product_id")
+  variantId        String?           @map("variant_id")
+  quantity         Int
+  unitPriceInPaise BigInt            @map("unit_price_in_paise") // Snapshot at request time
+  reversal         FranchiseReversal @relation(fields: [reversalId], references: [id], onDelete: Cascade)
+
+  @@index([reversalId])
+  @@index([orderItemId])
+  @@map("franchise_reversal_items")
+}

@@ -7,13 +7,18 @@ import {
   franchiseReturnsService,
   FranchiseReturn,
 } from '@/services/returns.service';
+import {
+  franchiseDisputesService,
+  DisputeKind,
+  KIND_LABEL,
+} from '@/services/disputes.service';
 import { useModal } from '@sportsmart/ui';
 import { ApiError } from '@/lib/api-client';
 import { validateUploadFile } from '@/lib/validators';
 
 /* -- helpers -- */
 const fmt = (n: number) =>
-  `\u20B9${Number(n).toLocaleString('en-IN', {
+  `₹${Number(n).toLocaleString('en-IN', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   })}`;
@@ -90,8 +95,8 @@ const reasonLabel = (r: string) => {
 
 /* -- page -- */
 export default function FranchiseReturnDetailPage() {
-  const { notify, confirmDialog } = useModal();
-const { returnId } = useParams<{ returnId: string }>();
+  const { notify } = useModal();
+  const { returnId } = useParams<{ returnId: string }>();
   const [ret, setRet] = useState<FranchiseReturn | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -110,6 +115,15 @@ const { returnId } = useParams<{ returnId: string }>();
   // Upload evidence
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingEvidence, setUploadingEvidence] = useState(false);
+
+  // Respond to a fault-attribution claim (accept / contest) within the window.
+  const [respondNotes, setRespondNotes] = useState('');
+
+  // File a formal dispute (escalation for the SportsMart team to review).
+  const [showDispute, setShowDispute] = useState(false);
+  const [disputeKind, setDisputeKind] = useState<DisputeKind>('RETURN_REJECTED');
+  const [disputeSummary, setDisputeSummary] = useState('');
+  const [disputeIdemKey, setDisputeIdemKey] = useState('');
 
   const fetchReturn = useCallback(async () => {
     if (!returnId) return;
@@ -144,7 +158,8 @@ const { returnId } = useParams<{ returnId: string }>();
     fetchReturn();
   }, [fetchReturn]);
 
-  const handleMarkReceived = async () => {if (!returnId) return;
+  const handleMarkReceived = async () => {
+    if (!returnId) return;
     setActionLoading('received');
     try {
       await franchiseReturnsService.markReceived(returnId, receivedNotes || undefined);
@@ -160,18 +175,17 @@ const { returnId } = useParams<{ returnId: string }>();
     }
   };
 
-  // Phase 100 (2026-05-23) — QC audit Gap #2 closure. QC submission
-  // is admin-only on the backend (the `/franchise/returns/:id/
-  // qc-decision` route does NOT exist and the service-side guard
-  // rejects non-ADMIN actorType). Pre-Phase-100 this handler 404'd
-  // on every click. Stubbed out — admin handles QC in the admin
-  // dashboards. Franchise upload of evidence (above) still works
-  // and is the franchise's contribution to the QC decision.
+  // QC submission is admin-only on the backend (the
+  // `/franchise/returns/:id/qc-decision` route does NOT exist and the
+  // service-side guard rejects non-ADMIN actorType). Admin handles QC in the
+  // admin dashboards. Franchise upload of evidence (below) is the franchise's
+  // contribution to the QC decision.
   const handleQcSubmit = async () => {
     void notify('QC decisions are completed by admin in the admin dashboard.');
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {if (!returnId || !e.target.files || e.target.files.length === 0) return;
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!returnId || !e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
     // The picker accepts image/* — enforce a concrete allow-list + 5MB cap
     // before uploading so an oversized or non-image file fails fast with a
@@ -193,6 +207,77 @@ const { returnId } = useParams<{ returnId: string }>();
     } finally {
       setUploadingEvidence(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleRespond = async (decision: 'ACCEPTED' | 'CONTESTED') => {
+    if (!returnId) return;
+    if (decision === 'CONTESTED' && respondNotes.trim().length < 1) {
+      void notify('Please explain why you are contesting this claim.');
+      return;
+    }
+    setActionLoading('respond');
+    try {
+      const idem =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `respond-${returnId}-${Date.now()}`;
+      await franchiseReturnsService.respond(
+        returnId,
+        { decision, notes: respondNotes.trim() || undefined },
+        idem,
+      );
+      void notify(
+        decision === 'ACCEPTED'
+          ? 'Response recorded — you accepted the claim.'
+          : 'Response recorded — you contested the claim.',
+      );
+      setRespondNotes('');
+      fetchReturn();
+    } catch (err) {
+      if (err instanceof ApiError)
+        void notify(err.body.message || 'Failed to record response');
+      else void notify('Failed to record response');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const openDispute = () => {
+    setDisputeIdemKey(
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `dispute-${returnId}-${Date.now()}`,
+    );
+    setDisputeKind('RETURN_REJECTED');
+    setDisputeSummary('');
+    setShowDispute(true);
+  };
+
+  const handleFileDispute = async () => {
+    if (!returnId) return;
+    if (disputeSummary.trim().length < 5) {
+      void notify('Please describe the issue (at least 5 characters).');
+      return;
+    }
+    setActionLoading('dispute');
+    try {
+      await franchiseDisputesService.file(
+        { kind: disputeKind, summary: disputeSummary.trim(), returnId },
+        disputeIdemKey,
+      );
+      void notify(
+        'Dispute filed — our team will review it; the customer has been notified.',
+      );
+      setShowDispute(false);
+      setDisputeSummary('');
+      fetchReturn();
+    } catch (err) {
+      if (err instanceof ApiError)
+        void notify(err.body.message || 'Failed to file dispute');
+      else void notify('Failed to file dispute');
+    } finally {
+      setActionLoading(null);
     }
   };
 
@@ -218,29 +303,39 @@ const { returnId } = useParams<{ returnId: string }>();
           </div>
         </div>
         <div className="card">
-          <Link href="/dashboard/orders" style={{ color: '#2563eb' }}>
-            Back to Orders
+          <Link href="/dashboard/returns" style={{ color: '#2563eb' }}>
+            Back to Returns
           </Link>
         </div>
       </div>
     );
   }
 
-  // Phase 100 (2026-05-23) — Mark Received audit Gap #2 closure. Drop
-  // the dead 'SHIPPED' arm (not a valid ReturnStatus) and add
-  // 'PICKUP_SCHEDULED' so the button surfaces when admin used the
-  // courier-never-scanned shortcut.
   const canMarkReceived =
     ret.status === 'IN_TRANSIT' || ret.status === 'PICKUP_SCHEDULED';
-  // Phase 100 — QC submission is admin-only (backend refuses non-
-  // ADMIN actorType). Kept false so the dead QC block never renders.
+  // QC submission is admin-only (backend refuses non-ADMIN actorType). Kept
+  // false so the dead QC block never renders.
   const canSubmitQc = false;
+
+  // A formal dispute (escalation) is available once the return has progressed
+  // to a received/QC/refund stage — mirrors the seller portal.
+  const canFileDispute = [
+    'RECEIVED',
+    'QC_IN_PROGRESS',
+    'QC_APPROVED',
+    'QC_REJECTED',
+    'PARTIALLY_APPROVED',
+    'REFUND_PROCESSING',
+    'REFUNDED',
+    'REFUND_FAILED',
+    'COMPLETED',
+  ].includes(ret.status);
 
   return (
     <div>
       <div style={{ marginBottom: 20 }}>
         <Link
-          href="/dashboard/orders"
+          href="/dashboard/returns"
           style={{
             fontSize: 12,
             color: '#6b7280',
@@ -249,7 +344,7 @@ const { returnId } = useParams<{ returnId: string }>();
             display: 'inline-block',
           }}
         >
-          &#8592; Back to Orders
+          &#8592; Back to Returns
         </Link>
         <div
           style={{
@@ -440,6 +535,191 @@ const { returnId } = useParams<{ returnId: string }>();
               </div>
             </div>
           )}
+
+          {/* Respond to a fault-attribution claim (in-window accept / contest) */}
+          {ret.sellerResponseStatus === 'PENDING' && (
+            <div className="card">
+              <h2>Respond to this claim</h2>
+              <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 12px 0' }}>
+                The customer alleges a fault on this return. Accept the claim, or
+                contest it (explain why) before the window closes
+                {ret.sellerResponseDueAt
+                  ? ` on ${fmtDateTime(ret.sellerResponseDueAt)}`
+                  : ''}
+                . An admin makes the final QC decision.
+              </p>
+              <label
+                style={{
+                  display: 'block',
+                  fontSize: 12,
+                  fontWeight: 600,
+                  marginBottom: 4,
+                  color: '#6b7280',
+                }}
+              >
+                Notes (required to contest)
+              </label>
+              <textarea
+                value={respondNotes}
+                onChange={(e) => setRespondNotes(e.target.value)}
+                placeholder="Explain your position…"
+                rows={3}
+                maxLength={2000}
+                style={{
+                  width: '100%',
+                  padding: '8px',
+                  border: '1px solid #d1d5db',
+                  borderRadius: 6,
+                  fontSize: 13,
+                  resize: 'vertical',
+                  fontFamily: 'inherit',
+                  background: '#fff',
+                  boxSizing: 'border-box',
+                  marginBottom: 12,
+                }}
+              />
+              <div style={{ display: 'flex', gap: 10 }}>
+                <button
+                  onClick={() => handleRespond('ACCEPTED')}
+                  disabled={actionLoading === 'respond'}
+                  className="btn btn-secondary"
+                >
+                  {actionLoading === 'respond' ? 'Saving…' : 'Accept claim'}
+                </button>
+                <button
+                  onClick={() => handleRespond('CONTESTED')}
+                  disabled={actionLoading === 'respond'}
+                  className="btn btn-primary"
+                >
+                  {actionLoading === 'respond' ? 'Saving…' : 'Contest claim'}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Read-only banner once a response is on record */}
+          {(ret.sellerResponseStatus === 'ACCEPTED' ||
+            ret.sellerResponseStatus === 'CONTESTED' ||
+            ret.sellerResponseStatus === 'EXPIRED') && (
+            <div className="card">
+              <h2>Your response</h2>
+              <p style={{ fontSize: 13, color: '#374151', margin: 0 }}>
+                {ret.sellerResponseStatus === 'ACCEPTED' &&
+                  'You accepted this claim.'}
+                {ret.sellerResponseStatus === 'CONTESTED' &&
+                  'You contested this claim — an admin will review at QC.'}
+                {ret.sellerResponseStatus === 'EXPIRED' &&
+                  'The response window closed without a response; an admin will decide at QC.'}
+              </p>
+              {ret.sellerResponseNotes && (
+                <p style={{ fontSize: 13, color: '#6b7280', marginTop: 8 }}>
+                  “{ret.sellerResponseNotes}”
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* File a formal dispute (escalation) */}
+          {canFileDispute && (
+            <div className="card">
+              <h2>Dispute</h2>
+              {!showDispute ? (
+                <>
+                  <p style={{ fontSize: 13, color: '#6b7280', margin: '0 0 12px 0' }}>
+                    Disagree with how this return is being handled? File a formal
+                    dispute for the SportsMart team to review.
+                  </p>
+                  <button
+                    onClick={openDispute}
+                    className="btn btn-secondary"
+                  >
+                    File a dispute
+                  </button>
+                </>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  <div>
+                    <label
+                      style={{
+                        display: 'block',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        marginBottom: 4,
+                        color: '#6b7280',
+                      }}
+                    >
+                      Type
+                    </label>
+                    <select
+                      value={disputeKind}
+                      onChange={(e) => setDisputeKind(e.target.value as DisputeKind)}
+                      style={{
+                        width: '100%',
+                        padding: '8px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: 6,
+                        fontSize: 13,
+                        background: '#fff',
+                      }}
+                    >
+                      {(Object.keys(KIND_LABEL) as DisputeKind[]).map((k) => (
+                        <option key={k} value={k}>
+                          {KIND_LABEL[k]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label
+                      style={{
+                        display: 'block',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        marginBottom: 4,
+                        color: '#6b7280',
+                      }}
+                    >
+                      What went wrong?
+                    </label>
+                    <textarea
+                      value={disputeSummary}
+                      onChange={(e) => setDisputeSummary(e.target.value)}
+                      placeholder="Describe the issue (min 5 characters)…"
+                      rows={4}
+                      maxLength={5000}
+                      style={{
+                        width: '100%',
+                        padding: '8px',
+                        border: '1px solid #d1d5db',
+                        borderRadius: 6,
+                        fontSize: 13,
+                        resize: 'vertical',
+                        fontFamily: 'inherit',
+                        background: '#fff',
+                        boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+                  <div style={{ display: 'flex', gap: 10 }}>
+                    <button
+                      onClick={handleFileDispute}
+                      disabled={actionLoading === 'dispute'}
+                      className="btn btn-primary"
+                    >
+                      {actionLoading === 'dispute' ? 'Filing…' : 'Submit dispute'}
+                    </button>
+                    <button
+                      onClick={() => setShowDispute(false)}
+                      disabled={actionLoading === 'dispute'}
+                      className="btn btn-secondary"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* RIGHT SIDEBAR */}
@@ -461,23 +741,17 @@ const { returnId } = useParams<{ returnId: string }>();
                 </button>
               )}
 
-              {canSubmitQc && (
+              {/* Upload QC evidence is available once the package is received so
+                  the franchise can document parcel/item condition for admin QC. */}
+              {ret.status === 'RECEIVED' && (
                 <>
-                  <button
-                    onClick={() => setShowQcModal(true)}
-                    disabled={!!actionLoading}
-                    className="btn btn-primary"
-                    style={{ width: '100%' }}
-                  >
-                    Submit QC Decision
-                  </button>
                   <button
                     onClick={() => fileInputRef.current?.click()}
                     disabled={uploadingEvidence}
                     className="btn btn-secondary"
                     style={{ width: '100%' }}
                   >
-                    {uploadingEvidence ? 'Uploading...' : 'Upload Evidence'}
+                    {uploadingEvidence ? 'Uploading...' : 'Upload QC Evidence'}
                   </button>
                   <input
                     ref={fileInputRef}
@@ -486,10 +760,25 @@ const { returnId } = useParams<{ returnId: string }>();
                     style={{ display: 'none' }}
                     onChange={handleFileChange}
                   />
+                  <p style={{ fontSize: 12, color: '#6b7280', margin: 0 }}>
+                    QC decisions are issued by the marketplace admin. Upload photos
+                    of the returned items as evidence for their review.
+                  </p>
                 </>
               )}
 
-              {!canMarkReceived && !canSubmitQc && (
+              {canSubmitQc && (
+                <button
+                  onClick={() => setShowQcModal(true)}
+                  disabled={!!actionLoading}
+                  className="btn btn-primary"
+                  style={{ width: '100%' }}
+                >
+                  Submit QC Decision
+                </button>
+              )}
+
+              {!canMarkReceived && ret.status !== 'RECEIVED' && !canSubmitQc && (
                 <div style={{ fontSize: 13, color: '#6b7280' }}>
                   No actions available for current status.
                 </div>

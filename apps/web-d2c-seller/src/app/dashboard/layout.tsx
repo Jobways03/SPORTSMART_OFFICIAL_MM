@@ -266,7 +266,7 @@ export default function DashboardLayout({
               className="navbar-brand-name"
               style={{ height: 36, width: 'auto', display: 'block' }}
             />
-            <span className="navbar-brand-tag">Seller</span>
+            <span className="navbar-brand-tag">D2C Seller</span>
           </Link>
         </div>
 

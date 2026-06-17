@@ -194,7 +194,7 @@ export default function SellerRegisterPage() {
         {/* Right — form panel */}
         <div className="auth-form-panel">
           <div className="auth-header">
-            <p className="auth-badge">Seller Portal</p>
+            <p className="auth-badge">D2C Seller Portal</p>
             <h2 className="auth-title">Create your seller account</h2>
             <p className="auth-subtitle">
               We&apos;ll email you a 6-digit code to verify your address.

@@ -3,7 +3,7 @@ import { ModalProvider } from '@sportsmart/ui';
 import '../styles/globals.css';
 
 export const metadata: Metadata = {
-  title: 'SPORTSMART Seller Portal',
+  title: 'SPORTSMART Retail Seller Portal',
   description: 'Seller dashboard for SPORTSMART marketplace',
 };
 

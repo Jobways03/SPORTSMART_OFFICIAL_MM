@@ -282,9 +282,9 @@ export default function SellerProfilePage() {
   }, []);
 
   // --- Fetch profile ---
-  const fetchProfile = useCallback(async () => {
+  const fetchProfile = useCallback(async (opts?: { silent?: boolean }) => {
     if (!authReady) return;
-    setIsLoading(true);
+    if (!opts?.silent) setIsLoading(true);
     setFetchError(null);
     try {
       const result = await sellerProfileService.getProfile(token);
@@ -303,15 +303,37 @@ export default function SellerProfilePage() {
         router.replace('/login');
         return;
       }
-      setFetchError('Failed to load profile. Please try again.');
+      if (!opts?.silent) setFetchError('Failed to load profile. Please try again.');
     } finally {
-      setIsLoading(false);
+      if (!opts?.silent) setIsLoading(false);
     }
   }, [token, authReady, router]);
 
   useEffect(() => {
     if (authReady) fetchProfile();
   }, [authReady, fetchProfile]);
+
+  // Auto-refresh so an admin-side profile edit shows up on the seller side
+  // without a manual reload. Polls every 20s and on tab focus, but SKIPS while
+  // the seller has unsaved edits or a save is in flight, so it never clobbers
+  // what they're typing. Silent = no loading spinner / error banner flicker.
+  useEffect(() => {
+    if (!authReady) return;
+    const hasUnsavedEdits = () =>
+      initialFormData != null &&
+      JSON.stringify(formData) !== JSON.stringify(initialFormData);
+    const refresh = () => {
+      if (isSaving || hasUnsavedEdits()) return;
+      void fetchProfile({ silent: true });
+    };
+    const interval = setInterval(refresh, 20000);
+    const onFocus = () => refresh();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [authReady, isSaving, formData, initialFormData, fetchProfile]);
 
   // Bank payout details (masked) for the Bank Account card.
   const [bankInfo, setBankInfo] = useState<{

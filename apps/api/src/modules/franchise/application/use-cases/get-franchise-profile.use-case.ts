@@ -39,6 +39,10 @@ export class GetFranchiseProfileUseCase {
       contractEndDate: true,
       warehouseAddress: true,
       warehousePincode: true,
+      warehouseCity: true,
+      warehouseState: true,
+      warehouseLocality: true,
+      warehouseCountry: true,
       profileImageUrl: true,
       logoUrl: true,
       assignedZone: true,
@@ -57,6 +61,16 @@ export class GetFranchiseProfileUseCase {
     const logisticsLocked = await this.prisma.franchisePartnerRegistration
       .findFirst({
         where: { franchiseId, status: 'REGISTERED' },
+        select: { id: true },
+      })
+      .then((r: { id: string } | null) => !!r)
+      .catch(() => false);
+
+    // Whether payout bank details have been added — drives the dashboard
+    // "Add bank details" banner so it disappears once they're on file.
+    const hasBankDetails = await this.prisma.franchiseBankDetails
+      .findUnique({
+        where: { franchisePartnerId: franchiseId },
         select: { id: true },
       })
       .then((r: { id: string } | null) => !!r)
@@ -86,6 +100,10 @@ export class GetFranchiseProfileUseCase {
       contractEndDate: franchise.contractEndDate,
       warehouseAddress: franchise.warehouseAddress,
       warehousePincode: franchise.warehousePincode,
+      warehouseCity: franchise.warehouseCity,
+      warehouseState: franchise.warehouseState,
+      warehouseLocality: franchise.warehouseLocality,
+      warehouseCountry: franchise.warehouseCountry,
       profileImageUrl: franchise.profileImageUrl,
       logoUrl: franchise.logoUrl,
       assignedZone: franchise.assignedZone,
@@ -94,6 +112,7 @@ export class GetFranchiseProfileUseCase {
       isProfileCompleted: franchise.isProfileCompleted,
       createdAt: franchise.createdAt,
       logisticsLocked,
+      hasBankDetails,
     };
   }
 }

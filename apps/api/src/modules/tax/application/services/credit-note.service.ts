@@ -352,8 +352,10 @@ export class CreditNoteService {
     //    first's committed CN and computes a zero delta.
     const txResult = await this.prisma.$transaction(async (tx) => {
       // pg_advisory_xact_lock auto-releases at transaction end. Keyed on the
-      // return id so different returns don't contend.
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${returnId})::bigint)`;
+      // return id so different returns don't contend. Use $executeRaw (not
+      // $queryRaw): the lock function returns SQL `void`, which $queryRaw
+      // cannot deserialize under Prisma 6.19+.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${returnId})::bigint)`;
 
       // Prior CNs for this return. Primary key is the structured returnId
       // (#2/#3) — matched across ALL source invoices, not just the current

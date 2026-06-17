@@ -146,7 +146,7 @@ export default function SellerLoginPage() {
         {/* Right — form panel */}
         <div className="auth-form-panel is-center">
           <div className="auth-header">
-            <p className="auth-badge">Seller Portal</p>
+            <p className="auth-badge">D2C Seller Portal</p>
             <h2 className="auth-title">Sign in to your account</h2>
             <p className="auth-subtitle">Welcome back — let&apos;s get you to your dashboard.</p>
           </div>

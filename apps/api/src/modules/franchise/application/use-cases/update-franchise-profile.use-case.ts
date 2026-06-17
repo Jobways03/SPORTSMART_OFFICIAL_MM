@@ -58,6 +58,10 @@ export class UpdateFranchiseProfileUseCase {
       'country',
       'warehouseAddress',
       'warehousePincode',
+      'warehouseCity',
+      'warehouseState',
+      'warehouseLocality',
+      'warehouseCountry',
     ];
     const touchesLockedField = LOGISTICS_LOCKED_FIELDS.some(
       (f) => (dto as Record<string, unknown>)[f] !== undefined,
@@ -94,6 +98,10 @@ export class UpdateFranchiseProfileUseCase {
       'panNumber',
       'warehouseAddress',
       'warehousePincode',
+      'warehouseCity',
+      'warehouseState',
+      'warehouseLocality',
+      'warehouseCountry',
     ] as const;
 
     const updateData: Record<string, unknown> = {};
@@ -137,6 +145,10 @@ export class UpdateFranchiseProfileUseCase {
         panNumber: true,
         warehouseAddress: true,
         warehousePincode: true,
+        warehouseCity: true,
+        warehouseState: true,
+        warehouseLocality: true,
+        warehouseCountry: true,
         profileImageUrl: true,
         logoUrl: true,
         status: true,
@@ -182,6 +194,10 @@ export class UpdateFranchiseProfileUseCase {
       panNumber: updated.panNumber,
       warehouseAddress: updated.warehouseAddress,
       warehousePincode: updated.warehousePincode,
+      warehouseCity: updated.warehouseCity,
+      warehouseState: updated.warehouseState,
+      warehouseLocality: updated.warehouseLocality,
+      warehouseCountry: updated.warehouseCountry,
       profileImageUrl: updated.profileImageUrl,
       logoUrl: updated.logoUrl,
       status: updated.status,

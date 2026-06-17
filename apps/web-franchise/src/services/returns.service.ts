@@ -39,6 +39,19 @@ export interface FranchiseReturn {
   items: FranchiseReturnItem[];
   evidence?: FranchiseReturnEvidence[];
   masterOrder?: { orderNumber: string };
+  // Seller/franchise response lifecycle — when a customer alleges node fault,
+  // the franchise gets a window to accept or contest before admin QC.
+  sellerResponseStatus?:
+    | 'NOT_REQUIRED'
+    | 'PENDING'
+    | 'ACCEPTED'
+    | 'CONTESTED'
+    | 'EXPIRED'
+    | null;
+  sellerNotifiedAt?: string | null;
+  sellerResponseDueAt?: string | null;
+  sellerRespondedAt?: string | null;
+  sellerResponseNotes?: string | null;
 }
 
 export const franchiseReturnsService = {
@@ -81,6 +94,43 @@ export const franchiseReturnsService = {
     return apiClient(`/franchise/returns/${returnId}/qc-evidence`, {
       method: 'POST',
       body: formData,
+    });
+  },
+
+  // PATCH /franchise/returns/:id/respond — accept or contest a fault claim.
+  // @Idempotent on the backend → pass a stable X-Idempotency-Key per submission.
+  respond(
+    returnId: string,
+    payload: {
+      decision: 'ACCEPTED' | 'CONTESTED';
+      notes?: string;
+      evidenceFileUrls?: string[];
+      contestReasonCategory?: string;
+    },
+    idempotencyKey: string,
+  ) {
+    return apiClient(`/franchise/returns/${returnId}/respond`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+      headers: { 'X-Idempotency-Key': idempotencyKey },
+    });
+  },
+
+  // PATCH /franchise/returns/:id/respond/rescind — flip ACCEPTED↔CONTESTED
+  // within the original window + 1h grace.
+  rescindResponse(
+    returnId: string,
+    payload: {
+      newDecision: 'ACCEPTED' | 'CONTESTED';
+      notes?: string;
+      contestReasonCategory?: string;
+    },
+    idempotencyKey: string,
+  ) {
+    return apiClient(`/franchise/returns/${returnId}/respond/rescind`, {
+      method: 'PATCH',
+      body: JSON.stringify(payload),
+      headers: { 'X-Idempotency-Key': idempotencyKey },
     });
   },
 };

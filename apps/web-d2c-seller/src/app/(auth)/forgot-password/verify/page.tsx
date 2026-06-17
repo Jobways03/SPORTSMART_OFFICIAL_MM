@@ -167,7 +167,7 @@ function VerifyResetOtpForm() {
       <div className="auth-card">
         <div className="auth-header">
           <h1 className="auth-logo">SPORTSMART</h1>
-          <p className="auth-badge">Seller Portal</p>
+          <p className="auth-badge">D2C Seller Portal</p>
           <h2 className="auth-title">Enter verification code</h2>
           <p className="auth-subtitle">
             We&apos;ve sent a 6-digit code to <strong>{maskEmail(email)}</strong>

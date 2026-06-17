@@ -32,6 +32,8 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/dashboard/catalog', label: 'Catalog', icon: '&#128230;' },
   { href: '/dashboard/inventory', label: 'Inventory', icon: '&#128722;' },
   { href: '/dashboard/orders', label: 'Orders', icon: '&#128195;' },
+  { href: '/dashboard/returns', label: 'Returns', icon: '&#8617;' },
+  { href: '/dashboard/reversals', label: 'Reversals', icon: '&#128257;' },
   { href: '/dashboard/procurement', label: 'Procurement', icon: '&#128179;' },
   { href: '/dashboard/pos', label: 'POS', icon: '&#128273;' },
   { href: '/dashboard/commission', label: 'Commission', icon: '&#128202;' },

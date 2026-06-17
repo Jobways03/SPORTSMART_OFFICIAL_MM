@@ -618,7 +618,7 @@ const router = useRouter();
                       <tr
                         key={r.id}
                         onClick={() =>
-                          router.push(`/dashboard/orders/returns/${r.id}`)
+                          router.push(`/dashboard/returns/${r.id}`)
                         }
                         style={{
                           borderBottom: '1px solid #f3f4f6',
@@ -656,7 +656,7 @@ const router = useRouter();
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
-                              router.push(`/dashboard/orders/returns/${r.id}`);
+                              router.push(`/dashboard/returns/${r.id}`);
                             }}
                             style={{
                               padding: '6px 14px',
