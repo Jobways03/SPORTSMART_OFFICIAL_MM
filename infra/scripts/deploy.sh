@@ -136,6 +136,61 @@ else
   echo
 fi
 
+# ── 1b. Seed reference data (opt-in; first-boot / on-demand) ────────────
+# Loads PROD reference data (admin + system roles, ABAC policies, SLA, tax
+# master) via the one-shot seed task, running prisma/seed/seed-prod.ts. OFF by
+# default — set RUN_SEED=true (deploy.yml exposes it as a workflow input) to run
+# it, typically once at environment bring-up. Runs AFTER migrations (it needs
+# the schema). Idempotent: every seed is upsert/skip-safe. The SEED task family
+# SSM param is read only here, so a deploy without RUN_SEED never touches it.
+if [[ "${RUN_SEED:-false}" == "true" ]]; then
+  SEED_TIMEOUT_SECONDS="${SEED_TIMEOUT_SECONDS:-1800}" # 30 min
+  SEED_FAMILY="$(ssm seed_task_family)"
+  echo "▶ Seeding reference data (task family: $SEED_FAMILY)"
+  RUN_JSON="$(aws ecs run-task \
+    --cluster "$CLUSTER" \
+    --task-definition "$SEED_FAMILY" \
+    --launch-type FARGATE \
+    --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SECURITY_GROUP],assignPublicIp=DISABLED}" \
+    --started-by "deploy.sh:seed:${IMAGE_TAG}" \
+    --output json)"
+
+  TASK_ARN="$(printf '%s' "$RUN_JSON" | jq -r '.tasks[0].taskArn // "None"')"
+  if [[ -z "$TASK_ARN" || "$TASK_ARN" == "None" ]]; then
+    echo "✗ failed to start the seed task." >&2
+    printf '%s' "$RUN_JSON" | jq -r '.failures[]? | "  - \(.reason) (\(.arn // "n/a"))"' >&2 || true
+    exit 1
+  fi
+  echo "  task: $TASK_ARN"
+  echo "  waiting for seed (deadline ${SEED_TIMEOUT_SECONDS}s)…"
+
+  deadline=$(( $(date +%s) + SEED_TIMEOUT_SECONDS ))
+  while :; do
+    STATUS="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+      --query 'tasks[0].lastStatus' --output text 2>/dev/null || echo PENDING)"
+    [[ "$STATUS" == "STOPPED" ]] && break
+    if (( $(date +%s) >= deadline )); then
+      echo "✗ seed did not finish within ${SEED_TIMEOUT_SECONDS}s (status=$STATUS); stopping task." >&2
+      aws ecs stop-task --cluster "$CLUSTER" --task "$TASK_ARN" \
+        --reason "deploy.sh seed timeout" >/dev/null 2>&1 || true
+      exit 1
+    fi
+    sleep 15
+  done
+
+  EXIT_CODE="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+    --query 'tasks[0].containers[0].exitCode' --output text)"
+  if [[ "$EXIT_CODE" != "0" ]]; then
+    REASON="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+      --query 'tasks[0].stoppedReason' --output text 2>/dev/null || true)"
+    echo "✗ seed task exited with code '${EXIT_CODE}' (reason: ${REASON:-n/a})." >&2
+    echo "  logs: CloudWatch /ecs/sportsmart-${TARGET}/seed" >&2
+    exit 1
+  fi
+  echo "  ✓ reference data seeded."
+  echo
+fi
+
 # ── 2a. Pre-flight: every requested service must exist + be ACTIVE ───────
 # Validate BEFORE mutating anything so a typo doesn't leave a partial rollout.
 # (describe one at a time — DescribeServices caps at 10 services/call.)

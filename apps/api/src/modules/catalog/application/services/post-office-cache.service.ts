@@ -9,6 +9,14 @@ export interface PostOfficeCoords {
   longitude: number | null;
   /** Two-letter state code per CBIC convention, e.g. "MH". */
   state?: string | null;
+  /**
+   * True when the coordinates are an APPROXIMATION derived from the pincode's
+   * postal-region neighbours, because the pincode itself exists in the master
+   * but has no coordinates of its own (a rare data gap — ~92 of 165K rows).
+   * Used so a valid-but-coordless pincode (e.g. 500063) still yields a usable
+   * location for distance-based routing instead of silently dropping the seller.
+   */
+  approximate?: boolean;
 }
 
 /**
@@ -95,13 +103,20 @@ export class PostOfficeCacheService {
       select: { latitude: true, longitude: true, state: true },
     });
 
-    const coords: PostOfficeCoords | null = row
+    let coords: PostOfficeCoords | null = row
       ? {
           latitude: row.latitude ? Number(row.latitude) : null,
           longitude: row.longitude ? Number(row.longitude) : null,
           state: row.state ?? null,
         }
       : null;
+
+    // No exact coords for this pincode — if it's a REAL pincode that just lacks
+    // coordinates (data gap), approximate from its postal region so distance-
+    // based routing still works. Unknown pincodes stay null (PINCODE_UNKNOWN).
+    if (!coords) {
+      coords = await this.approximateByRegion(normalized);
+    }
 
     // Best-effort cache write — failure here is non-fatal too.
     try {
@@ -188,7 +203,12 @@ export class PostOfficeCacheService {
       for (const raw of pincodes) {
         if (result.has(raw)) continue;
         const normalized = String(raw ?? '').trim();
-        const coords = byPin.get(normalized) ?? null;
+        // Real-but-coordless pincodes (no row in the coord-bearing batch) get a
+        // postal-region approximation so a valid seller/warehouse pincode isn't
+        // silently dropped from distance routing; unknown pincodes stay null.
+        const coords =
+          byPin.get(normalized) ??
+          (await this.approximateByRegion(normalized));
         result.set(raw, coords);
         try {
           await this.redis.set(
@@ -205,6 +225,49 @@ export class PostOfficeCacheService {
     }
 
     return result;
+  }
+
+  /**
+   * Approximate a pincode's coordinates from its postal-region neighbours when
+   * the pincode EXISTS in the master but has no coordinates of its own (a rare
+   * data gap). Tries the longest matching prefix first (5 → 4 → 3 digits) so the
+   * approximation is as local as possible, and returns the centroid of the
+   * coord-bearing rows in that region.
+   *
+   * Returns null when the pincode does NOT exist in the master at all — that
+   * keeps the genuine "unknown pincode" signal intact (callers surface
+   * PINCODE_UNKNOWN), so this only rescues real-but-coordless pincodes.
+   */
+  private async approximateByRegion(
+    pincode: string,
+  ): Promise<PostOfficeCoords | null> {
+    // Is this a REAL pincode (any row), just missing coords? If it isn't in the
+    // master at all, don't approximate — let it stay "unknown".
+    const exists = await this.prisma.postOffice.findFirst({
+      where: { pincode },
+      select: { state: true },
+    });
+    if (!exists) return null;
+
+    for (const len of [5, 4, 3]) {
+      const prefix = pincode.slice(0, len);
+      const agg = await this.prisma.postOffice.aggregate({
+        _avg: { latitude: true, longitude: true },
+        where: { pincode: { startsWith: prefix }, latitude: { not: null } },
+      });
+      if (agg._avg.latitude != null && agg._avg.longitude != null) {
+        this.logger.debug(
+          `PostOffice ${pincode} has no coords — approximating from region ${prefix}* centroid`,
+        );
+        return {
+          latitude: Number(agg._avg.latitude),
+          longitude: Number(agg._avg.longitude),
+          state: exists.state ?? null,
+          approximate: true,
+        };
+      }
+    }
+    return null;
   }
 
   /**

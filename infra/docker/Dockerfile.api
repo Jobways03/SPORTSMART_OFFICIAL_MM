@@ -100,6 +100,10 @@ COPY --from=build --chown=node:node /workspace/apps/api/dist ./dist
 # Schema + migrations — prisma migrate deploy reads them at startup if
 # the operator runs migrations via the container (recommended pattern).
 COPY --from=build --chown=node:node /workspace/apps/api/prisma ./prisma
+# tsconfig.json is read by ts-node for the one-shot prod SEED task
+# (node_modules/.bin/ts-node prisma/seed/seed-prod.ts — see seed.tf). It is
+# self-contained (no workspace `extends`), so it loads from the pruned image.
+COPY --from=build --chown=node:node /workspace/apps/api/tsconfig.json ./tsconfig.json
 
 USER node
 

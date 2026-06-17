@@ -29,6 +29,11 @@ on:
         required: true
         type: string
         default: "all"
+      run_seed:
+        description: "Run the one-shot reference-data seed (admin/ABAC/SLA/tax) before rolling — first boot / on-demand"
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   # One deploy per (environment, branch); queue rather than cancel — a
@@ -127,6 +132,11 @@ jobs:
         with:
           context: .
           file: ${{ matrix.dockerfile }}
+          # Pin build arch to the Fargate task arch (ecs.tf / migrate.tf:
+          # cpu_architecture = X86_64). Without this the image arch follows the
+          # runner's native arch — fine on amd64 ubuntu-latest today, but a
+          # silent exec-format failure if the default runner ever moves to arm64.
+          platforms: linux/amd64
           push: true
           # APP + the build-time NEXT_PUBLIC_API_URL only apply to web images;
           # both lines are empty for the api build (blank lines are ignored).
@@ -163,6 +173,10 @@ jobs:
       # deployment on each service, reading cluster/subnets/sg/migrate-family
       # from SSM. Circuit-breaker rollback on health-check failure.
       - name: Roll out
+        env:
+          # Opt-in one-shot reference-data seed (deploy.sh runs it after migrate,
+          # before rolling). false on normal deploys; true for first boot.
+          RUN_SEED: ${{ inputs.run_seed }}
         run: ./infra/scripts/deploy.sh "${{ inputs.target }}" "${{ inputs.services }}" "${{ needs.prep.outputs.image_tag }}"
 
       # End-to-end gate: verify each deployed service through the public

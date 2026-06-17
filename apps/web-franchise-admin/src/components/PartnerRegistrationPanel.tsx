@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { apiClient } from '@/lib/api-client';
+import { apiClient, ApiError } from '@/lib/api-client';
 
 /* ── Wire shapes ───────────────────────────────────────────────── */
 
@@ -70,7 +70,10 @@ export function PartnerRegistrationPanel({
     SellerRegistrationItem[] | null
   >(null);
   const [loading, setLoading] = useState(true);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  // `offline` discriminates "the logistics service is down" (a 503 from the API
+  // proxy, code LOGISTICS_FACADE_UNAVAILABLE) from any other load failure, so
+  // the UI can show a calm, retryable offline state instead of a raw error.
+  const [loadError, setLoadError] = useState<{ offline: boolean; message: string } | null>(null);
   const [acting, setActing] = useState<string | null>(null);
   const [updating, setUpdating] = useState<string | null>(null);
   const [rowError, setRowError] = useState<Record<string, string>>({});
@@ -87,16 +90,29 @@ export function PartnerRegistrationPanel({
       if (regsRes.data) setRegistrations(regsRes.data);
       setLoadError(null);
     } catch (err) {
-      setLoadError(
-        (err as Error)?.message ?? 'Unable to load partner registrations.',
-      );
+      // The logistics microservice is reached through the API proxy; when it's
+      // down the proxy answers 503 with code LOGISTICS_FACADE_UNAVAILABLE.
+      const offline =
+        err instanceof ApiError &&
+        (err.status === 503 ||
+          err.body?.code === 'LOGISTICS_FACADE_UNAVAILABLE');
+      setLoadError({
+        offline,
+        message: offline
+          ? 'The logistics service is offline right now.'
+          : (err as Error)?.message ?? 'Unable to load partner registrations.',
+      });
     }
   }, [sellerId]);
 
-  useEffect(() => {
+  const reload = useCallback(() => {
     setLoading(true);
     refresh().finally(() => setLoading(false));
   }, [refresh]);
+
+  useEffect(() => {
+    reload();
+  }, [reload]);
 
   const rows: RowState[] = useMemo(() => {
     if (!partners) return [];
@@ -185,9 +201,12 @@ export function PartnerRegistrationPanel({
   }
 
   if (loadError) {
+    if (loadError.offline) {
+      return <FacadeOfflinePanel onRetry={reload} />;
+    }
     return (
       <div style={styles.errorBanner}>
-        <strong>Could not load partners.</strong> {loadError}
+        <strong>Could not load partners.</strong> {loadError.message}
       </div>
     );
   }
@@ -291,6 +310,47 @@ export function PartnerRegistrationPanel({
 }
 
 /* ── Sub-components ────────────────────────────────────────────── */
+
+// Calm, retryable state shown when the logistics microservice is unreachable.
+// This is an infra condition the admin can't fix by editing the franchise, so
+// we don't show a scary red error — we explain it and offer Retry + an ops hint.
+function FacadeOfflinePanel({ onRetry }: { onRetry: () => void }) {
+  return (
+    <div style={styles.offlinePanel} role="status">
+      <svg
+        viewBox="0 0 24 24"
+        width={28}
+        height={28}
+        fill="none"
+        stroke="#b45309"
+        strokeWidth={1.8}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+        style={{ flexShrink: 0 }}
+      >
+        <path d="M14 18V6a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v11a1 1 0 0 0 1 1h2" />
+        <path d="M15 18H9" />
+        <path d="M19 18h2a1 1 0 0 0 1-1v-3.65a1 1 0 0 0-.22-.624l-3.48-4.35A1 1 0 0 0 18.52 8H14" />
+        <circle cx="7" cy="18" r="2" />
+        <circle cx="17" cy="18" r="2" />
+        <line x1="22" y1="2" x2="2" y2="22" />
+      </svg>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={styles.offlineTitle}>Logistics service is offline</div>
+        <div style={styles.offlineBody}>
+          The service that manages courier pickup registration isn&apos;t
+          reachable right now, so partners can&apos;t be loaded. This is usually
+          temporary — try again in a moment. If it keeps happening, contact the
+          ops team.
+        </div>
+        <button type="button" onClick={onRetry} style={styles.offlineRetry}>
+          Retry
+        </button>
+      </div>
+    </div>
+  );
+}
 
 function StatusPill({ status }: { status: RegistrationStatus }) {
   const c = pillColors[status];
@@ -476,5 +536,36 @@ const styles: Record<string, React.CSSProperties> = {
     background: '#fef3c7',
     border: '1px solid #fde68a',
     borderRadius: 8,
+  },
+  offlinePanel: {
+    display: 'flex',
+    gap: 14,
+    alignItems: 'flex-start',
+    padding: '16px 18px',
+    background: '#fffbeb',
+    border: '1px solid #fde68a',
+    borderRadius: 10,
+  },
+  offlineTitle: {
+    fontSize: 14,
+    fontWeight: 700,
+    color: '#92400e',
+    marginBottom: 4,
+  },
+  offlineBody: {
+    fontSize: 13,
+    lineHeight: 1.5,
+    color: '#92400e',
+  },
+  offlineRetry: {
+    marginTop: 12,
+    padding: '7px 16px',
+    fontSize: 13,
+    fontWeight: 600,
+    color: '#ffffff',
+    background: '#d97706',
+    border: '1px solid #d97706',
+    borderRadius: 8,
+    cursor: 'pointer',
   },
 };

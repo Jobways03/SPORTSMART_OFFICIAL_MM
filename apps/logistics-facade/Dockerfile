@@ -60,7 +60,12 @@ USER node
 
 EXPOSE 4100
 
+# Liveness probe. Routes carry the global 'api' prefix + URI version v1
+# (main.ts: setGlobalPrefix('api') + enableVersioning defaultVersion '1'), so
+# the real path is /api/v1/health — NOT /health (which 404s -> unhealthy).
+# Use liveness (always 200), not /api/v1/readiness: a DB/Redis blip must not
+# mark the container unhealthy and kill it (same rationale as Dockerfile.api).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:' + (process.env.LOGISTICS_FACADE_PORT || 4100) + '/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
+  CMD node -e "fetch('http://127.0.0.1:' + (process.env.LOGISTICS_FACADE_PORT || 4100) + '/api/v1/health').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
 CMD ["node", "dist/main.js"]

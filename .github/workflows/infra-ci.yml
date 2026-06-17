@@ -1,0 +1,96 @@
+name: Infra CI
+
+# Scope: validates the infrastructure layer the app CI workflows don't cover —
+# the Terraform under infra/aws/terraform (the root module + the separate
+# bootstrap/ module), the deploy/smoke shell scripts, and the GitHub Actions
+# workflow YAML itself.
+#
+# Runs with NO AWS credentials: `terraform validate` uses a backendless,
+# provider-only init, so it checks config correctness (syntax, types, resource
+# argument schemas) — the class of error that can't be caught when terraform
+# isn't installed on a dev machine — without touching any cloud account. A
+# real `plan`/`apply` stays an operator/deploy concern.
+on:
+  pull_request:
+    paths:
+      - "infra/**"
+      - ".github/workflows/**"
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - ".github/workflows/**"
+
+# Cancel superseded runs on the same ref (same rationale as the app CI files).
+concurrency:
+  group: infra-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned inside the module's required_version (>= 1.7, < 2.0 — versions.tf /
+  # bootstrap/main.tf). A fixed version keeps `fmt -check` stable across runs.
+  TF_VERSION: "1.9.8"
+
+jobs:
+  validate:
+    name: Terraform fmt/validate · ShellCheck · actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history so gitleaks scans every commit in the PR range, not
+          # just the merge commit (matches api-ci.yml).
+          fetch-depth: 0
+
+      # Same early secret gate as the app CI workflows — fail in seconds on a
+      # leaked credential before any tool setup. tfvars / TF state are exactly
+      # where infra secrets tend to slip in.
+      - name: Scan for secrets (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          # We call terraform directly and want its raw exit code; the wrapper
+          # would intercept stdout/stderr and mask it.
+          terraform_wrapper: false
+
+      # Formatting gate across BOTH modules (recursive covers bootstrap/ and
+      # the .tfvars files). This is the check that authoritatively catches the
+      # .tf / .tfvars alignment drift you can't verify without terraform local.
+      - name: Terraform fmt (check)
+        working-directory: infra/aws/terraform
+        run: terraform fmt -check -recursive -diff
+
+      # Provider-only init (no backend, no creds) so validate has the provider
+      # schemas to type-check resource arguments. validate needs no variable
+      # values — it checks config structure, not a plan.
+      - name: Terraform validate (root module)
+        working-directory: infra/aws/terraform
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      # bootstrap/ is a separate root module (its own backend + providers) and
+      # must be init+validated independently of the main module.
+      - name: Terraform validate (bootstrap module)
+        working-directory: infra/aws/terraform/bootstrap
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      # ShellCheck is preinstalled on ubuntu-latest. Lint the deploy automation
+      # at -S warning (catches real bugs like unquoted expansions / bad exit
+      # handling; skips pure style nits) — a broken script here breaks a release.
+      - name: ShellCheck deploy scripts
+        run: shellcheck -S warning infra/scripts/*.sh
+
+      # actionlint validates every workflow YAML (expression syntax, job/needs
+      # graph, runner labels, and — via the shellcheck bundled in its image —
+      # embedded run: scripts), including this file and deploy.yml. Run via the
+      # official container so no binary install is needed.
+      - name: actionlint (workflow YAML)
+        run: docker run --rm -v "${PWD}:/repo" --workdir /repo rhysd/actionlint:latest -color

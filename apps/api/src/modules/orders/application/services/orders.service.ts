@@ -485,6 +485,10 @@ export class OrdersService {
         variantId: string | null;
         quantity: number;
         mappingId: string | null;
+        // Tiered cascade (2026-06-16) — the cascade winner can be a FRANCHISE
+        // (mappingId is then a FranchiseCatalogMapping id, NOT a seller mapping).
+        // Captured so the seller-stock verify re-reservation pass skips it.
+        nodeType: 'SELLER' | 'FRANCHISE';
       }>;
     }> = [];
     if (customerPincode) {
@@ -496,6 +500,7 @@ export class OrdersService {
           variantId: string | null;
           quantity: number;
           mappingId: string | null;
+          nodeType: 'SELLER' | 'FRANCHISE';
         }> = [];
         for (const item of subOrder.items) {
           try {
@@ -515,6 +520,7 @@ export class OrdersService {
               variantId: item.variantId ?? null,
               quantity: item.quantity,
               mappingId: allocation.primary.mappingId,
+              nodeType: allocation.primary.nodeType ?? 'SELLER',
             });
           } catch {
             subOrderServiceable = false;
@@ -648,6 +654,13 @@ export class OrdersService {
         if (!alloc.serviceable) continue;
         for (const itemAlloc of alloc.perItem) {
           if (!itemAlloc.mappingId) continue;
+          // Tiered cascade (2026-06-16) — this pass re-reserves SELLER stock via
+          // the seller mapping. A FRANCHISE winner's mappingId is a franchise
+          // catalog mapping (not a seller_product_mapping), and franchise stock
+          // is already reserved through its own ledger flow at checkout — so skip
+          // it here instead of mis-looking-it-up as a seller mapping (which threw
+          // and emitted a spurious reservation-gap event for every franchise order).
+          if (itemAlloc.nodeType === 'FRANCHISE') continue;
           try {
             const result = await this.catalogFacade.ensureConfirmedReservationAtVerify({
               orderId: id,

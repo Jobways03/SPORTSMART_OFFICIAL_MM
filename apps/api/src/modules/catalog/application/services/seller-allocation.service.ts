@@ -14,6 +14,11 @@ import {
 
 export interface AllocatedSeller {
   nodeType: 'SELLER' | 'FRANCHISE';
+  // Tiered cascade (2026-06-16) — the allocation tier this candidate belongs to.
+  // RETAIL (local, ≤ radius) and D2C (nationwide) are both nodeType:'SELLER' but
+  // sit in different cascade tiers; FRANCHISE is its own tier. Used to drive the
+  // Retail → Franchise → D2C priority and for explainability.
+  tier: 'RETAIL' | 'FRANCHISE' | 'D2C';
   sellerId: string;        // seller ID or franchise ID
   sellerName: string;      // seller name or franchise name
   franchiseId?: string;    // only set when nodeType is FRANCHISE
@@ -138,6 +143,9 @@ export class SellerAllocationService {
   // could be routed to a Punjab seller 2500km away — technically
   // serviceable but practically a 5-7 day shipment with broken UX.
   private readonly maxDistanceKm: number;
+  // Tiered cascade (2026-06-16) — retail sellers are local-only; eligible only
+  // within this Haversine radius of the customer. Franchise + D2C are nationwide.
+  private readonly retailRadiusKm: number;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -160,19 +168,31 @@ export class SellerAllocationService {
       0.5,
     );
     this.maxDistanceKm = this.envService.getNumber('ROUTING_MAX_DISTANCE_KM', 1500);
+    this.retailRadiusKm = this.envService.getNumber('RETAIL_LOCAL_RADIUS_KM', 50);
   }
 
   // ── T1-T2  Core allocation ─────────────────────────────────────────────
 
   /**
-   * Allocates the best fulfillment node(s) — sellers and/or franchises —
-   * for a product/variant at a customer pincode.
-   * Returns primary, secondary, and tertiary candidates.
+   * Allocates the best fulfillment node for a product/variant at a customer
+   * pincode using a TIERED CASCADE (2026-06-16): Retail → Franchise → D2C.
    *
-   * Ranking criteria (weighted scoring — sellers & franchises compete equally):
-   *  - Distance: ROUTING_DISTANCE_WEIGHT (default 0.7, lower = better, Haversine from pincode)
+   * The first tier with ANY eligible candidate wins; lower tiers are not
+   * consulted. So an eligible retail seller always beats a franchise/D2C, even
+   * a closer/cheaper one.
+   *   - RETAIL: local only — stock + service-area + Haversine distance ≤
+   *     RETAIL_LOCAL_RADIUS_KM (default 50; 0 = nationwide). A retail seller
+   *     beyond the radius (or with no resolvable pickup coords) is not eligible.
+   *   - FRANCHISE: nationwide (no distance cap).
+   *   - D2C: nationwide (no distance cap).
+   *
+   * Within the chosen tier, candidates are ranked by the existing weighted score
+   * (distance / stock / SLA / franchise territory-priority / manual priority):
+   *  - Distance: ROUTING_DISTANCE_WEIGHT (default 0.7, lower = better, Haversine)
    *  - Stock confidence: ROUTING_STOCK_WEIGHT (default 0.2, more stock = better)
    *  - Dispatch SLA: ROUTING_SLA_WEIGHT (default 0.1, faster = better)
+   *
+   * primary/secondary/tertiary/allEligible are all from the winning tier.
    */
   async allocate(input: {
     productId: string;
@@ -302,6 +322,9 @@ export class SellerAllocationService {
             sellerName: true,
             sellerShopName: true,
             status: true,
+            // Tiered cascade (2026-06-16) — RETAIL (local) vs D2C (nationwide)
+            // sit in different cascade tiers, so we must read the type here.
+            sellerType: true,
             // Phase 230 — manual fulfillment hold; held sellers are excluded.
             fulfillmentHold: true,
           },
@@ -387,20 +410,11 @@ export class SellerAllocationService {
       return true;
     });
 
-    // 3. Filter by distance — seller must be within serviceable range
-    // Phase 64 — distance is nullable for no-coords mappings
-    // (audit Gap #9). They still compete for selection but are
-    // excluded from the distance score.
-    const serviceable: {
-      mapping: (typeof eligible)[number];
-      distance: number | null;
-    }[] = [];
-
-    // Phase 4 follow-up (2026-05-16) — batch-prefetch coordinates
-    // for every candidate seller mapping that lacks cached lat/lon
-    // but does have a pickupPincode. One round-trip through the
-    // cache (mostly hits) + at most one Postgres query for misses,
-    // instead of N sequential findFirst calls inside the scoring loop.
+    // 3. Compute the customer→pickup Haversine distance for every stock- and
+    //    service-area-eligible seller mapping. Tiered cascade (2026-06-16):
+    //    there is NO global distance cap here — the per-tier rule below applies
+    //    it (RETAIL ≤ retailRadiusKm; D2C nationwide). Distance stays nullable
+    //    for no-coords mappings (it contributes 0 to the within-tier score).
     const pincodesToFetch = new Set<string>();
     for (const m of eligible) {
       if ((m.latitude == null || m.longitude == null) && m.pickupPincode) {
@@ -412,13 +426,13 @@ export class SellerAllocationService {
         ? await this.postOfficeCache.lookupMany(Array.from(pincodesToFetch))
         : new Map();
 
-    for (const mapping of eligible) {
+    // 4. Build seller candidates (RETAIL + D2C), tagging each with its cascade
+    //    tier from the seller's type. Distance is computed for all; the retail
+    //    radius gate is applied at the tier-split below.
+    const sellerCandidates: AllocatedSeller[] = eligible.map((mapping) => {
       let distance: number | null = null;
       let sellerLat = mapping.latitude ? Number(mapping.latitude) : null;
       let sellerLon = mapping.longitude ? Number(mapping.longitude) : null;
-
-      // If mapping has no coordinates but has pickupPincode, use the
-      // pre-fetched cache result populated above.
       if ((sellerLat == null || sellerLon == null) && mapping.pickupPincode) {
         const sellerCoords = pincodeCoords.get(mapping.pickupPincode);
         if (sellerCoords?.latitude != null && sellerCoords?.longitude != null) {
@@ -426,70 +440,78 @@ export class SellerAllocationService {
           sellerLon = sellerCoords.longitude;
         }
       }
-
-      if (customerLat && customerLon && sellerLat && sellerLon) {
+      // Explicit null checks (not truthiness): a valid coordinate of exactly 0
+      // is falsy, and for a RETAIL seller a null distance means exclusion from
+      // the local tier — so `&&` would silently drop a 0-axis pickup. Matches
+      // the `!= null` convention used elsewhere in this file.
+      if (
+        customerLat != null &&
+        customerLon != null &&
+        sellerLat != null &&
+        sellerLon != null
+      ) {
         distance = this.calculateDistance(customerLat, customerLon, sellerLat, sellerLon);
       }
 
-      // Phase 64 (audit Gaps #8 + #9). Two behaviour changes:
-      //   - Max distance cap: a mapping resolved > maxDistanceKm
-      //     away is filtered out as unserviceable. Pre-Phase-64
-      //     the cap didn't exist and the allocator would happily
-      //     route a Chennai customer to a 2500km Punjab seller.
-      //   - No-coords mappings are now distinctly tracked with
-      //     distance=null instead of the synthetic 999 placeholder.
-      //     They still compete for selection but are excluded from
-      //     the distance score (the score's distance term becomes
-      //     0 for them) so a 200km seller correctly outranks a
-      //     no-coords seller.
-      if (distance !== null && this.maxDistanceKm > 0 && distance > this.maxDistanceKm) {
-        continue; // filtered out
-      }
-      serviceable.push({ mapping, distance });
-    }
-
-    // 4. Build seller candidates with nodeType
-    const sellerCandidates: AllocatedSeller[] = serviceable.map((s) => {
-      const avail = s.mapping.stockQty - s.mapping.reservedQty;
-      // Phase 230 — wire operationalPriority (the "manual preferred seller"
-      // lever) into ranking. It was a dead column pre-230: declared on the
-      // mapping but never read by scoring. >0 only (default 0 => undefined =>
-      // no score effect => no regression for sellers that never set it).
+      const tier: 'RETAIL' | 'D2C' =
+        mapping.seller.sellerType === 'RETAIL' ? 'RETAIL' : 'D2C';
+      const avail = mapping.stockQty - mapping.reservedQty;
+      // Phase 230 — operationalPriority ("manual preferred seller"); >0 only.
       const priority =
-        s.mapping.operationalPriority > 0
-          ? s.mapping.operationalPriority
-          : undefined;
+        mapping.operationalPriority > 0 ? mapping.operationalPriority : undefined;
       return {
         nodeType: 'SELLER' as const,
-        sellerId: s.mapping.seller.id,
-        sellerName: s.mapping.seller.sellerShopName || s.mapping.seller.sellerName,
-        mappingId: s.mapping.id,
-        distanceKm: s.distance !== null ? Math.round(s.distance * 100) / 100 : null,
-        dispatchSla: s.mapping.dispatchSla,
+        tier,
+        sellerId: mapping.seller.id,
+        sellerName: mapping.seller.sellerShopName || mapping.seller.sellerName,
+        mappingId: mapping.id,
+        distanceKm: distance !== null ? Math.round(distance * 100) / 100 : null,
+        dispatchSla: mapping.dispatchSla,
         availableStock: avail,
-        // Phase 64 — unknown distance falls back to "0 km transit" so
-        // the SLA-only estimate is the floor. This was effectively
-        // the pre-Phase-64 behaviour for the 999-placeholder case;
-        // we preserve it for the null-distance case.
-        estimatedDeliveryDays: this.estimateDeliveryDays(s.distance ?? 0, s.mapping.dispatchSla),
-        score: 0, // will be scored below
+        estimatedDeliveryDays: this.estimateDeliveryDays(distance ?? 0, mapping.dispatchSla),
+        score: 0, // scored within the chosen tier below
         mappingPriority: priority,
-        pickupPincode: s.mapping.pickupPincode ?? null,
+        pickupPincode: mapping.pickupPincode ?? null,
         // Phase 231/232 — explainability (rendered by routing-preview UI).
         reasons: [
-          optedInSellers.has(s.mapping.seller.id)
+          `tier:${tier.toLowerCase()}`,
+          optedInSellers.has(mapping.seller.id)
             ? 'within-service-area'
             : 'distance-coverage',
           `stock-ok (${avail} avail)`,
-          s.distance !== null
-            ? `distance ${Math.round(s.distance * 100) / 100}km`
+          distance !== null
+            ? `distance ${Math.round(distance * 100) / 100}km`
             : 'distance-unknown',
           ...(priority !== undefined ? [`priority ${priority}`] : []),
         ],
       };
     });
 
-    // 5. Find franchise candidates — same distance-based logic as sellers
+    // 5. Build the three cascade tiers. The cascade priority (Retail → Franchise
+    //    → D2C) is enforced at step 6 by the ORDER of `allEligible` (retail block
+    //    first), so a closer/cheaper franchise or D2C never becomes the primary
+    //    over an eligible retail seller. All three tiers are still computed (the
+    //    franchise query runs eagerly below) so the lower tiers are available as
+    //    the cross-tier reservation fallback chain.
+    //
+    //    RETAIL is LOCAL ONLY: a retail seller qualifies only with a KNOWN
+    //    distance within retailRadiusKm. A retail seller with no resolvable
+    //    pickup coords, or beyond the radius, is not eligible at all — there is
+    //    no nationwide retail fallback, so "the only stock is a far retail
+    //    seller" correctly yields not-serviceable. retailRadiusKm <= 0 disables
+    //    the radius (retail becomes nationwide too).
+    const retailCandidates = sellerCandidates.filter((c) => {
+      if (c.tier !== 'RETAIL') return false;
+      if (this.retailRadiusKm <= 0) return true;
+      return c.distanceKm !== null && c.distanceKm <= this.retailRadiusKm;
+    });
+    // D2C ships nationwide — every stock/service-area-eligible D2C seller
+    // qualifies regardless of distance (distance still feeds the within-tier
+    // score, so a nearer D2C seller ranks higher).
+    const d2cCandidates = sellerCandidates.filter((c) => c.tier === 'D2C');
+
+    // Franchises ship nationwide (no distance cap). Computed eagerly — even when
+    // retail wins — so the cross-tier fallback chain below includes them.
     const franchiseCandidates = await this.findEligibleFranchises({
       productId,
       variantId,
@@ -500,24 +522,59 @@ export class SellerAllocationService {
       paymentMethod,
     });
 
-    // 6. Merge all candidates (sellers + franchises compete equally)
-    const allCandidates = [
-      ...sellerCandidates,
-      ...franchiseCandidates,
+    // 6. Score + sort EACH tier on its own (own distance/SLA normalisation), then
+    //    concatenate in cascade priority order: Retail → Franchise → D2C. The
+    //    blocks are ordered by TIER PRIORITY, not raw score — an eligible retail
+    //    seller always precedes any franchise, which precedes any D2C. So
+    //    `primary` (= allEligible[0]) is the cascade winner, while `allEligible`
+    //    is the FULL cross-tier fallback chain: a reservation race on the primary
+    //    can fall through to the next candidate (rest of its tier first, then the
+    //    lower tiers) within this single allocation, honouring tier priority.
+    const scoreTier = (tier: AllocatedSeller[]): AllocatedSeller[] => {
+      if (tier.length === 0) return [];
+      const known = tier
+        .map((c) => c.distanceKm)
+        .filter((d): d is number => d !== null);
+      const maxDistance = known.length > 0 ? Math.max(...known, 1) : 1;
+      const maxSla = Math.max(...tier.map((c) => c.dispatchSla), 1);
+      const scoredTier = tier.map((candidate) => {
+        let score = 0;
+        // Distance score (lower = better); null distance contributes 0.
+        if (candidate.distanceKm !== null) {
+          score += this.wDistance * (1 - candidate.distanceKm / maxDistance);
+        }
+        score += this.wStock * Math.min(candidate.availableStock / quantity, 1);
+        score += this.wSla * (1 - candidate.dispatchSla / maxSla);
+        // Phase 159m — franchise territory-priority (only set for franchise rows).
+        if (candidate.mappingPriority != null) {
+          score += this.wPincodePriority * (candidate.mappingPriority / 1000);
+        }
+        return { ...candidate, score: Math.round(score * 10000) / 10000 };
+      });
+      // Deterministic within-tier order: score desc, mappingId asc (Phase 77).
+      scoredTier.sort((a, b) => {
+        const delta = b.score - a.score;
+        if (delta !== 0) return delta;
+        const am = a.mappingId ?? '';
+        const bm = b.mappingId ?? '';
+        return am < bm ? -1 : am > bm ? 1 : 0;
+      });
+      return scoredTier;
+    };
+
+    const allEligible: AllocatedSeller[] = [
+      ...scoreTier(retailCandidates),
+      ...scoreTier(franchiseCandidates),
+      ...scoreTier(d2cCandidates),
     ];
 
-    if (allCandidates.length === 0) {
-      // Phase 64 (audit Gap #16) — diagnose WHY there are no
-      // candidates. We approximate by re-running the cheap
-      // exclusion filters: if mappings existed but were filtered
-      // by stock, surface OUT_OF_STOCK; if they were filtered by
-      // service-area opt-in, surface NO_SERVICE_AREA; otherwise
-      // NO_MAPPING. The distance-cap path doesn't carry context
-      // through here, so DISTANCE_EXCEEDED is surfaced only when
-      // we have evidence: candidates existed pre-distance-filter.
+    if (allEligible.length === 0) {
+      // Phase 64 (audit Gap #16) — diagnose WHY nothing is serviceable,
+      // seller-first since the cascade starts there. D2C is nationwide, so
+      // reaching here with eligible sellers means they were all RETAIL beyond
+      // the local radius (and no franchise/D2C covers the pincode).
       let reason: ServiceabilityReason = 'NO_MAPPING';
       if (sellerMappings.length > 0) {
-        // Mappings exist for the product but were filtered out.
         const seller0 = sellerMappings[0];
         if (seller0 && seller0.seller.status !== 'ACTIVE') {
           reason = 'NO_MAPPING';
@@ -526,8 +583,8 @@ export class SellerAllocationService {
         } else if (eligible.length === 0) {
           reason = 'NO_SERVICE_AREA';
         } else {
-          // Stock + service area passed, so all candidates must
-          // have been filtered by the distance cap.
+          // Stock + service area passed, but the only eligible sellers are
+          // retail sellers beyond the local radius.
           reason = 'DISTANCE_EXCEEDED';
         }
       }
@@ -541,66 +598,21 @@ export class SellerAllocationService {
       };
     }
 
-    // Phase 64 (audit Gap #9) — distances may be null when a
-    // candidate had no coordinates. Use the max of known distances
-    // for normalization; null-distance candidates get a 0 distance
-    // score component (don't contribute to or benefit from
-    // distance ranking).
-    const knownDistances = allCandidates
-      .map((c) => c.distanceKm)
-      .filter((d): d is number => d !== null);
-    const maxDistance = knownDistances.length > 0 ? Math.max(...knownDistances, 1) : 1;
-    const maxSla = Math.max(...allCandidates.map((c) => c.dispatchSla), 1);
-
-    const scored: AllocatedSeller[] = allCandidates.map((candidate) => {
-      let score = 0;
-      // Distance score (lower distance = higher score). Null
-      // distance contributes 0 to this term — a no-coords
-      // candidate doesn't get credit for being "closer" than a
-      // real candidate.
-      if (candidate.distanceKm !== null) {
-        score += this.wDistance * (1 - candidate.distanceKm / maxDistance);
-      }
-      // Stock confidence
-      score += this.wStock * Math.min(candidate.availableStock / quantity, 1);
-      // SLA score (faster dispatch = higher score)
-      score += this.wSla * (1 - candidate.dispatchSla / maxSla);
-      // Phase 159m — admin pincode→franchise territory priority. Only set for
-      // franchise candidates chosen via an active mapping (else undefined → no
-      // effect), so unmapped routing is unchanged. Higher priority (0..1000)
-      // ranks a franchise above a lower-priority one serving the same pincode.
-      if (candidate.mappingPriority != null) {
-        score += this.wPincodePriority * (candidate.mappingPriority / 1000);
-      }
-      return { ...candidate, score: Math.round(score * 10000) / 10000 };
-    });
-
-    // 7. Sort by score descending — highest score wins.
-    //
-    // Phase 77 (2026-05-22) — explicit secondary key on equal score
-    // (audit Gap #13). Pre-Phase-77 we relied on stable sort + the
-    // input `orderBy` to break ties; that's deterministic in a
-    // single replica but two replicas can read with subtly
-    // different ordering under concurrent writes. Adding the
-    // mappingId tiebreak removes the race-window entirely.
-    scored.sort((a, b) => {
-      const scoreDelta = b.score - a.score;
-      if (scoreDelta !== 0) return scoreDelta;
-      // Lexicographic on mappingId — every candidate has one, so
-      // this is a total ordering. nullish-safe (no candidate has a
-      // null mappingId at this stage).
-      const am = a.mappingId ?? '';
-      const bm = b.mappingId ?? '';
-      return am < bm ? -1 : am > bm ? 1 : 0;
-    });
+    // 7. Result. primary = the cascade winner (best of the highest-priority
+    //    non-empty tier); allEligible = the full cross-tier fallback chain.
+    this.logger.debug(
+      `allocate ${productId}@${customerPincode}: winner=${allEligible[0]?.tier} chain=${allEligible
+        .map((c) => c.tier)
+        .join('>')} (${allEligible.length})`,
+    );
 
     const result: AllocationResult = {
       serviceable: true,
       reason: 'OK',
-      primary: scored[0] ?? null,
-      secondary: scored[1] ?? null,
-      tertiary: scored[2] ?? null,
-      allEligible: scored,
+      primary: allEligible[0] ?? null,
+      secondary: allEligible[1] ?? null,
+      tertiary: allEligible[2] ?? null,
+      allEligible,
     };
 
     // 8. Log allocation decision (T7). Phase 233 — skipLog lets reallocate()
@@ -635,19 +647,16 @@ export class SellerAllocationService {
     variantId?: string;
     customerPincode: string;
     quantity: number;
+    paymentMethod?: 'COD' | 'ONLINE';
   }): Promise<AllocationResult> {
-    // The allocate() call already wraps the logAllocation in a
-    // catch-all so a logging miss won't propagate; but for a
-    // preview we'd rather skip the write entirely. Inline a thin
-    // copy by temporarily NO-OPing the writer. Cleaner than a
-    // boolean flag in the hot path.
-    const originalLog = this.logAllocation.bind(this);
-    (this as any).logAllocation = async () => undefined;
-    try {
-      return await this.allocate(input);
-    } finally {
-      (this as any).logAllocation = originalLog;
-    }
+    // Skip the allocation_logs write for a read-only preview via the per-call
+    // `skipLog` flag (lives on the `input` arg, not shared instance state).
+    //
+    // Was: temporarily NO-OPing `this.logAllocation` on the singleton — a race
+    // under the parallel Promise.all preview/cart callers, where one preview
+    // could blank out the logger while a concurrent REAL allocate() was mid-
+    // flight, silently dropping its forensic log row. `skipLog` is race-free.
+    return this.allocate({ ...input, skipLog: true, eventSource: 'PREVIEW' });
   }
 
   // ── T4  Stock reservation ──────────────────────────────────────────────
@@ -858,13 +867,15 @@ export class SellerAllocationService {
     const seen = new Set<string>();
     const tag = (i: number): 'primary' | 'secondary' | 'tertiary' | 'fallback' =>
       i === 0 ? 'primary' : i === 1 ? 'secondary' : i === 2 ? 'tertiary' : 'fallback';
-    for (let i = 0; i < allocation.allEligible.length; i++) {
-      const c = allocation.allEligible[i]!;
-
+    for (const c of allocation.allEligible) {
       if (c.nodeType !== 'SELLER') continue;
       if (seen.has(c.mappingId)) continue;
       seen.add(c.mappingId);
-      attemptList.push({ candidate: c, rank: tag(i) });
+      // Rank by position among the SELLER candidates we actually attempt — NOT
+      // the cross-tier index. With the tiered allEligible (retail→franchise→d2c),
+      // a leading FRANCHISE candidate is skipped here, so an `i`-based tag would
+      // mislabel the first reservable seller as 'secondary'.
+      attemptList.push({ candidate: c, rank: tag(attemptList.length) });
     }
 
     if (attemptList.length === 0) {
@@ -1286,15 +1297,24 @@ export class SellerAllocationService {
   // ── Franchise candidate discovery ──────────────────────────────────────
 
   /**
-   * Find eligible franchise partners for a product, using the same
-   * distance-based logic as sellers. Franchises compete equally with
-   * sellers — no coverage area checks, no exclusivity, no priority boost.
+   * Find eligible franchise partners for a product (the FRANCHISE tier of the
+   * routing cascade). Franchises ship NATIONWIDE — distance is computed
+   * (warehousePincode → customer) and fed into the within-tier score so a nearer
+   * franchise ranks higher, but there is NO distance cap (a far franchise is
+   * never excluded). The franchise tier is only the cascade winner when the
+   * retail tier is empty; the returned candidates also serve as the cross-tier
+   * fallback chain below retail.
    *
    * A franchise is eligible when:
-   *  1. FranchisePartner status is ACTIVE
-   *  2. FranchiseCatalogMapping exists (approved + active + listed for online)
+   *  1. FranchisePartner is ACTIVE/APPROVED, not deleted, not on fulfillment hold
+   *  2. FranchiseCatalogMapping exists (approved + active + listed for online),
+   *     with variant-or-product-level fallback
    *  3. FranchiseStock has enough available quantity
-   *  4. Distance is calculated from franchise warehousePincode to customer pincode
+   *  4. COD: when paymentMethod==='COD', the franchise has codEnabled
+   *  5. Territory mode (Phase 159m): if the customer pincode has active
+   *     pincode→franchise mappings, ONLY mapped franchises are eligible, ranked
+   *     by mapping priority (higher wins); unmapped pincode → all franchises via
+   *     distance fallback
    */
   private async findEligibleFranchises(input: {
     productId: string;
@@ -1463,9 +1483,12 @@ export class SellerAllocationService {
       const stock = stockByFranchise.get(franchise.id);
       if (!stock || stock.availableQty < quantity) continue;
 
-      // Calculate distance from franchise warehouse pincode to customer pincode
+      // Calculate distance from franchise warehouse pincode to customer pincode.
+      // Explicit null checks so a 0-axis customer coord isn't treated as missing
+      // (franchise is nationwide so this only affects the distance score, but we
+      // keep it consistent with the seller path).
       let distance: number | null = null;
-      if (customerLat && customerLon && franchise.warehousePincode) {
+      if (customerLat != null && customerLon != null && franchise.warehousePincode) {
         const coords = warehouseCoordsMap.get(franchise.warehousePincode);
         if (coords?.latitude != null && coords?.longitude != null) {
           distance = this.calculateDistance(
@@ -1477,11 +1500,10 @@ export class SellerAllocationService {
         }
       }
 
-      // Phase 77 — apply the same max-distance cap as the seller
-      // path so a franchise warehouse 2500km away is also excluded.
-      if (distance !== null && this.maxDistanceKm > 0 && distance > this.maxDistanceKm) {
-        continue;
-      }
+      // Tiered cascade (2026-06-16) — Franchises ship NATIONWIDE: no distance
+      // cap. (Pre-cascade this mirrored the seller 1500km cap.) Distance is
+      // still computed and fed into the within-tier score so a nearer franchise
+      // still outranks a far one, but a far franchise is never excluded.
 
       // Phase 231 — per-franchise dispatch SLA (was hard-coded 1, which made
       // the SLA score term meaningless for franchises). Default 1 preserves the
@@ -1491,6 +1513,7 @@ export class SellerAllocationService {
 
       candidates.push({
         nodeType: 'FRANCHISE',
+        tier: 'FRANCHISE',
         sellerId: franchise.id,
         sellerName: franchise.businessName,
         franchiseId: franchise.id,

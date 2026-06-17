@@ -1,10 +1,12 @@
 import {
+  BadGatewayException,
   Body,
   Controller,
   Get,
   HttpCode,
   HttpStatus,
   Inject,
+  Logger,
   Param,
   Post,
   Req,
@@ -50,6 +52,8 @@ import { ZodValidationPipe } from './zod-validation.pipe';
 @Controller('admin/logistics-partner')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
 export class AdminLogisticsPartnerController {
+  private readonly logger = new Logger(AdminLogisticsPartnerController.name);
+
   constructor(
     private readonly facadePartners: LogisticsFacadePartnersService,
     private readonly listRegistrations: ListSellerRegistrationsService,
@@ -71,9 +75,29 @@ export class AdminLogisticsPartnerController {
   async listPartners(): Promise<{ success: true; data: ListPartnersResponse }> {
     const result = await this.facadePartners.listPartners();
     if (!result.ok) {
-      throw new ServiceUnavailableException(
-        `Logistics facade unreachable: ${result.message}`,
+      // status 0 = the facade was unreachable (network/connection error, e.g.
+      // the service is down); a >=400 status = the facade answered but rejected.
+      // The raw cause (e.g. "fetch failed") stays in the server log; the client
+      // gets a clean, stable code so the UI can render a friendly offline state
+      // instead of leaking transport internals to the admin.
+      const unreachable = result.status === 0;
+      this.logger.error(
+        `listPartners: logistics facade ${
+          unreachable ? 'unreachable' : `returned ${result.status}`
+        } — ${result.message}`,
       );
+      if (unreachable) {
+        throw new ServiceUnavailableException({
+          message:
+            'The logistics service is temporarily unavailable. Please try again shortly.',
+          code: 'LOGISTICS_FACADE_UNAVAILABLE',
+        });
+      }
+      throw new BadGatewayException({
+        message:
+          'The logistics service rejected the request. Please contact support if this keeps happening.',
+        code: 'LOGISTICS_FACADE_ERROR',
+      });
     }
     // Wrap in the standard { success, data } envelope every other API
     // endpoint returns — the shared apiClient reads `.data`, so a bare

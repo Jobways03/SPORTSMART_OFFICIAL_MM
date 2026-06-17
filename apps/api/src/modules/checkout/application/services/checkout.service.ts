@@ -9,6 +9,7 @@ import {
 } from '../../domain/repositories/checkout.repository.interface';
 import {
   BadRequestAppException,
+  ConflictAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
 import { assertGatewayPaymentMatchesOrder } from '../../../../core/money/gateway-amount-verifier';
@@ -306,67 +307,93 @@ export class CheckoutService {
         continue;
       }
 
-      // Reserve stock — use the appropriate facade based on node type
-      const primaryNodeType = allocation.primary.nodeType ?? 'SELLER';
+      // Reserve stock with CROSS-TIER FALLBACK (2026-06-16). `allocate()` returns
+      // `allEligible` in cascade priority order (Retail → Franchise → D2C); we
+      // walk it and reserve the FIRST candidate whose stock is still available,
+      // reserving sellers and franchises through their respective facades. This
+      // self-heals a race where the primary's stock is grabbed between the
+      // allocation snapshot and the reserve — falling to the rest of the winning
+      // tier first, then the lower tiers — instead of hard-failing the line while
+      // a viable node still exists. (Replaces the old seller-only
+      // `allocateAndReserve` + single-shot franchise branch, which had no
+      // cross-tier fallback.)
       let reservationId: string | null = null;
+      let reservedCandidate: typeof allocation.primary | null = null;
+      const reserveChain =
+        allocation.allEligible && allocation.allEligible.length > 0
+          ? allocation.allEligible
+          : [allocation.primary];
 
       try {
-        if (primaryNodeType === 'FRANCHISE') {
-          // Franchise stock reservation via franchise facade.
-          //
-          // Phase 159p (audit #3) — give the franchise reservation a stable
-          // correlation id. The franchise side journals reservations as ledger
-          // rows (no StockReservation entity), and pre-159p the reserve row's
-          // referenceId was null. That left the sweeper cron unable to tell a
-          // committed order's hold from an abandoned cart: it correlated
-          // ORDER_RESERVE→follow-up by referenceId, but reserve(null) never
-          // matched ship/cancel(orderId), and a paid-but-unshipped order had no
-          // follow-up at all — so the cron released committed holds (oversell).
-          // We now stamp this id as the reserve row's referenceId AND (at
-          // placeOrder) onto OrderItem.stockReservationId, so the cron can see
-          // the reservation belongs to a placed order and leave it alone.
-          const franchiseId = allocation.primary.franchiseId || allocation.primary.sellerId;
-          const franchiseReservationId = crypto.randomUUID();
-          await this.franchiseFacade.reserveStock(
-            franchiseId,
-            cartItem.productId,
-            cartItem.variantId ?? null,
-            cartItem.quantity,
-            franchiseReservationId,
-          );
-          reservationId = franchiseReservationId;
-        } else {
-          // Seller stock reservation. Phase 77 (2026-05-22) —
-          // allocator audit Gap #11. Pre-Phase-77 checkout did
-          // `allocate` then `reserveStock` against the chosen
-          // mapping. The window between snapshot and reserve let
-          // another customer race-grab the primary; this code's
-          // catch block surfaced RACE_LOST without falling
-          // through to secondary/tertiary. Switching to
-          // `allocateAndReserve` closes the window — it tries
-          // primary → secondary → tertiary → fallback under
-          // row-locked tx, only surfacing RACE_LOST when ALL
-          // ranked candidates are exhausted.
-          //
-          // The trade-off: `allocateAndReserve` re-runs `allocate`
-          // internally. The wasted ~50ms is worth the race-safety
-          // for a hot path that's already running on the order
-          // critical path.
-          const aar = await this.catalogFacade.allocateAndReserve({
-            productId: cartItem.productId,
-            variantId: cartItem.variantId ?? undefined,
-            customerPincode,
-            quantity: cartItem.quantity,
-            expiresInMinutes: 15,
-            customerId: userId,
-          });
-          reservationId = aar.reservation.id;
-          // The chosen candidate may differ from the original
-          // allocation.primary if a race-fallback happened. The
-          // line-item snapshot below uses `aar.chosenCandidate`
-          // as the source of truth.
-          allocation.primary = aar.chosenCandidate;
+        for (const candidate of reserveChain) {
+          try {
+            if ((candidate.nodeType ?? 'SELLER') === 'FRANCHISE') {
+              // Franchise stock — journaled as ledger rows (no StockReservation
+              // entity). Stamp a stable correlation id as the reserve row's
+              // referenceId so the abandoned-cart sweeper can tell a placed
+              // order's hold from a cart hold (Phase 159p), and so placeOrder can
+              // pin it onto OrderItem.stockReservationId.
+              const franchiseId = candidate.franchiseId || candidate.sellerId;
+              const franchiseReservationId = crypto.randomUUID();
+              await this.franchiseFacade.reserveStock(
+                franchiseId,
+                cartItem.productId,
+                cartItem.variantId ?? null,
+                cartItem.quantity,
+                franchiseReservationId,
+              );
+              reservationId = franchiseReservationId;
+            } else {
+              // Seller stock — row-locked reserve primitive; throws on a race
+              // (insufficient stock / vanished mapping) so we fall through to
+              // the next candidate.
+              const reservation = await this.catalogFacade.reserveStock({
+                mappingId: candidate.mappingId,
+                quantity: cartItem.quantity,
+                expiresInMinutes: 15,
+                customerId: userId,
+              });
+              reservationId = reservation.id;
+            }
+            reservedCandidate = candidate;
+            break; // reserved successfully — stop walking the chain
+          } catch (err) {
+            // A stock race / missing node → try the next candidate in the
+            // cascade. The seller reserve primitive throws ConflictAppException
+            // on insufficient stock; the FRANCHISE reserve path throws
+            // BadRequestAppException for the same "lost the stock race" signal
+            // (FranchiseInventoryService.reserveStock + the under-lock
+            // over-reservation guard) — so it MUST be retryable too, else a
+            // franchise primary losing a race would abort the whole cascade
+            // instead of falling through to D2C. NotFoundAppException covers a
+            // vanished node. Anything else is unexpected → bubble to the outer
+            // catch (treated as unserviceable, preserving prior behaviour).
+            if (
+              err instanceof ConflictAppException ||
+              err instanceof BadRequestAppException ||
+              err instanceof NotFoundAppException
+            ) {
+              continue;
+            }
+            throw err;
+          }
         }
+
+        if (!reservedCandidate || !reservationId) {
+          // Every candidate across all tiers lost the race / had no stock.
+          throw new ConflictAppException('RACE_LOST');
+        }
+
+        if (reservedCandidate !== allocation.primary) {
+          this.logger.warn(
+            `checkout reserve fell back across the cascade to ` +
+              `${reservedCandidate.tier}/${reservedCandidate.nodeType} ` +
+              `${reservedCandidate.sellerId} for product=${cartItem.productId}`,
+          );
+        }
+        // The reserved node may differ from the original primary after a
+        // fallback — make it the source of truth for the line-item snapshot.
+        allocation.primary = reservedCandidate;
       } catch {
         // Stock race condition — treat as unserviceable
         allocatedItems.push({
@@ -396,6 +423,9 @@ export class CheckoutService {
 
       serviceableAmount += lineTotal;
 
+      // Re-derive the node type from the RESERVED primary — a cross-tier
+      // fallback may have changed it from the originally-allocated node.
+      const primaryNodeType = allocation.primary.nodeType ?? 'SELLER';
       // Use franchiseId as the allocatedSellerId for franchise nodes
       const allocatedNodeId = primaryNodeType === 'FRANCHISE'
         ? (allocation.primary.franchiseId || allocation.primary.sellerId)

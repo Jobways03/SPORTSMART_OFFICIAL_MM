@@ -1,19 +1,21 @@
 # syntax=docker/dockerfile:1.7
 
 # ─────────────────────────────────────────────────────────────────────
-# SPORTSMART web-* — shared production image for all 10 Next.js web apps
+# SPORTSMART web-* — shared production image for the deployed Next.js web apps
 # ─────────────────────────────────────────────────────────────────────
-# Phase 9 (2026-05-16) — one Dockerfile, eight images. Each app is
-# built via the `APP` build-arg; the image tag identifies which one:
+# Phase 9 (2026-05-16) — one Dockerfile, one image per deployed web-* app
+# (10 today; see deploy.yml's build matrix). Each app is built via the
+# `APP` build-arg; the image tag identifies which one:
 #
 #   docker build -f infra/docker/Dockerfile.web \
 #                --build-arg APP=web-storefront \
 #                -t sportsmart-web-storefront:latest .
 #
-# The 8 apps live under apps/web-* and share the workspace's pnpm
-# packages — install scope is filtered to the requested app to keep
-# build time down (each cell rebuilds ~70 MB of node_modules instead
-# of the full ~250 MB graph).
+# apps/ holds 12 web-* dirs; web-admin and web-seller are intentionally
+# NOT deployed (absent from the matrix). The deployed apps share the
+# workspace's pnpm packages — install scope is filtered to the requested
+# app to keep build time down (each cell rebuilds only that app's deps,
+# not the full workspace graph).
 #
 # Build context MUST be the repo root, not apps/web-*/, because pnpm
 # needs the workspace root to resolve `@sportsmart/ui` and

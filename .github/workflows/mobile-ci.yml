@@ -1,31 +1,37 @@
 name: Mobile CI
 
-# Scope: runs on PRs and pushes that touch the mobile app, the shared
-# packages it consumes, or this workflow file. Same trigger pattern as
-# api-ci.yml and frontend-ci.yml so a pure-API or pure-web PR doesn't
-# consume mobile CI minutes.
+# PAUSED to manual-only (2026-06-16). The native app (apps/mobile-storefront)
+# is post-MVP / v2 and is not shipping yet, so this workflow no longer runs on
+# every PR/push that touches shared packages — it would only guard an app no
+# one is actively building right now. Restore the automatic triggers (the
+# commented pull_request/push block below) when v2 mobile work resumes.
 #
-# What CI validates without a Mac runner: lint + typecheck + the full
-# Metro bundle compile for both platforms (catches every import-time
-# error in the JS graph — the same signal we use locally as the gate
-# at the end of every build phase). Native Pod / Gradle builds are
-# deferred to a separate macOS workflow once we have one.
+# What it validates when run: lint + typecheck + the full Metro bundle compile
+# for both platforms (catches every import-time error in the JS graph — the
+# same signal we use locally as the end-of-phase gate). Native Pod / Gradle
+# builds need a Mac runner — a separate macOS workflow, later.
+#
+# Run on demand from the Actions tab, or: gh workflow run mobile-ci.yml
 on:
-  pull_request:
-    paths:
-      - "apps/mobile-storefront/**"
-      - "packages/**"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".github/workflows/mobile-ci.yml"
-  push:
-    branches: [main]
-    paths:
-      - "apps/mobile-storefront/**"
-      - "packages/**"
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".github/workflows/mobile-ci.yml"
+  workflow_dispatch:
+
+  # Automatic triggers — restore for v2 so a shared-package / lockfile change
+  # that breaks the mobile bundle is caught before it lands on main:
+  # pull_request:
+  #   paths:
+  #     - "apps/mobile-storefront/**"
+  #     - "packages/**"
+  #     - "pnpm-lock.yaml"
+  #     - "pnpm-workspace.yaml"
+  #     - ".github/workflows/mobile-ci.yml"
+  # push:
+  #   branches: [main]
+  #   paths:
+  #     - "apps/mobile-storefront/**"
+  #     - "packages/**"
+  #     - "pnpm-lock.yaml"
+  #     - "pnpm-workspace.yaml"
+  #     - ".github/workflows/mobile-ci.yml"
 
 concurrency:
   group: mobile-ci-${{ github.ref }}

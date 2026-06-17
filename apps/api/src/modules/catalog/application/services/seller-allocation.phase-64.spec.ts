@@ -228,13 +228,16 @@ describe('allocate typed reasons (Phase 64 — Gap #16)', () => {
 // ─── Gap #8: distance cap ─────────────────────────────────────────────
 
 describe('allocate distance cap (Phase 64 — Gap #8)', () => {
-  it('filters out a candidate beyond ROUTING_MAX_DISTANCE_KM', async () => {
+  // Tiered cascade (2026-06-16) — the old uniform 1500km seller cap was removed:
+  // D2C + Franchise ship NATIONWIDE; only RETAIL keeps a (50km) local radius.
+  it('a far D2C seller is STILL serviceable — D2C ships nationwide (no cap)', async () => {
     const { svc } = buildMocks({
       postOffice: { latitude: 13.08, longitude: 80.27 }, // Chennai
       sellerMappings: [
         activeSellerMapping({
           latitude: 31.63,
           longitude: 74.87, // Amritsar, ~2200km
+          seller: { id: SELLER_ID, sellerName: 'D2C', sellerShopName: 'D2C Shop', status: 'ACTIVE', sellerType: 'D2C' },
         }),
       ],
       envMaxDistance: 1500,
@@ -245,8 +248,52 @@ describe('allocate distance cap (Phase 64 — Gap #8)', () => {
       customerPincode: '600001',
       quantity: 1,
     });
+    expect(result.serviceable).toBe(true);
+    expect(result.reason).toBe('OK');
+    expect(result.primary?.tier).toBe('D2C');
+  });
+
+  it('a RETAIL seller beyond the 50km local radius is NOT eligible → not serviceable', async () => {
+    // The only stock is a far retail seller (no franchise/D2C) → order can't place.
+    const { svc } = buildMocks({
+      postOffice: { latitude: 13.08, longitude: 80.27 }, // Chennai
+      sellerMappings: [
+        activeSellerMapping({
+          latitude: 31.63,
+          longitude: 74.87, // Amritsar, ~2200km
+          seller: { id: SELLER_ID, sellerName: 'Retail', sellerShopName: 'Retail Shop', status: 'ACTIVE', sellerType: 'RETAIL' },
+        }),
+      ],
+    });
+    const result = await svc.allocate({
+      productId: PRODUCT_ID,
+      variantId: VARIANT_ID,
+      customerPincode: '600001',
+      quantity: 1,
+    });
     expect(result.serviceable).toBe(false);
     expect(result.reason).toBe('DISTANCE_EXCEEDED');
+  });
+
+  it('a RETAIL seller within the 50km local radius IS eligible', async () => {
+    const { svc } = buildMocks({
+      postOffice: { latitude: 19.0, longitude: 72.8 }, // Mumbai
+      sellerMappings: [
+        activeSellerMapping({
+          latitude: 19.1,
+          longitude: 72.9, // ~12km
+          seller: { id: SELLER_ID, sellerName: 'Retail', sellerShopName: 'Retail Shop', status: 'ACTIVE', sellerType: 'RETAIL' },
+        }),
+      ],
+    });
+    const result = await svc.allocate({
+      productId: PRODUCT_ID,
+      variantId: VARIANT_ID,
+      customerPincode: '400001',
+      quantity: 1,
+    });
+    expect(result.serviceable).toBe(true);
+    expect(result.primary?.tier).toBe('RETAIL');
   });
 
   it('keeps a candidate inside the cap', async () => {
