@@ -107,7 +107,7 @@ function ResetPasswordForm() {
         <div className="auth-card">
           <div className="auth-header">
             <h1 className="auth-logo">SPORTSMART</h1>
-            <p className="auth-badge">Seller Portal</p>
+            <p className="auth-badge">Retail Seller Portal</p>
             <div className="success-icon" aria-hidden="true">&#10003;</div>
             <h2 className="auth-title">Password reset successful</h2>
             <p className="auth-subtitle">
@@ -131,7 +131,7 @@ function ResetPasswordForm() {
       <div className="auth-card">
         <div className="auth-header">
           <h1 className="auth-logo">SPORTSMART</h1>
-          <p className="auth-badge">Seller Portal</p>
+          <p className="auth-badge">Retail Seller Portal</p>
           <h2 className="auth-title">Set your new password</h2>
           <p className="auth-subtitle">Create a strong password for your seller account.</p>
         </div>

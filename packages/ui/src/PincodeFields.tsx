@@ -49,6 +49,7 @@ export function PincodeFields({
   disabled = false,
   errors,
   forceLocality = false,
+  pincodeLabel = 'ZIP / PIN Code',
 }: {
   value: PincodeValue;
   onChange: (patch: Partial<PincodeValue>) => void;
@@ -60,6 +61,9 @@ export function PincodeFields({
   /** Always render the Locality field (even before a lookup / with no saved
    *  value) — e.g. on the profile page so the option is always available. */
   forceLocality?: boolean;
+  /** Label for the PIN-code input. Defaults to "ZIP / PIN Code"; override for
+   *  contextual forms (e.g. "Warehouse Pincode"). */
+  pincodeLabel?: string;
 }) {
   const {
     loading,
@@ -98,7 +102,7 @@ export function PincodeFields({
     <div className="pin">
       <div className="pin__grid">
         <div className="pin__field">
-          <label htmlFor={`${idPrefix}-pincode`}>ZIP / PIN Code</label>
+          <label htmlFor={`${idPrefix}-pincode`}>{pincodeLabel}</label>
           <input
             id={`${idPrefix}-pincode`}
             value={value.pincode}

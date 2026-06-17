@@ -23,6 +23,10 @@ export interface FranchiseProfile {
   contractEndDate: string | null;
   warehouseAddress: string | null;
   warehousePincode: string | null;
+  warehouseCity: string | null;
+  warehouseState: string | null;
+  warehouseLocality: string | null;
+  warehouseCountry: string | null;
   profileImageUrl: string | null;
   logoUrl: string | null;
   assignedZone: string | null;
@@ -33,6 +37,9 @@ export interface FranchiseProfile {
   /** True once registered with a logistics partner — pickup/warehouse
    *  fields are frozen; the portal locks the form + shows a banner. */
   logisticsLocked?: boolean;
+  /** True once payout bank details are on file — hides the "Add bank
+   *  details" banner for approved franchises. */
+  hasBankDetails?: boolean;
 }
 
 export type UpdateFranchiseProfilePayload = Partial<Pick<
@@ -49,6 +56,10 @@ export type UpdateFranchiseProfilePayload = Partial<Pick<
   | 'panNumber'
   | 'warehouseAddress'
   | 'warehousePincode'
+  | 'warehouseCity'
+  | 'warehouseState'
+  | 'warehouseLocality'
+  | 'warehouseCountry'
 >>;
 
 export const franchiseProfileService = {

@@ -15,12 +15,6 @@ import {
   validateBusinessName,
 } from '@/lib/validators';
 
-type PincodeData = {
-  district: string;
-  state: string;
-  places: { name: string; type: string; delivery: string }[];
-};
-
 type FormState = {
   ownerName: string;
   businessName: string;
@@ -34,6 +28,10 @@ type FormState = {
   panNumber: string;
   warehouseAddress: string;
   warehousePincode: string;
+  warehouseCity: string;
+  warehouseState: string;
+  warehouseLocality: string;
+  warehouseCountry: string;
 };
 
 const DEFAULT_COUNTRY = 'India';
@@ -51,6 +49,10 @@ const EMPTY_FORM: FormState = {
   panNumber: '',
   warehouseAddress: '',
   warehousePincode: '',
+  warehouseCity: '',
+  warehouseState: '',
+  warehouseLocality: '',
+  warehouseCountry: DEFAULT_COUNTRY,
 };
 
 function profileToForm(p: FranchiseProfile): FormState {
@@ -67,7 +69,26 @@ function profileToForm(p: FranchiseProfile): FormState {
     panNumber: p.panNumber || '',
     warehouseAddress: p.warehouseAddress || '',
     warehousePincode: p.warehousePincode || '',
+    warehouseCity: p.warehouseCity || '',
+    warehouseState: p.warehouseState || '',
+    warehouseLocality: p.warehouseLocality || '',
+    warehouseCountry: p.warehouseCountry || DEFAULT_COUNTRY,
   };
+}
+
+// True when the saved warehouse address already matches the store address — used
+// to pre-tick the "Same as Franchise Address" checkbox on load.
+function warehouseMatchesAddress(p: FranchiseProfile): boolean {
+  const norm = (v: string | null) => (v ?? '').trim();
+  if (!norm(p.address) || !norm(p.warehouseAddress)) return false;
+  return (
+    norm(p.address) === norm(p.warehouseAddress) &&
+    norm(p.pincode) === norm(p.warehousePincode) &&
+    norm(p.city) === norm(p.warehouseCity) &&
+    norm(p.state) === norm(p.warehouseState) &&
+    norm(p.locality) === norm(p.warehouseLocality) &&
+    norm(p.country) === norm(p.warehouseCountry)
+  );
 }
 
 function formatDate(value: string | null): string {
@@ -93,18 +114,17 @@ export default function ProfilePage() {
   const router = useRouter();
 const [profile, setProfile] = useState<FranchiseProfile | null>(null);
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  // "Same as Franchise Address" — when ticked, the warehouse mirrors the store
+  // address (copied + kept in sync, fields locked).
+  const [warehouseSameAsAddress, setWarehouseSameAsAddress] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
 
-  // Store-address pincode auto-fill is handled by the shared <PincodeFields>.
-
-  // Warehouse pincode lookup — shows confirmation hint only (no separate city/state field)
-  const [warehousePincodeData, setWarehousePincodeData] = useState<PincodeData | null>(null);
-  const [warehousePincodeLoading, setWarehousePincodeLoading] = useState(false);
-  const [warehousePincodeError, setWarehousePincodeError] = useState('');
+  // Store-address and warehouse pincode auto-fill (city/state/locality) are both
+  // handled by the shared <PincodeFields>.
 
   // Password change modal
   const [pwModalOpen, setPwModalOpen] = useState(false);
@@ -234,57 +254,87 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     }
   };
 
-  // lookupPincode removed — the store address now uses the shared <PincodeFields>.
+  // lookupPincode removed — both the store address and the warehouse address now
+  // use the shared <PincodeFields>, which runs its own lookup + auto-fill.
 
-  async function lookupWarehousePincode(pincode: string) {
-    if (pincode.length !== 6 || !/^\d{6}$/.test(pincode)) {
-      setWarehousePincodeData(null);
-      setWarehousePincodeError('');
-      return;
+  const loadProfile = async (opts?: { silent?: boolean }) => {
+    if (!opts?.silent) {
+      setIsLoading(true);
+      setError('');
     }
-
-    setWarehousePincodeLoading(true);
-    setWarehousePincodeError('');
-    try {
-      const data = await apiClient<any>(`/pincodes/${pincode}`);
-
-      if (data.success && data.data) {
-        setWarehousePincodeData(data.data);
-      } else {
-        setWarehousePincodeError('Invalid pincode');
-        setWarehousePincodeData(null);
-      }
-    } catch {
-      setWarehousePincodeError('Failed to lookup pincode');
-      setWarehousePincodeData(null);
-    } finally {
-      setWarehousePincodeLoading(false);
-    }
-  }
-
-  const loadProfile = async () => {
-    setIsLoading(true);
-    setError('');
     try {
       const res = await franchiseProfileService.getProfile();
       if (res.data) {
         setProfile(res.data);
         setForm(profileToForm(res.data));
+        setWarehouseSameAsAddress(warehouseMatchesAddress(res.data));
       }
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.body.message || 'Failed to load profile');
-      } else {
-        setError('Failed to load profile');
+      if (!opts?.silent) {
+        if (err instanceof ApiError) {
+          setError(err.body.message || 'Failed to load profile');
+        } else {
+          setError('Failed to load profile');
+        }
       }
     } finally {
-      setIsLoading(false);
+      if (!opts?.silent) setIsLoading(false);
     }
   };
 
   useEffect(() => {
     loadProfile();
   }, []);
+
+  // Auto-refresh so an admin-side profile edit appears on the franchise side
+  // without a manual reload. Polls every 20s + on tab focus, but SKIPS while
+  // editing or saving so it never clobbers in-progress input. Silent = no
+  // spinner / error-banner flicker.
+  useEffect(() => {
+    const refresh = () => {
+      if (isEditing || isSaving) return;
+      void loadProfile({ silent: true });
+    };
+    const interval = setInterval(refresh, 20000);
+    const onFocus = () => refresh();
+    window.addEventListener('focus', onFocus);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus', onFocus);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isEditing, isSaving]);
+
+  // When "Same as Franchise Address" is ticked, mirror the store address into
+  // the warehouse fields and keep them in sync while it stays ticked. Depends
+  // only on the address fields (not the warehouse ones) so it can't loop.
+  useEffect(() => {
+    if (!warehouseSameAsAddress) return;
+    setForm((prev) => ({
+      ...prev,
+      warehouseAddress: prev.address,
+      warehousePincode: prev.pincode,
+      warehouseCity: prev.city,
+      warehouseState: prev.state,
+      warehouseLocality: prev.locality,
+      warehouseCountry: prev.country || DEFAULT_COUNTRY,
+    }));
+    setFieldErrors((prev) => ({
+      ...prev,
+      warehousePincode: '',
+      warehouseCity: '',
+      warehouseState: '',
+      warehouseCountry: '',
+    }));
+  }, [
+    warehouseSameAsAddress,
+    form.address,
+    form.pincode,
+    form.city,
+    form.state,
+    form.locality,
+    form.country,
+  ]);
 
   // Bank payout details (masked) for the Bank Account card.
   const [bankInfo, setBankInfo] = useState<{
@@ -390,16 +440,15 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
     setError('');
     setSuccessMessage('');
     setIsEditing(true);
-    // Re-run lookup for existing pincodes so user sees the auto-fill hint
-    if (form.warehousePincode) lookupWarehousePincode(form.warehousePincode);
   };
 
   const handleCancel = () => {
-    if (profile) setForm(profileToForm(profile));
+    if (profile) {
+      setForm(profileToForm(profile));
+      setWarehouseSameAsAddress(warehouseMatchesAddress(profile));
+    }
     setError('');
     setIsEditing(false);
-    setWarehousePincodeData(null);
-    setWarehousePincodeError('');
   };
 
   const handleSubmit = async (e: FormEvent) => {
@@ -459,12 +508,17 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
         panNumber: form.panNumber.trim().toUpperCase() || undefined,
         warehouseAddress: form.warehouseAddress.trim() || undefined,
         warehousePincode: form.warehousePincode.trim() || undefined,
+        warehouseCity: form.warehouseCity.trim() || undefined,
+        warehouseState: form.warehouseState.trim() || undefined,
+        warehouseLocality: form.warehouseLocality.trim() || undefined,
+        warehouseCountry: form.warehouseCountry.trim() || undefined,
       };
 
       const res = await franchiseProfileService.updateProfile(payload);
       if (res.data) {
         setProfile(res.data);
         setForm(profileToForm(res.data));
+        setWarehouseSameAsAddress(warehouseMatchesAddress(res.data));
 
         // Update cached franchise in session storage
         try {
@@ -851,6 +905,31 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
         {/* Warehouse */}
         <div className="card">
           <h2>Warehouse</h2>
+          {isEditing && (
+            <label
+              htmlFor="warehouseSameAsAddress"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                margin: '4px 0 16px',
+                fontSize: 14,
+                color: '#374151',
+                cursor: profile?.logisticsLocked ? 'not-allowed' : 'pointer',
+                userSelect: 'none',
+              }}
+            >
+              <input
+                type="checkbox"
+                id="warehouseSameAsAddress"
+                checked={warehouseSameAsAddress}
+                onChange={(e) => setWarehouseSameAsAddress(e.target.checked)}
+                disabled={isSaving || profile?.logisticsLocked}
+                style={{ width: 16, height: 16 }}
+              />
+              Same as Franchise Address
+            </label>
+          )}
           <div className="grid-2">
             <div className="field" style={{ gridColumn: '1 / -1' }}>
               <label htmlFor="warehouseAddress">Warehouse Address</label>
@@ -859,7 +938,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                   id="warehouseAddress"
                   value={form.warehouseAddress}
                   onChange={(e) => handleChange('warehouseAddress', e.target.value)}
-                  disabled={isSaving || profile?.logisticsLocked}
+                  disabled={isSaving || profile?.logisticsLocked || warehouseSameAsAddress}
                 />
               ) : (
                 <div className={`value${profile.warehouseAddress ? '' : ' muted'}`}>
@@ -868,46 +947,70 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
               )}
             </div>
 
-            <div className="field">
-              <label htmlFor="warehousePincode">Warehouse Pincode</label>
+            <div className="field" style={{ gridColumn: '1 / -1' }}>
               {isEditing ? (
+                <PincodeFields
+                  idPrefix="warehouse"
+                  forceLocality
+                  showCountry
+                  pincodeLabel="Warehouse Pincode"
+                  disabled={isSaving || profile?.logisticsLocked || warehouseSameAsAddress}
+                  value={{
+                    pincode: form.warehousePincode,
+                    city: form.warehouseCity,
+                    state: form.warehouseState,
+                    country: form.warehouseCountry,
+                    locality: form.warehouseLocality,
+                  }}
+                  errors={{
+                    pincode: fieldErrors.warehousePincode,
+                    city: fieldErrors.warehouseCity,
+                    state: fieldErrors.warehouseState,
+                    country: fieldErrors.warehouseCountry,
+                  }}
+                  onChange={(patch) => {
+                    if (patch.pincode !== undefined) handleChange('warehousePincode', patch.pincode);
+                    if (patch.city !== undefined) handleChange('warehouseCity', patch.city);
+                    if (patch.state !== undefined) handleChange('warehouseState', patch.state);
+                    if (patch.country !== undefined) handleChange('warehouseCountry', patch.country);
+                    if (patch.locality !== undefined) handleChange('warehouseLocality', patch.locality);
+                  }}
+                />
+              ) : (
                 <>
-                  <input
-                    id="warehousePincode"
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={6}
-                    value={form.warehousePincode}
-                    onChange={(e) => {
-                      handleChange('warehousePincode', e.target.value);
-                      const sanitized = e.target.value.replace(/\D/g, '').slice(0, 6);
-                      lookupWarehousePincode(sanitized);
-                    }}
-                    disabled={isSaving || profile?.logisticsLocked}
-                    placeholder="6-digit pincode"
-                    style={fieldErrors.warehousePincode ? { borderColor: '#dc2626' } : undefined}
-                  />
-                  {fieldErrors.warehousePincode && (
-                    <small style={{ color: '#dc2626', display: 'block', marginTop: 4 }}>
-                      {fieldErrors.warehousePincode}
-                    </small>
-                  )}
-                  {warehousePincodeLoading && (
-                    <small style={{ color: '#6b7280' }}>Looking up pincode…</small>
-                  )}
-                  {warehousePincodeError && !fieldErrors.warehousePincode && (
-                    <small style={{ color: '#dc2626' }}>{warehousePincodeError}</small>
-                  )}
-                  {warehousePincodeData && !warehousePincodeError && !warehousePincodeLoading && (
-                    <small style={{ color: '#16a34a' }}>
-                      {warehousePincodeData.district}, {warehousePincodeData.state}
-                    </small>
+                  <div className="grid-2">
+                    <div className="field">
+                      <label>Warehouse Pincode</label>
+                      <div className={`value${profile.warehousePincode ? '' : ' muted'}`}>
+                        {profile.warehousePincode || 'Not set'}
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label>Country</label>
+                      <div className={`value${profile.warehouseCountry ? '' : ' muted'}`}>
+                        {profile.warehouseCountry || 'Not set'}
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label>City / District</label>
+                      <div className={`value${profile.warehouseCity ? '' : ' muted'}`}>
+                        {profile.warehouseCity || 'Not set'}
+                      </div>
+                    </div>
+                    <div className="field">
+                      <label>State</label>
+                      <div className={`value${profile.warehouseState ? '' : ' muted'}`}>
+                        {profile.warehouseState || 'Not set'}
+                      </div>
+                    </div>
+                  </div>
+                  {profile.warehouseLocality && (
+                    <div className="field" style={{ marginTop: 16 }}>
+                      <label>Locality</label>
+                      <div className="value">{profile.warehouseLocality}</div>
+                    </div>
                   )}
                 </>
-              ) : (
-                <div className={`value${profile.warehousePincode ? '' : ' muted'}`}>
-                  {profile.warehousePincode || 'Not set'}
-                </div>
               )}
             </div>
           </div>

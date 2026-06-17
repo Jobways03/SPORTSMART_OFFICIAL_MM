@@ -49,7 +49,7 @@ export class AdminEditSellerUseCase {
     const simpleFields = [
       'sellerName', 'sellerShopName',
       'sellerContactCountryCode', 'sellerContactNumber',
-      'storeAddress', 'city', 'state', 'country', 'sellerZipCode',
+      'storeAddress', 'locality', 'city', 'state', 'country', 'sellerZipCode',
     ];
 
     for (const field of simpleFields) {

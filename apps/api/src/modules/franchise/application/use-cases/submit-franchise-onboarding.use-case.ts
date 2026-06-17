@@ -160,7 +160,7 @@ export class SubmitFranchiseOnboardingUseCase {
       updated = await this.franchiseRepo.updateFranchiseSelect(
         franchiseId,
         {
-          legalBusinessName: input.legalBusinessName,
+          businessName: input.legalBusinessName,
           entityType: input.entityType,
           gstNumber: input.gstNumber,
           gstStateCode: input.gstStateCode,

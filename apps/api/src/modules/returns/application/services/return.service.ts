@@ -551,23 +551,15 @@ export class ReturnService {
       : subOrderAny.sellerId
         ? 'SELLER'
         : null;
-    // Phase 94 (2026-05-23) — Seller/Franchise Return Response audit
-    // Gap #1. Franchise-fulfilled sub-orders skip the seller-response
-    // window entirely: there is no franchise respond endpoint (QC-only
-    // design — admin remains the neutral arbiter for franchise claims
-    // because franchises are operationally closer to the marketplace).
-    // Pre-Phase-94, classifyReasonForSellerResponse would return
-    // REQUIRED for DEFECTIVE/etc. and stamp PENDING on a franchise
-    // return — the sweeper would then flip it to EXPIRED after 48h
-    // with no signal to anyone, dropping the "fairness gate" silently.
-    // Now: any franchise sub-order forces NOT_REQUIRED so QC starts
-    // immediately without waiting on a respond that can never arrive.
+    // Both seller- and franchise-fulfilled sub-orders get a response window
+    // when the reason requires one — the fulfillment node (seller OR franchise)
+    // is the physical receiver and gets a fair chance to accept/contest before
+    // QC. The franchise respond/rescind endpoints mirror the seller ones, and
+    // the same sweeper expires an unanswered PENDING after the window. (Earlier
+    // the franchise path was forced to NOT_REQUIRED because no franchise respond
+    // endpoint existed; that endpoint now exists, so the gate applies to both.)
     const sellerResponseStatus: 'PENDING' | 'NOT_REQUIRED' =
-      nodeType === 'FRANCHISE'
-        ? 'NOT_REQUIRED'
-        : sellerResponseRequirement === 'REQUIRED'
-          ? 'PENDING'
-          : 'NOT_REQUIRED';
+      sellerResponseRequirement === 'REQUIRED' ? 'PENDING' : 'NOT_REQUIRED';
     const sellerNotifiedAt =
       sellerResponseStatus === 'PENDING' ? new Date() : undefined;
     const sellerResponseDueAt = sellerNotifiedAt
@@ -4021,6 +4013,10 @@ export class ReturnService {
   async respondAsSeller(args: {
     returnId: string;
     sellerId: string;
+    // The responding fulfillment node. Defaults to SELLER so the existing
+    // seller path is unchanged; the franchise controller passes 'FRANCHISE'.
+    // `sellerId` carries the actor id either way (sellerId or franchiseId).
+    nodeType?: 'SELLER' | 'FRANCHISE';
     decision: 'ACCEPTED' | 'CONTESTED';
     notes?: string;
     evidenceFileUrls?: string[];
@@ -4061,6 +4057,7 @@ export class ReturnService {
         );
       }
     }
+    const actorType = args.nodeType ?? 'SELLER';
     const sanitizedNotes = sanitizeRespondNotes(args.notes);
 
     // Phase 94 — Gap #4/#5/#7/#8 atomicity. Pre-Phase-94 the update,
@@ -4107,8 +4104,11 @@ export class ReturnService {
           throw new NotFoundAppException('Return not found');
         }
 
-        const sellerOnSubOrder = (ret as any).subOrder?.sellerId;
-        if (!sellerOnSubOrder || sellerOnSubOrder !== args.sellerId) {
+        const ownerOnSubOrder =
+          actorType === 'FRANCHISE'
+            ? (ret as any).subOrder?.franchiseId
+            : (ret as any).subOrder?.sellerId;
+        if (!ownerOnSubOrder || ownerOnSubOrder !== args.sellerId) {
           throw new ForbiddenAppException(
             'You do not have access to this return',
           );
@@ -4227,11 +4227,11 @@ export class ReturnService {
           await tx.returnEvidence.createMany({
             data: args.evidenceFileUrls.map((url) => ({
               returnId: args.returnId,
-              uploadedBy: 'SELLER',
+              uploadedBy: actorType as any,
               uploaderId: args.sellerId,
               fileType: 'IMAGE',
               fileUrl: url,
-              description: `Seller ${args.decision.toLowerCase()} response evidence`,
+              description: `${actorType === 'FRANCHISE' ? 'Franchise' : 'Seller'} ${args.decision.toLowerCase()} response evidence`,
             })),
           });
           evidenceCount = args.evidenceFileUrls.length;
@@ -4250,9 +4250,9 @@ export class ReturnService {
             returnId: args.returnId,
             fromStatus: ret.status as any,
             toStatus: ret.status as any,
-            changedBy: 'SELLER',
+            changedBy: actorType as any,
             changedById: args.sellerId,
-            notes: `Seller ${args.decision.toLowerCase()}${
+            notes: `${actorType === 'FRANCHISE' ? 'Franchise' : 'Seller'} ${args.decision.toLowerCase()}${
               sanitizedNotes ? `: ${sanitizedNotes.slice(0, 200)}` : ''
             }`,
           },
@@ -4305,7 +4305,7 @@ export class ReturnService {
     this.audit
       .writeAuditLog({
         actorId: args.sellerId,
-        actorRole: 'SELLER',
+        actorRole: actorType,
         action: 'return.seller_responded',
         module: 'returns',
         resource: 'return',
@@ -4352,10 +4352,14 @@ export class ReturnService {
   async rescindSellerResponse(args: {
     returnId: string;
     sellerId: string;
+    // Defaults to SELLER; franchise controller passes 'FRANCHISE'. `sellerId`
+    // carries the actor id either way.
+    nodeType?: 'SELLER' | 'FRANCHISE';
     newDecision: 'ACCEPTED' | 'CONTESTED';
     notes?: string;
     contestReasonCategory?: string;
   }) {
+    const actorType = args.nodeType ?? 'SELLER';
     const sanitizedNotes = sanitizeRespondNotes(args.notes);
     const respondedAt = new Date();
 
@@ -4369,8 +4373,11 @@ export class ReturnService {
         include: { subOrder: true },
       });
       if (!ret) throw new NotFoundAppException('Return not found');
-      const sellerOnSubOrder = (ret as any).subOrder?.sellerId;
-      if (!sellerOnSubOrder || sellerOnSubOrder !== args.sellerId) {
+      const ownerOnSubOrder =
+        actorType === 'FRANCHISE'
+          ? (ret as any).subOrder?.franchiseId
+          : (ret as any).subOrder?.sellerId;
+      if (!ownerOnSubOrder || ownerOnSubOrder !== args.sellerId) {
         throw new ForbiddenAppException(
           'You do not have access to this return',
         );
@@ -4429,9 +4436,9 @@ export class ReturnService {
           returnId: args.returnId,
           fromStatus: ret.status as any,
           toStatus: ret.status as any,
-          changedBy: 'SELLER',
+          changedBy: actorType as any,
           changedById: args.sellerId,
-          notes: `Seller rescinded ${ret.sellerResponseStatus?.toLowerCase()} → ${args.newDecision.toLowerCase()}${
+          notes: `${actorType === 'FRANCHISE' ? 'Franchise' : 'Seller'} rescinded ${ret.sellerResponseStatus?.toLowerCase()} → ${args.newDecision.toLowerCase()}${
             sanitizedNotes ? `: ${sanitizedNotes.slice(0, 200)}` : ''
           }`,
         },
@@ -4460,7 +4467,7 @@ export class ReturnService {
     this.audit
       .writeAuditLog({
         actorId: args.sellerId,
-        actorRole: 'SELLER',
+        actorRole: actorType,
         action: 'return.seller_response.rescinded',
         module: 'returns',
         resource: 'return',

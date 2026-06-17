@@ -83,7 +83,11 @@ export class PrismaFranchiseFinanceRepository
     const runCore = async (tx: any): Promise<any> => {
       // #1 — serialize per-franchise so the running balance is consistent and
       // point-in-time-recallable (advisory xact lock, released at commit).
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${data.franchiseId}))`;
+      // Use $executeRaw (not $queryRaw): pg_advisory_xact_lock returns SQL
+      // `void`, which $queryRaw cannot deserialize under Prisma 6.19+
+      // ("Failed to deserialize column of type 'void'"). $executeRaw returns a
+      // row-count and skips column deserialization entirely.
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${data.franchiseId}))`;
       const fr = await tx.franchisePartner.findUnique({
         where: { id: data.franchiseId },
         select: { ledgerBalanceInPaise: true },

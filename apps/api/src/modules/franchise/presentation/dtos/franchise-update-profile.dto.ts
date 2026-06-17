@@ -105,4 +105,40 @@ export class FranchiseUpdateProfileDto {
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @Matches(/^\d{6}$/, { message: 'Warehouse pincode must be exactly 6 digits' })
   warehousePincode?: string;
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(2, { message: 'Warehouse city must be at least 2 characters' })
+  @MaxLength(100, { message: 'Warehouse city must not exceed 100 characters' })
+  @Matches(/^[a-zA-Z][a-zA-Z\s\-.']*$/, {
+    message: 'Warehouse city can only contain letters, spaces, hyphens, and dots',
+  })
+  warehouseCity?: string;
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(2, { message: 'Warehouse state must be at least 2 characters' })
+  @MaxLength(100, { message: 'Warehouse state must not exceed 100 characters' })
+  @Matches(/^[a-zA-Z][a-zA-Z\s\-.']*$/, {
+    message: 'Warehouse state can only contain letters, spaces, hyphens, and dots',
+  })
+  warehouseState?: string;
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MaxLength(150, { message: 'Warehouse locality must not exceed 150 characters' })
+  warehouseLocality?: string;
+
+  @IsOptional()
+  @IsString()
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @MinLength(2, { message: 'Warehouse country must be at least 2 characters' })
+  @MaxLength(100, { message: 'Warehouse country must not exceed 100 characters' })
+  @Matches(/^[a-zA-Z][a-zA-Z\s\-.']*$/, {
+    message: 'Warehouse country can only contain letters, spaces, hyphens, and dots',
+  })
+  warehouseCountry?: string;
 }

@@ -14,6 +14,9 @@ export interface BannerProfile {
   isEmailVerified: boolean;
   gstNumber: string | null;
   panNumber: string | null;
+  /** True once payout bank details are on file. When set, an approved
+   *  franchise no longer sees the "Add bank details" banner. */
+  hasBankDetails?: boolean;
 }
 
 export interface Banner {
@@ -60,7 +63,7 @@ export function deriveBanner(profile: BannerProfile): Banner | null {
       text: 'KYC verified. Awaiting admin approval to activate your franchise.',
     };
   }
-  if (profile.status === 'APPROVED') {
+  if (profile.status === 'APPROVED' && !profile.hasBankDetails) {
     return {
       kind: 'warning',
       text: 'Your franchise is approved. Add bank details to start receiving payouts.',

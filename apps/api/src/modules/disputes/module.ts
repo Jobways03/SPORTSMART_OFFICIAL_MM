@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import {
   AdminAuthGuard,
   SellerAuthGuard,
+  FranchiseAuthGuard,
 } from '../../core/guards';
 import { LiabilityLedgerModule } from '../liability-ledger/module';
 import { RefundInstructionsModule } from '../refund-instructions/module';
@@ -17,6 +18,7 @@ import { RefundRejectedDisputeHandler } from './application/event-handlers/refun
 // seller filing, and admin queue remain.
 import { AdminDisputesController } from './presentation/controllers/admin-disputes.controller';
 import { SellerDisputesController } from './presentation/controllers/seller-disputes.controller';
+import { FranchiseDisputesController } from './presentation/controllers/franchise-disputes.controller';
 
 /**
  * Phase 12 (post-Phase-11) — refund + liability rebuild (ADR-016).
@@ -41,10 +43,12 @@ import { SellerDisputesController } from './presentation/controllers/seller-disp
   controllers: [
     AdminDisputesController,
     SellerDisputesController,
+    FranchiseDisputesController,
   ],
   providers: [
     AdminAuthGuard,
     SellerAuthGuard,
+    FranchiseAuthGuard,
     DisputeService,
     DisputeRefundRecoverySweepCron,
     DisputesPublicFacade,
