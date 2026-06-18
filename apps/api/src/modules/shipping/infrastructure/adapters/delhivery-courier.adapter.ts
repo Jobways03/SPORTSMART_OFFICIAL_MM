@@ -80,8 +80,14 @@ export class DelhiveryCourierAdapter implements CourierGatewayPort {
     // Human-readable label reference (the scannable "order" barcode). Shared
     // helper so the custom label generator prints the EXACT same value Delhivery
     // booked (see order-reference.util.ts). "<orderNumber>-<tag>"; deterministic
-    // per sub-order so re-booking stays idempotent.
-    const orderReference = buildOrderReference(s.orderNumber, req.subOrderId);
+    // per sub-order so re-booking stays idempotent. Direction-aware: reverse
+    // pickups get an `RVP-` prefix so they don't collide with the forward
+    // shipment's order id in Delhivery's (client, order) dedup.
+    const orderReference = buildOrderReference(
+      s.orderNumber,
+      req.subOrderId,
+      req.direction,
+    );
 
     // Paise are sent as strings on the wire; the facade's z.coerce.bigint()
     // accepts them. Delhivery books against the configured pickup warehouse,

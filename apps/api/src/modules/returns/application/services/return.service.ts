@@ -217,6 +217,30 @@ function scaleReversalSnapshot(snapshot: any, fraction: number): any {
   };
 }
 
+/**
+ * Compose the SellerDebit amount for a SELLER-fault return: the seller's
+ * recovered product value (Option A — ₹0 if the seller was never paid) PLUS
+ * the reverse-logistics delivery charge. The delivery charge applies EVEN when
+ * the product value is ₹0 ("seller never made the sale" — within-window),
+ * so a seller-fault return always bills at least the delivery cost their fault
+ * caused. Returns an itemised breakdown string appended to the ledger reason.
+ */
+export function computeSellerReturnDebitPaise(args: {
+  productRecoverablePaise: bigint;
+  deliveryChargePaise: bigint;
+}): { totalPaise: bigint; breakdown: string } {
+  const { productRecoverablePaise, deliveryChargePaise } = args;
+  const totalPaise = productRecoverablePaise + deliveryChargePaise;
+  const parts: string[] = [];
+  if (productRecoverablePaise > 0n)
+    parts.push(`product ₹${(Number(productRecoverablePaise) / 100).toFixed(2)}`);
+  if (deliveryChargePaise > 0n)
+    parts.push(
+      `reverse-delivery ₹${(Number(deliveryChargePaise) / 100).toFixed(2)}`,
+    );
+  return { totalPaise, breakdown: parts.length ? ` (${parts.join(' + ')})` : '' };
+}
+
 // Phase 106 (2026-05-23) — Phase 102 audit Gap #14 closure.
 //
 // Map a raw failure reason (which may contain gateway internals like
@@ -2222,7 +2246,10 @@ export class ReturnService {
             qcOutcome: decision.qcOutcome as any,
             qcQuantityApproved: decision.qcQuantityApproved,
             qcNotes: decision.qcNotes,
-            refundAmount: decision.refundAmount,
+            // 2-dp decimal-string (not a raw float) so MoneyDualWriteHelper's
+            // toPaise accepts it — a partial-VALUE refund can be a non-integer
+            // rupee amount (e.g. 3333.50) which it refuses as a bare Number.
+            refundAmount: decision.refundAmount.toFixed(2),
           }),
         });
 
@@ -2359,7 +2386,9 @@ export class ReturnService {
           qcCompletedAt: new Date(),
           qcDecision: qcDecision as any,
           qcNotes: input.overallNotes,
-          refundAmount: totalRefund,
+          // 2-dp decimal-string — see returnItem note above. A partial-VALUE
+          // refund yields a non-integer rupee total that toPaise rejects raw.
+          refundAmount: totalRefund.toFixed(2),
           // Phase 13 — persist the liability attribution + remedy used
           // to compute downstream ledger writes. Persisting on the row
           // (not derived from the ledger row alone) gives us a single
@@ -4804,6 +4833,21 @@ export class ReturnService {
   }
 
   /**
+   * Reverse-logistics (delivery) charge billed to a seller on a SELLER-fault
+   * return — the round-trip shipping cost their fault caused. Flat,
+   * configurable per-return (RETURN_SELLER_DELIVERY_CHARGE_PAISE, default
+   * ₹100); set to 0 to disable. Liability-scoped: only the SELLER_DEBIT path
+   * calls this, so logistics/platform-fault returns never bill the seller.
+   */
+  private sellerReturnDeliveryChargePaise(): bigint {
+    const flat = this.env.getNumber(
+      'RETURN_SELLER_DELIVERY_CHARGE_PAISE',
+      10000,
+    );
+    return flat > 0 ? BigInt(Math.round(flat)) : 0n;
+  }
+
+  /**
    * Option A — the amount recoverable from a seller-liable return.
    *
    * The platform may recover only the seller's NET settlement for the returned
@@ -4927,10 +4971,21 @@ export class ReturnService {
       // CommissionRecord.refundedAdminEarning), not the seller's debt.
       const recoverablePaise =
         await this.computeSellerLiabilityRecoverablePaise(ret);
-      if (recoverablePaise <= 0n) {
+
+      // Seller-fault returns ALSO bill the seller the reverse-logistics
+      // (delivery) charge their fault caused — even when the product value is
+      // ₹0 (within-window / "seller never made the sale"), because the platform
+      // still paid the courier for the round trip. Only the SELLER_DEBIT path
+      // reaches here, so logistics/platform-fault returns never bill the seller.
+      const deliveryChargePaise = this.sellerReturnDeliveryChargePaise();
+      const { totalPaise, breakdown } = computeSellerReturnDebitPaise({
+        productRecoverablePaise: recoverablePaise,
+        deliveryChargePaise,
+      });
+      if (totalPaise <= 0n) {
         this.logger.log(
-          `Return ${ret.returnNumber}: seller-liable but no settled payout to ` +
-            `recover (never-settled / COD) — no SellerDebit created (Option A).`,
+          `Return ${ret.returnNumber}: seller-liable but nothing to recover ` +
+            `(no settled payout + ₹0 delivery charge) — no SellerDebit created.`,
         );
         return;
       }
@@ -4940,8 +4995,8 @@ export class ReturnService {
         sourceId: returnId,
         orderId: ret.masterOrderId,
         subOrderId: ret.subOrderId,
-        amountInPaise: Number(recoverablePaise),
-        reason: reasonText,
+        amountInPaise: Number(totalPaise),
+        reason: `${reasonText}${breakdown}`,
       });
       return;
     }

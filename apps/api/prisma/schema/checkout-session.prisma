@@ -1,0 +1,69 @@
+/// Option B (2026-06-17) — DEFERRED ORDER CREATION.
+///
+/// Holds a customer's cart + intended payment while an ONLINE checkout is
+/// in-flight, so the real MasterOrder is created ONLY when the gateway payment
+/// is captured. A never-completed checkout simply expires here — no half-made
+/// order ever reaches the admin. COD / wallet-fully-covered checkouts do NOT
+/// use this (they have no pending-gateway gap and are placed immediately).
+///
+/// Gated behind CHECKOUT_DEFERRED_ORDER_CREATION; the legacy create-then-pay
+/// path stays the default until the flag is flipped.
+model CheckoutSession {
+  id         String                @id @default(uuid())
+  customerId String                @map("customer_id")
+  status     CheckoutSessionStatus @default(CREATED)
+
+  // ── Immutable snapshot — everything order-creation needs, frozen here so a
+  //    later cart edit / clear can't change the in-flight payment. ──
+  paymentMethod           OrderPaymentMethod @map("payment_method")
+  addressId               String?            @map("address_id")
+  shippingAddressSnapshot Json               @map("shipping_address_snapshot")
+  /// Cart lines: [{ productId, variantId, quantity, unitPriceInPaise, sku, ... }]
+  cartSnapshot            Json               @map("cart_snapshot")
+  itemCount               Int                @map("item_count")
+
+  totalAmountInPaise    BigInt  @map("total_amount_in_paise")
+  /// Wallet amount the customer chose to apply — HELD, not debited, until the
+  /// order is actually created (so an abandoned checkout never touches wallet).
+  walletApplyInPaise    BigInt  @default(0) @map("wallet_apply_in_paise")
+  /// The online portion to capture at the gateway (total − wallet). 0 ⇒ wallet
+  /// fully covers it and this row is short-circuited (no deferral needed).
+  gatewayAmountInPaise  BigInt  @default(0) @map("gateway_amount_in_paise")
+  couponCode            String? @map("coupon_code")
+  discountAmountInPaise BigInt  @default(0) @map("discount_amount_in_paise")
+
+  // ── Razorpay linkage ──
+  razorpayOrderId   String? @unique @map("razorpay_order_id")
+  razorpayPaymentId String? @map("razorpay_payment_id")
+
+  /// Correlation id for the stock held against THIS session, so expiry can
+  /// release it and order-creation can commit it.
+  reservationCorrelationId String? @map("reservation_correlation_id")
+
+  /// Set once the order is created — links session→order and makes creation
+  /// idempotent (a session yields at most one MasterOrder, even if the verify
+  /// call and the webhook race).
+  masterOrderId  String?   @unique @map("master_order_id")
+  orderCreatedAt DateTime? @map("order_created_at")
+
+  /// Why a session ended FAILED (e.g. paid-but-out-of-stock → auto-refunded).
+  failureReason String?   @map("failure_reason")
+  refundedAt    DateTime? @map("refunded_at")
+
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Sweeper finds CREATED past expiresAt; reconciler finds PAID with no order.
+  @@index([status, expiresAt])
+  @@index([customerId, status])
+  @@map("checkout_sessions")
+}
+
+enum CheckoutSessionStatus {
+  CREATED // cart held, awaiting gateway capture
+  PAID // gateway captured; MasterOrder not yet created
+  ORDER_CREATED // success — MasterOrder created from this session
+  EXPIRED // never paid; held stock released
+  FAILED // paid but order could not be created → auto-refunded
+}

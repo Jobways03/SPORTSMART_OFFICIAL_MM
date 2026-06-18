@@ -37,6 +37,17 @@ describe('Status FSM — OrderStatus', () => {
     expect(isTransitionAllowed('OrderStatus', 'VERIFIED', 'VERIFIED')).toBe(true);
     expect(isTransitionAllowed('OrderStatus', 'DELIVERED', 'DELIVERED')).toBe(true);
   });
+
+  // Regression (2026-06-17): an admin cancelling SOME sub-orders of a
+  // pre-routing order must be able to roll the master to PARTIALLY_CANCELLED.
+  // Pre-fix the FSM rejected it from PLACED/PENDING_VERIFICATION, so the master
+  // stayed PLACED and the cancelled order kept showing as active in admin.
+  it('allows PARTIALLY_CANCELLED from pre-routing states (cancelled-shows-active fix)', () => {
+    expect(isTransitionAllowed('OrderStatus', 'PLACED', 'PARTIALLY_CANCELLED')).toBe(true);
+    expect(isTransitionAllowed('OrderStatus', 'PENDING_VERIFICATION', 'PARTIALLY_CANCELLED')).toBe(true);
+    // and still legal from the already-supported routed/dispatched states
+    expect(isTransitionAllowed('OrderStatus', 'VERIFIED', 'PARTIALLY_CANCELLED')).toBe(true);
+  });
 });
 
 describe('Status FSM — OrderFulfillmentStatus', () => {

@@ -51,7 +51,7 @@ export default function FranchiseLedgerPage() {
 
   return (
     <div style={{ padding: '24px 32px' }}>
-      <Link href={`/dashboard/accounts/franchises/${id}/overview`} style={{ fontSize: 13, color: '#525A65', textDecoration: 'none' }}>← Franchise finances</Link>
+      <Link href={`/dashboard/accounts/franchises/${id}`} style={{ fontSize: 13, color: '#525A65', textDecoration: 'none' }}>← Franchise overview</Link>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', flexWrap: 'wrap', gap: 12, marginTop: 12 }}>
         <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0, color: '#0F1115' }}>Franchise ledger</h1>
         <div style={{ display: 'flex', gap: 8 }}>

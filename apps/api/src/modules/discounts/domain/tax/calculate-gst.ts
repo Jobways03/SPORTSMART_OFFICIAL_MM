@@ -142,6 +142,15 @@ export interface ReversalInput {
    * dropping it.
    */
   originalCessInPaise?: bigint;
+  /**
+   * Whether the snapshot's gross is tax-INCLUSIVE (the GST/cess already sits
+   * inside `originalGrossInPaise`). Mirrors `OrderItemTaxSnapshot.priceIncludesTax`.
+   * Optional + defaults to false so any caller that omits it keeps the legacy
+   * EXCLUSIVE formula. When true the credit-note total is the (discounted)
+   * amount actually paid and the taxable base is that minus the tax — see
+   * the branch in `calculateGstReversal`.
+   */
+  priceIncludesTax?: boolean;
   purchasedQuantity: number;
   returnedQuantity: number;
 }
@@ -182,7 +191,6 @@ export function calculateGstReversal(input: ReversalInput): ReversalResult {
   const grossReturned = (input.originalGrossInPaise * returned) / purchased;
   const discountReversal =
     (input.originalDiscountInPaise * returned) / purchased;
-  const taxableReversal = grossReturned - discountReversal;
   const cgstReversal = (input.originalCgstInPaise * returned) / purchased;
   const sgstReversal = (input.originalSgstInPaise * returned) / purchased;
   const igstReversal = (input.originalIgstInPaise * returned) / purchased;
@@ -191,8 +199,26 @@ export function calculateGstReversal(input: ReversalInput): ReversalResult {
   const cessReversal =
     ((input.originalCessInPaise ?? 0n) * returned) / purchased;
   const totalTaxReversal = cgstReversal + sgstReversal + igstReversal;
-  // Credit-note total includes cess (a refundable component the buyer paid).
-  const totalCreditNote = taxableReversal + totalTaxReversal + cessReversal;
+
+  // Tax-INCLUSIVE vs EXCLUSIVE pricing.
+  //   • Inclusive: the snapshot gross ALREADY contains the GST + cess, so the
+  //     credit-note total is simply the (discounted) amount the customer paid
+  //     for the returned qty, and the taxable base is that minus the tax/cess
+  //     sitting inside it.
+  //   • Exclusive: the tax sits on top of the taxable, so the credit-note
+  //     total adds it back.
+  // Pre-fix this always used the exclusive formula, which DOUBLE-COUNTED tax on
+  // inclusive lines — inflating credit notes/GSTR-8 and producing a fractional
+  // rupee that crashed partial-VALUE refunds in MoneyDualWriteHelper.toPaise.
+  let taxableReversal: bigint;
+  let totalCreditNote: bigint;
+  if (input.priceIncludesTax) {
+    totalCreditNote = grossReturned - discountReversal;
+    taxableReversal = totalCreditNote - totalTaxReversal - cessReversal;
+  } else {
+    taxableReversal = grossReturned - discountReversal;
+    totalCreditNote = taxableReversal + totalTaxReversal + cessReversal;
+  }
 
   return {
     grossReturnedInPaise: grossReturned,

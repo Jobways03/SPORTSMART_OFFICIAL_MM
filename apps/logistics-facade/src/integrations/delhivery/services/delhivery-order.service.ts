@@ -415,18 +415,17 @@ export class DelhiveryOrderService {
    * `custom_qc` array. Max 2 items per shipment, max 6 questions per
    * item.
    *
-   * NOTE: SportsMart does NOT currently run reverse pickups — this
-   * surface is implemented for completeness and emits a clear warning
-   * on call.
+   * ACTIVE (2026-06-16): SportsMart's Delhivery account is RVP-approved, so
+   * the returns flow auto-books reverse pickups through here (see apps/api
+   * ReturnReverseAutoBookHandler, gated by RETURN_AUTO_RVP_ENABLED).
    */
   async createRvpQc(
     req: DelhiveryRvpCreateRequest,
     opts: { idempotencyKey?: string } = {},
   ): Promise<CreateShipmentResult> {
-    this.logger.warn(
-      `[${DELHIVERY_DISPLAY_NAME}] RVP QC 3.0 implemented but currently unused ` +
-        `by SportsMart per business decision (no return / reverse flow). ` +
-        `Proceeding with create.`,
+    this.logger.log(
+      `[${DELHIVERY_DISPLAY_NAME}] Creating RVP QC 3.0 reverse pickup ` +
+        `(${req.shipments?.length ?? 0} shipment(s)).`,
     );
 
     if (

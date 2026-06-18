@@ -18,11 +18,18 @@ import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { BadRequestAppException } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { SellerDebitService } from '../../application/services/seller-debit.service';
+import { LogisticsClaimService } from '../../application/services/logistics-claim.service';
+import { PlatformExpenseService } from '../../application/services/platform-expense.service';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import {
   CancelSellerDebitDto,
   CreateManualSellerDebitDto,
 } from '../dtos/seller-debit.dto';
+import {
+  ReversePlatformExpenseDto,
+  TransitionLogisticsClaimDto,
+} from '../dtos/liability-action.dto';
+import type { LogisticsClaimStatus } from '@prisma/client';
 import { randomUUID } from 'crypto';
 
 /**
@@ -49,6 +56,8 @@ export class AdminLiabilityLedgerController {
   constructor(
     private readonly prisma: PrismaService,
     private readonly sellerDebits: SellerDebitService,
+    private readonly logisticsClaims: LogisticsClaimService,
+    private readonly platformExpenses: PlatformExpenseService,
     private readonly audit: AuditPublicFacade,
   ) {}
 
@@ -259,6 +268,113 @@ export class AdminLiabilityLedgerController {
     return {
       success: true,
       message: 'Seller debit cancelled',
+      data: { ...row, amountInPaise: row.amountInPaise.toString() },
+    };
+  }
+
+  /**
+   * PATCH /admin/liability-ledger/claims/:id/transition
+   *
+   * Advance a logistics claim through its courier-recovery lifecycle
+   * (PENDING → SUBMITTED → ACCEPTED → RECOVERED) or REJECTED. The service
+   * enforces legal transitions (illegal jumps 400). When a claim is REJECTED
+   * the courier denied liability, so the cost is auto-reclassified to a
+   * PlatformExpense (platform absorbs it) — idempotent on the claim's source.
+   */
+  @Patch('claims/:id/transition')
+  @Permissions('liability_ledger.write')
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  async transitionClaim(
+    @Req() req: Request,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: TransitionLogisticsClaimDto,
+  ) {
+    const adminId = (req as any).adminId as string | undefined;
+    const claim = await this.logisticsClaims.transition(
+      id,
+      body.toStatus as LogisticsClaimStatus,
+      { notes: body.note },
+    );
+
+    // Courier denied the claim → platform absorbs the cost. Idempotent on
+    // (sourceType, sourceId); reuses an existing expense if one already exists.
+    let reclassifiedExpenseId: string | null = null;
+    if (body.toStatus === 'REJECTED') {
+      const expense = await this.platformExpenses.record({
+        sourceType: claim.sourceType,
+        sourceId: claim.sourceId,
+        expenseType: 'PLATFORM_FAULT',
+        amountInPaise: Number(claim.amountInPaise),
+        reason: `Logistics claim ${id} rejected by courier — reclassified to platform expense`,
+      });
+      reclassifiedExpenseId = expense.id;
+    }
+
+    await this.audit
+      .writeAuditLog({
+        actorId: adminId ?? 'system',
+        actorRole: 'ADMIN',
+        action: 'liability_ledger.claim_transitioned',
+        module: 'liability-ledger',
+        resource: 'logistics_claim',
+        resourceId: id,
+        newValue: {
+          toStatus: body.toStatus,
+          note: body.note ?? null,
+          reclassifiedExpenseId,
+        },
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent') ?? undefined,
+      })
+      .catch(() => undefined);
+
+    return {
+      success: true,
+      message:
+        body.toStatus === 'REJECTED'
+          ? 'Claim rejected — cost reclassified to platform expense'
+          : `Claim moved to ${body.toStatus}`,
+      data: {
+        ...claim,
+        amountInPaise: claim.amountInPaise.toString(),
+        reclassifiedExpenseId,
+      },
+    };
+  }
+
+  /**
+   * PATCH /admin/liability-ledger/expenses/:id/reverse
+   *
+   * Un-book a mis-attributed platform expense (soft reversal — excluded from
+   * cost totals). Finance re-attributes the cost via a manual seller debit or
+   * a re-filed claim. Cannot reverse twice (400).
+   */
+  @Patch('expenses/:id/reverse')
+  @Permissions('liability_ledger.write')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  async reverseExpense(
+    @Req() req: Request,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: ReversePlatformExpenseDto,
+  ) {
+    const adminId = (req as any).adminId as string | undefined;
+    const row = await this.platformExpenses.reverseById(id, body.reason);
+    await this.audit
+      .writeAuditLog({
+        actorId: adminId ?? 'system',
+        actorRole: 'ADMIN',
+        action: 'liability_ledger.expense_reversed',
+        module: 'liability-ledger',
+        resource: 'platform_expense',
+        resourceId: id,
+        newValue: { reversedAt: row.reversedAt, reason: body.reason },
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent') ?? undefined,
+      })
+      .catch(() => undefined);
+    return {
+      success: true,
+      message: 'Platform expense reversed',
       data: { ...row, amountInPaise: row.amountInPaise.toString() },
     };
   }

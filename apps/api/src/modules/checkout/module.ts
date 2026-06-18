@@ -7,6 +7,7 @@ import { CheckoutController } from './controllers/checkout.controller';
 
 // Application – services
 import { CheckoutSessionService } from './application/services/checkout-session.service';
+import { DeferredOrderService } from './application/services/deferred-order.service';
 import { CheckoutService } from './application/services/checkout.service';
 import { StockRestoreService } from '../orders/application/services/stock-restore.service';
 import { CustomerAddressService } from './application/services/customer-address.service';
@@ -84,6 +85,7 @@ import { PaymentsModule } from '../payments/module';
 
     // Application services
     CheckoutSessionService,
+    DeferredOrderService,
     CheckoutService,
     CustomerAddressService,
     CustomerOrdersService,

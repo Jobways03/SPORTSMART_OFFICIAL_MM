@@ -506,6 +506,14 @@ export const envSchema = z.object({
   // the sweep is read-mostly + only flips rows past their due date.
   RETURN_SELLER_RESPONSE_SWEEPER_ENABLED: z.string().default('true'),
 
+  // Auto-schedule a Delhivery Reverse Pickup (RVP) when a return is approved.
+  // 'true' = the existing behaviour (ReturnReverseAutoBookHandler books the
+  // reverse AWB on returns.return.approved for Delhivery returns); flip to
+  // 'false' as a kill-switch to force every return back to the manual
+  // schedule-pickup flow without a deploy. Carrier failures already fall back
+  // to manual regardless of this flag.
+  RETURN_AUTO_RVP_ENABLED: z.string().default('true'),
+
   // Phase 3 (PR 3.5) — reconciliation crons. Each independently flagged
   // so a noisy job can be paused without disabling the others.
   // Defaults flipped to 'true' 2026-05-16 — wallet drift, stuck refunds,
@@ -678,6 +686,14 @@ export const envSchema = z.object({
   // dispute-liability black hole. Set via env to override per
   // environment (e.g. 0 in dev seeds, 2 in staging/prod).
   RETURN_QC_MIN_EVIDENCE: z.coerce.number().int().min(0).default(2),
+  // Reverse-logistics (delivery) charge billed to a SELLER on a seller-fault
+  // return — the round-trip shipping cost their fault caused. Added to the
+  // SellerDebit ON TOP of any product-value recovery, and applies EVEN when
+  // the product value is ₹0 (within-window / "seller never made the sale"),
+  // because the platform still paid the courier for the round trip. Flat
+  // per-return paise; set to 0 to disable. Only ever charged on SELLER-liable
+  // returns (logistics/platform-fault returns never bill the seller). ₹100 default.
+  RETURN_SELLER_DELIVERY_CHARGE_PAISE: z.coerce.number().int().min(0).default(10000),
   // Phase 5 (PR 5.4) — restocking-fee rate in basis points (1bps = 0.01%).
   // Applied only to "buyer-fault" reasons (CHANGED_MIND, SIZE_FIT_ISSUE).
   // 0 = off (no fee deducted from refund). 1000 = 10%.
@@ -788,6 +804,12 @@ export const envSchema = z.object({
   //     hide the ONLINE option without guessing.
   PAYMENT_EXPIRY_SWEEP_ENABLED: z.string().default('true'),
   ALLOW_ONLINE_PAYMENTS: z.string().default('true'),
+  // Option B — deferred order creation. OFF by default: the legacy
+  // create-then-pay flow stays in control until this is flipped. When ON, an
+  // ONLINE checkout creates a CheckoutSession (not an order) and the real
+  // MasterOrder is created only on gateway capture. COD / wallet-fully-covered
+  // checkouts ignore this flag (no pending-gateway gap).
+  CHECKOUT_DEFERRED_ORDER_CREATION: z.string().default('false'),
 
   // Phase 69 (2026-05-22) — Phase 67 audit Gaps #1 + #5. The
   // OrderFinalizationRecoveryCron retries tax-snapshot creation

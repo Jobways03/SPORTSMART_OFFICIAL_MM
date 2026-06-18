@@ -58,8 +58,13 @@ const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, readonly OrderStatus[]> = {
   // Canonical happy path is PENDING_PAYMENT → PLACED (via verifyPayment).
   // Auto-cancel on payment-window expiry routes to CANCELLED.
   PENDING_PAYMENT: ['PLACED', 'CANCELLED'],
-  PLACED: ['PENDING_VERIFICATION', 'VERIFIED', 'CANCELLED', 'REJECTED', 'EXCEPTION_QUEUE'],
-  PENDING_VERIFICATION: ['VERIFIED', 'CANCELLED', 'REJECTED', 'EXCEPTION_QUEUE'],
+  // PARTIALLY_CANCELLED is reachable from the pre-routing states too: an admin
+  // can cancel SOME sub-orders of a PLACED / PENDING_VERIFICATION order before
+  // it's routed. Pre-fix the roll-up computed PARTIALLY_CANCELLED but the FSM
+  // rejected it from here, so the master silently stayed PLACED while a
+  // sub-order showed CANCELLED — the "cancelled order still looks active" bug.
+  PLACED: ['PENDING_VERIFICATION', 'VERIFIED', 'CANCELLED', 'REJECTED', 'EXCEPTION_QUEUE', 'PARTIALLY_CANCELLED'],
+  PENDING_VERIFICATION: ['VERIFIED', 'CANCELLED', 'REJECTED', 'EXCEPTION_QUEUE', 'PARTIALLY_CANCELLED'],
   VERIFIED: ['ROUTED_TO_SELLER', 'CANCELLED', 'EXCEPTION_QUEUE', 'PARTIALLY_CANCELLED'],
   ROUTED_TO_SELLER: ['SELLER_ACCEPTED', 'CANCELLED', 'EXCEPTION_QUEUE', 'PARTIALLY_CANCELLED'],
   // Phase 82 — SELLER_ACCEPTED → PARTIALLY_SHIPPED when first sub-order
