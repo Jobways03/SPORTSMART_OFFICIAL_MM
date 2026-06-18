@@ -212,7 +212,7 @@ export default function CartPage() {
           <span>Cart</span>
         </div>
 
-        <h1 className="font-display text-h1 sm:text-5xl text-ink-900 leading-none">Your cart</h1>
+        <h1 className="font-display text-2xl sm:text-3xl text-ink-900 leading-tight">Your cart</h1>
         {!isEmpty && (
           <p className="mt-2 text-body text-ink-600">
             {totalItems} {totalItems === 1 ? 'item' : 'items'}

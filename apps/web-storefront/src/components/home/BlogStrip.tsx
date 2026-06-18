@@ -41,7 +41,7 @@ export async function BlogStrip() {
           <div className="text-caption uppercase tracking-[0.18em] text-ink-600 font-semibold">
             Latest reads
           </div>
-          <h2 className="mt-1 font-display text-h2 sm:text-h1 text-ink-900 leading-[1.05] tracking-tight">
+          <h2 className="mt-1 font-display text-2xl sm:text-3xl text-ink-900 leading-[1.15] tracking-tight">
             From the blog
           </h2>
         </div>

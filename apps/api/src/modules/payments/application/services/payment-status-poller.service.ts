@@ -6,6 +6,7 @@ import { EnvService } from '../../../../bootstrap/env/env.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { LeaderElectedCron } from '../../../../bootstrap/scheduler/leader-elected-cron';
 import { CronInstrumentationService } from '../../../../core/cron-observability/cron-instrumentation.service';
+import { resolveExpectedGatewayPaise } from '../../../../core/money/gateway-amount-verifier';
 import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razorpay.adapter';
 import { FranchisePublicFacade } from '../../../franchise/application/facades/franchise-public.facade';
 import { PaymentOpsFacade } from '../../../payments-ops/application/facades/payment-ops.facade';
@@ -307,12 +308,18 @@ export class PaymentStatusPollerService {
         // Phase 165 (#11) — use the BigInt paise sibling column directly;
         // Number(totalAmount) * 100 lost precision above ~₹90L.
         totalAmountInPaise: true,
+        // Needed so orphan recovery compares the captured amount against the
+        // PAYABLE (total − wallet) — a wallet-assisted order is captured net
+        // of wallet at the gateway, so comparing against the full total would
+        // wrongly flag a legitimate capture as drift.
+        gatewayAmountInPaise: true,
+        walletAmountUsedInPaise: true,
       },
       take: this.envService.getNumber('PAYMENT_POLL_ORPHAN_BATCH', 20),
     });
 
     for (const order of orphaned) {
-      const expectedInPaise = BigInt(order.totalAmountInPaise);
+      const expectedInPaise = resolveExpectedGatewayPaise(order);
       let pollError: string | null = null;
       try {
         // Phase 165 (#2) — scan EVERY gateway order id this MasterOrder has

@@ -52,6 +52,12 @@ export class OrdersPublicFacade {
         // platform's expected order total. The Decimal `totalAmount`
         // above is preserved for callers in the soak window.
         totalAmountInPaise: true,
+        // Needed by resolveExpectedGatewayPaise so the webhook capture path
+        // compares the gateway amount against the PAYABLE (total − wallet),
+        // matching the synchronous verify path. Without these, a
+        // wallet-assisted order fails the webhook amount check.
+        gatewayAmountInPaise: true,
+        walletAmountUsedInPaise: true,
         // Phase 0 (PR 0.1) — needed so the payments facade can assert the
         // gateway's payment.order_id matches the razorpay_order_id we
         // minted at checkout. Without this, a payment captured against

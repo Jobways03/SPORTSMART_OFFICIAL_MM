@@ -149,7 +149,7 @@ export default function StaticPageView() {
         .static-page-content h2,
         .static-page-content h3,
         .static-page-content h4 {
-          font-family: var(--font-display, inherit);
+          font-family: var(--font-sans, inherit);
           color: #0f1115;
           line-height: 1.2;
           margin-top: 1.5em;

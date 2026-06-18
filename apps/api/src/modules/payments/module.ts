@@ -15,6 +15,10 @@ import { OrdersModule } from '../orders/module';
 import { RazorpayModule } from '../../integrations/razorpay/razorpay.module';
 import { FranchiseModule } from '../franchise/module';
 import { NotificationsModule } from '../notifications/module';
+// Wallet refund on payment-window expiry — OrderExpiredHandler injects
+// WalletPublicFacade. WalletModule imports only Razorpay + Audit, so no cycle
+// back to Payments.
+import { WalletModule } from '../wallet/module';
 // Phase 166 (Payment Status Poller audit #1/#12) — the two event consumers
 // the poller always needed. Registered as providers so @nestjs/event-emitter
 // discovers their @OnEvent handlers (without registration they never fire).
@@ -22,7 +26,7 @@ import { OrphanRecoveredHandler } from './application/event-handlers/orphan-reco
 import { OrderExpiredHandler } from './application/event-handlers/order-expired.handler';
 
 @Module({
-  imports: [forwardRef(() => OrdersModule), RazorpayModule, forwardRef(() => FranchiseModule), NotificationsModule],
+  imports: [forwardRef(() => OrdersModule), RazorpayModule, forwardRef(() => FranchiseModule), NotificationsModule, WalletModule],
   controllers: [
     AdminPaymentsController,
     PaymentWebhookController,

@@ -68,15 +68,18 @@ describe('PaymentExpirySweepCron (Phase 66 — Gap #18)', () => {
     );
   });
 
-  it('emits orders.master.payment_expired event for each expired order', async () => {
+  it('emits payments.payment.expired event for each expired order', async () => {
     const candidates = [
       { id: 'o-1', orderNumber: 'SM-0001', customerId: 'c-1' },
     ];
     const { cron, eventBus } = build({ candidates });
     await cron.runOnce();
+    // The handler (OrderExpiredHandler) consumes `payments.payment.expired`;
+    // the previous `orders.master.payment_expired` name had no subscriber, so
+    // sweep-cancelled orders got no wallet refund / notification / audit.
     expect(eventBus.publish).toHaveBeenCalledWith(
       expect.objectContaining({
-        eventName: 'orders.master.payment_expired',
+        eventName: 'payments.payment.expired',
         aggregateId: 'o-1',
       }),
     );

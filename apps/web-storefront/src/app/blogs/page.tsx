@@ -42,7 +42,7 @@ export default function BlogsPage() {
           <span>Blog</span>
         </div>
 
-        <h1 className="font-display text-4xl sm:text-5xl text-ink-900 leading-tight tracking-tight">
+        <h1 className="font-display text-2xl sm:text-3xl text-ink-900 leading-tight tracking-tight">
           BLOG
         </h1>
 

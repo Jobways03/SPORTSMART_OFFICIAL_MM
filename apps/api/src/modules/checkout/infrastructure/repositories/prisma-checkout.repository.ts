@@ -315,6 +315,11 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
       where: { customerId },
       include: {
         items: {
+          // Only ACTIVE cart items enter checkout. Saved-for-later items must
+          // NOT be allocated, stock-reserved, totalled, or ordered — they stay
+          // in the cart for a future purchase. (Previously unfiltered: saved
+          // items leaked into the order + had stock reserved for 15 min.)
+          where: { savedForLater: false },
           include: {
             product: {
               select: {
@@ -754,9 +759,17 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
       // Create sub-orders per fulfillment node (seller or franchise)
       const createdSubOrders: PlaceOrderTransactionResult['createdSubOrders'] = [];
       for (const [_groupKey, group] of Object.entries(input.fulfillmentGroups)) {
-        let subTotal = 0;
+        // Accumulate the sub-order subtotal in INTEGER PAISE (sum of the
+        // per-item paise mirrors), then derive the Decimal `subTotal` from it.
+        // Summing Float64 rupees here drifted by a paise or two vs the sum of
+        // the per-item paise, so Σ(subOrder.subTotalInPaise) could fail to
+        // equal the parent order total — breaking per-sub-order refund /
+        // settlement splits on multi-seller orders. Paise-first makes the
+        // Decimal and BigInt siblings exactly consistent.
+        let subTotalPaise = 0n;
         const orderItemsData = group.items.map((item) => {
-          subTotal += item.totalPrice;
+          const itemTotalPaise = BigInt(Math.round(Number(item.totalPrice) * 100));
+          subTotalPaise += itemTotalPaise;
           return {
             productId: item.productId,
             variantId: item.variantId,
@@ -774,12 +787,15 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
             totalPrice: item.totalPrice,
             // Phase B (P0.1) — paise mirrors of the decimal fields.
             unitPriceInPaise: BigInt(Math.round(Number(item.unitPrice) * 100)),
-            totalPriceInPaise: BigInt(Math.round(Number(item.totalPrice) * 100)),
+            totalPriceInPaise: itemTotalPaise,
             // stockReservationId is populated by the service AFTER
             // catalogFacade.confirmReservation succeeds (audit Gap
             // #10). Null at create time.
           };
         });
+        // Decimal rupees derived from the exact paise sum (paise is integer,
+        // so this is lossless and round(subTotal*100) === subTotalPaise).
+        const subTotal = Number(subTotalPaise) / 100;
 
         const slaHours = group.acceptSlaHours ?? ACCEPT_SLA_HOURS_DEFAULT;
         const acceptDeadlineAt = new Date(
@@ -787,16 +803,19 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
         );
 
         const subOrder = await tx.subOrder.create({
-          // Dual-write the paise sibling (subTotalInPaise) like the legacy path
-          // below. Pre-fix this "modern" path wrote only the Decimal subTotal,
-          // leaving subTotalInPaise=0 — which silently skipped the cancel→refund
-          // (it guards on subTotalInPaise > 0). applyPaise derives it from subTotal.
+          // subTotalInPaise is written DIRECTLY from the exact paise sum (not
+          // left to applyPaise's flag-gated derivation) so it is correct even
+          // when MONEY_DUAL_WRITE_ENABLED is off — the cancel→refund path
+          // guards on subTotalInPaise > 0, so a 0 here would silently skip a
+          // customer's refund. applyPaise still runs for any other registered
+          // siblings and re-derives the same value harmlessly.
           data: this.moneyDualWrite.applyPaise('subOrder', {
             masterOrderId: masterOrder.id,
             sellerId: group.nodeType === 'SELLER' ? group.nodeId : null,
             franchiseId: group.nodeType === 'FRANCHISE' ? group.nodeId : null,
             fulfillmentNodeType: group.nodeType,
             subTotal,
+            subTotalInPaise: subTotalPaise,
             paymentStatus: 'PENDING',
             fulfillmentStatus: 'UNFULFILLED',
             acceptStatus: 'OPEN',
@@ -892,6 +911,10 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
         select: {
           id: true,
           items: {
+            // Snapshot only the ACTIVE items that became this order — a
+            // saved-for-later item is not part of the purchase and must
+            // neither be archived onto the order nor (below) deleted.
+            where: { savedForLater: false },
             select: {
               id: true,
               productId: true,
@@ -930,7 +953,11 @@ export class PrismaCheckoutRepository implements ICheckoutRepository {
             } as any,
           });
         }
-        await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
+        // Delete only the ACTIVE items that were just ordered. Saved-for-later
+        // items survive the order so the customer keeps their wishlist.
+        await tx.cartItem.deleteMany({
+          where: { cartId: cart.id, savedForLater: false },
+        });
         cartCleared = true;
         // Best-effort: backfill sourceCartId here if the service
         // didn't pre-resolve it (the service path normally does).

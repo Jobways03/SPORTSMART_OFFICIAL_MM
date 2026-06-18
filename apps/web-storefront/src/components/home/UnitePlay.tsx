@@ -30,7 +30,7 @@ export function UnitePlay({ content = {}, slots = [] }: Props) {
         <div className="text-caption uppercase tracking-[0.18em] text-ink-600 font-semibold">
           Multi-sport
         </div>
-        <h2 className="mt-1 font-display text-h2 sm:text-h1 text-ink-900 leading-[1.05] tracking-tight">
+        <h2 className="mt-1 font-display text-2xl sm:text-3xl text-ink-900 leading-[1.15] tracking-tight">
           Unite & play. Shop sports gear.
         </h2>
       </div>

@@ -58,7 +58,7 @@ export function HorizontalProductCarousel({
               {eyebrow}
             </div>
           )}
-          <h2 className="mt-1 font-display text-h1 sm:text-5xl leading-[1.05] tracking-tight text-ink-900">
+          <h2 className="mt-1 font-display text-2xl sm:text-3xl leading-[1.15] tracking-tight text-ink-900">
             {title}
           </h2>
           {subtitle && (

@@ -5,7 +5,10 @@ import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
-import { assertGatewayPaymentMatchesOrder } from '../../../../core/money/gateway-amount-verifier';
+import {
+  assertGatewayPaymentMatchesOrder,
+  resolveExpectedGatewayPaise,
+} from '../../../../core/money/gateway-amount-verifier';
 import { OrdersPublicFacade } from '../../../orders/application/facades/orders-public.facade';
 import { PaymentOpsFacade } from '../../../payments-ops/application/facades/payment-ops.facade';
 
@@ -105,7 +108,10 @@ export class PaymentsPublicFacade {
       }
       try {
         assertGatewayPaymentMatchesOrder(params.gatewaySnapshot, {
-          totalAmountInPaise: BigInt(order.totalAmountInPaise),
+          // Wallet-assisted orders are charged the PAYABLE (total − wallet) at
+          // the gateway; compare against that, not the full order total, or
+          // every part-wallet online payment fails verification.
+          expectedAmountInPaise: resolveExpectedGatewayPaise(order),
           razorpayOrderId: order.razorpayOrderId,
         });
       } catch (err: any) {
@@ -123,8 +129,8 @@ export class PaymentsPublicFacade {
             // Pass paise as BigInt directly — the facade now accepts
             // number | bigint | string, so we avoid the lossy Number()
             // coercion that previously masked the last digits of any
-            // amount > ₹9 lakh.
-            expectedInPaise: order.totalAmountInPaise,
+            // amount > ₹9 lakh. Report the GATEWAY-expected (payable) amount.
+            expectedInPaise: resolveExpectedGatewayPaise(order),
             actualInPaise: BigInt(params.gatewaySnapshot.amount),
             severity: 95, // top of the queue — money safety
             description:

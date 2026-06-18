@@ -5,6 +5,9 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { profileService, CustomerProfile } from '@/services/profile.service';
+import { walletService, formatPaise } from '@/services/wallet.service';
+import { wishlistService } from '@/services/wishlist.service';
+import { apiClient } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
 
 type IconTint = 'blue' | 'emerald' | 'amber' | 'violet' | 'green' | 'rose' | 'orange';
@@ -174,6 +177,11 @@ export default function AccountHubPage() {
   const authStatus = useAuthGuard();
   const [profile, setProfile] = useState<CustomerProfile | null>(null);
   const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<{
+    orders: number | null;
+    wishlist: number | null;
+    walletPaise: number | null;
+  }>({ orders: null, wishlist: null, walletPaise: null });
 
   useEffect(() => {
     if (authStatus !== 'authed') return;
@@ -185,6 +193,23 @@ export default function AccountHubPage() {
       .catch(() => router.push('/login'))
       .finally(() => setLoading(false));
   }, [authStatus, router]);
+
+  // At-a-glance counts. Supplementary + independent: each endpoint is
+  // fault-tolerant so one slow/failing call never blocks or breaks the hub.
+  useEffect(() => {
+    if (authStatus !== 'authed') return;
+    apiClient<{ pagination: { total: number } }>('/customer/orders?page=1&limit=1')
+      .then((r) => setStats((s) => ({ ...s, orders: r.data?.pagination?.total ?? 0 })))
+      .catch(() => undefined);
+    wishlistService
+      .list(1, 1)
+      .then((r) => setStats((s) => ({ ...s, wishlist: r.data?.total ?? 0 })))
+      .catch(() => undefined);
+    walletService
+      .getWallet()
+      .then((r) => setStats((s) => ({ ...s, walletPaise: r.data?.balanceInPaise ?? 0 })))
+      .catch(() => undefined);
+  }, [authStatus]);
 
   if (loading) {
     return (
@@ -244,9 +269,28 @@ export default function AccountHubPage() {
           </div>
         )}
 
+        {profile && (
+          <div className="account-stats">
+            <Link href="/orders" className="account-stat">
+              <span className="account-stat-value tabular">{stats.orders ?? '—'}</span>
+              <span className="account-stat-label">Orders</span>
+            </Link>
+            <Link href="/account/wishlist" className="account-stat">
+              <span className="account-stat-value tabular">{stats.wishlist ?? '—'}</span>
+              <span className="account-stat-label">Wishlist</span>
+            </Link>
+            <Link href="/account/wallet" className="account-stat">
+              <span className="account-stat-value tabular">
+                {stats.walletPaise === null ? '—' : formatPaise(stats.walletPaise)}
+              </span>
+              <span className="account-stat-label">Wallet</span>
+            </Link>
+          </div>
+        )}
+
         {SECTIONS.map((section) => (
-          <div key={section.label} className="account-section">
-            <div className="account-section-label">{section.label}</div>
+          <section key={section.label} className="account-section">
+            <h2 className="account-section-label">{section.label}</h2>
             <div className="account-hub-grid">
               {section.cards.map((card) => (
                 <Link key={card.href} href={card.href} className="account-card">
@@ -261,7 +305,7 @@ export default function AccountHubPage() {
                 </Link>
               ))}
             </div>
-          </div>
+          </section>
         ))}
       </div>
     </StorefrontShell>

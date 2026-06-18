@@ -107,15 +107,20 @@ export async function openRazorpayCheckout(
 
   try {
     await loadRazorpayScript();
-  } catch (e: any) {
+  } catch {
     return {
       status: 'error',
-      error: e?.message || 'Razorpay failed to load',
+      error:
+        "Couldn't load the secure payment window — please check your connection " +
+        'and try again, or choose Cash on Delivery.',
     };
   }
 
   return new Promise<RazorpayHandoffResult>((resolve) => {
     let resolved = false;
+    // Guards the verify call from running twice if Razorpay fires the success
+    // handler more than once for a single capture.
+    let verifying = false;
     const finish = (r: RazorpayHandoffResult) => {
       if (resolved) return;
       resolved = true;
@@ -149,9 +154,21 @@ export async function openRazorpayCheckout(
         razorpay_order_id: string;
         razorpay_signature: string;
       }) => {
+        // The Razorpay SDK can fire this handler more than once for a single
+        // capture (flaky network, duplicate events). Run verify at most once.
+        if (verifying) return;
+        verifying = true;
         try {
           await apiClient('/customer/checkout/payment/verify', {
             method: 'POST',
+            // The verify endpoint is @Idempotent(): when idempotency is enabled
+            // it REQUIRES this header (a missing key is a 400, which would break
+            // every online payment). Key off the unique razorpay_payment_id so a
+            // retried verify replays the original result instead of
+            // double-processing the capture (duplicate events / loyalty / audit).
+            headers: {
+              'X-Idempotency-Key': `verify-${resp.razorpay_payment_id}`,
+            },
             body: JSON.stringify({
               razorpayOrderId: resp.razorpay_order_id,
               razorpayPaymentId: resp.razorpay_payment_id,

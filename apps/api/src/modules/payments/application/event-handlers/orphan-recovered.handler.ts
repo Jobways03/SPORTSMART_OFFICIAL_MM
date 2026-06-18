@@ -6,6 +6,7 @@ import { DomainEvent } from '../../../../bootstrap/events/domain-event.interface
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { PaymentOpsFacade } from '../../../payments-ops/application/facades/payment-ops.facade';
 import { PaymentLifecycleService } from '../services/payment-lifecycle.service';
+import { resolveExpectedGatewayPaise } from '../../../../core/money/gateway-amount-verifier';
 
 /**
  * Phase 166 (Payment Status Poller audit #1) — the consumer the poller's
@@ -57,6 +58,10 @@ export class OrphanRecoveredHandler {
           orderStatus: true,
           paymentStatus: true,
           totalAmountInPaise: true,
+          // Compare the captured amount against the PAYABLE (total − wallet),
+          // matching the verify / webhook paths for wallet-assisted orders.
+          gatewayAmountInPaise: true,
+          walletAmountUsedInPaise: true,
           orderNumber: true,
           customerId: true,
           paymentMethod: true,
@@ -76,7 +81,7 @@ export class OrphanRecoveredHandler {
             masterOrderId: order.id,
             orderNumber: order.orderNumber,
             providerPaymentId: p.razorpayPaymentId,
-            expectedInPaise: order.totalAmountInPaise,
+            expectedInPaise: resolveExpectedGatewayPaise(order),
             actualInPaise: p.capturedAmountInPaise,
             severity: 99,
             description:
@@ -97,7 +102,7 @@ export class OrphanRecoveredHandler {
       // would SILENTLY fail to confirm → the order gets cancel-expired (the
       // exact money-loss this handler exists to prevent). Fail LOUD instead:
       // open a refund-grade alert so finance reconciles a real captured payment.
-      const expected = BigInt(order.totalAmountInPaise);
+      const expected = resolveExpectedGatewayPaise(order);
       if (!/^\d+$/.test(String(p.capturedAmountInPaise ?? ''))) {
         this.logger.error(
           `[orphan-confirm] malformed capturedAmountInPaise "${p.capturedAmountInPaise}" ` +

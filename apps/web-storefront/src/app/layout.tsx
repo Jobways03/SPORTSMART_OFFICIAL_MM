@@ -1,5 +1,5 @@
 import type { Metadata, Viewport } from 'next';
-import { Inter, Bebas_Neue, Permanent_Marker } from 'next/font/google';
+import { Inter, Permanent_Marker } from 'next/font/google';
 import { ModalProvider } from '@sportsmart/ui';
 import { ServiceWorkerRegister } from './_components/sw-register';
 import { GlobalErrorNormalizer } from './_components/global-error-normalizer';
@@ -10,13 +10,6 @@ import '../styles/storefront.css';
 const inter = Inter({
   subsets: ['latin'],
   variable: '--font-sans',
-  display: 'swap',
-});
-
-const bebas = Bebas_Neue({
-  subsets: ['latin'],
-  weight: '400',
-  variable: '--font-display',
   display: 'swap',
 });
 
@@ -138,7 +131,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${inter.variable} ${bebas.variable} ${permanentMarker.variable}`}>
+    <html lang="en" className={`${inter.variable} ${permanentMarker.variable}`}>
       <body className="bg-white text-ink-900 antialiased">
         {/* Sitewide structured data — server-rendered so crawlers can read it. */}
         {/* eslint-disable-next-line react/no-danger */}

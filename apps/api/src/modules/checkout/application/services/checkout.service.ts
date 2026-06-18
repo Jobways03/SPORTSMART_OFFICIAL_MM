@@ -12,7 +12,10 @@ import {
   ConflictAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
-import { assertGatewayPaymentMatchesOrder } from '../../../../core/money/gateway-amount-verifier';
+import {
+  assertGatewayPaymentMatchesOrder,
+  resolveExpectedGatewayPaise,
+} from '../../../../core/money/gateway-amount-verifier';
 import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 import { assertTransition } from '../../../../core/fsm/status-transitions';
 import {
@@ -62,6 +65,7 @@ import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razo
 // for process.env directly from a service.
 import { RazorpayClient } from '../../../../integrations/razorpay/clients/razorpay.client';
 import { CodRuleEngine } from '../../../cod/application/services/cod-rule-engine.service';
+import { CodPublicFacade } from '../../../cod/application/facades/cod-public.facade';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { StockRestoreService } from '../../../orders/application/services/stock-restore.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
@@ -121,6 +125,10 @@ export class CheckoutService {
     // auto-logs every evaluation to cod_decision_log, so there's no
     // need for a separate audit call here.
     private readonly codRuleEngine: CodRuleEngine,
+    // Per-seller COD eligibility (SELLER_DENY, seller-active, serviceability,
+    // value min/max, abuse counter). Used at place-order to gate COD per
+    // fulfillment node, not just once at cart level.
+    private readonly codFacade: CodPublicFacade,
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
     private readonly redis: RedisService,
@@ -896,15 +904,71 @@ export class CheckoutService {
         (sum, it) => sum + (it.lineTotal ?? 0),
         0,
       );
-      const eligibility = await this.codRuleEngine.evaluate({
-        pincode,
-        customerId: userId,
-        orderTotalInr,
-      });
-      if (!eligibility.eligible) {
+
+      // Order-level value guardrails (env). The rule engine has a VALUE_LIMIT
+      // (max) rule type but NO minimum rule type, so the configured
+      // COD_FALLBACK_MIN_ORDER_VALUE_INR was never enforced at checkout — a ₹1
+      // COD order slipped through. Enforce both bounds for EVERY COD cart
+      // (covers franchise-only carts, where the per-seller facade loop below
+      // doesn't run).
+      const codMaxInr = this.env.getNumber('COD_FALLBACK_MAX_ORDER_VALUE_INR', 10000);
+      const codMinInr = this.env.getNumber('COD_FALLBACK_MIN_ORDER_VALUE_INR', 100);
+      if (orderTotalInr < codMinInr) {
         throw new BadRequestAppException(
-          `COD not available for this order: ${eligibility.reason ?? 'blocked by COD rule'}`,
+          `COD is not available below ₹${codMinInr}. Please pay online for smaller orders.`,
         );
+      }
+      if (orderTotalInr > codMaxInr) {
+        throw new BadRequestAppException(
+          `COD is not available above ₹${codMaxInr}. Please pay online for this order.`,
+        );
+      }
+
+      // Per-fulfillment-node COD eligibility. The previous single cart-level
+      // codRuleEngine.evaluate() omitted sellerId, so admin SELLER_DENY rules
+      // (and seller-active / per-seller serviceability / abuse) were silently
+      // bypassed — a seller flagged COD-ineligible still received COD orders in
+      // a multi-seller cart. Evaluate each SELLER node through the full facade.
+      const codSellerIds = Array.from(
+        new Set(
+          session.items
+            .filter((i) => i.allocatedNodeType !== 'FRANCHISE' && i.allocatedSellerId)
+            .map((i) => i.allocatedSellerId as string),
+        ),
+      );
+      for (const sellerId of codSellerIds) {
+        const verdict = await this.codFacade.evaluateCodEligibility({
+          customerId: userId,
+          sellerId,
+          orderValue: orderTotalInr,
+          pincode,
+        });
+        if (!verdict.allowed) {
+          throw new BadRequestAppException(
+            `COD not available for this order: ${verdict.reasons.join('; ')}`,
+          );
+        }
+      }
+
+      // FRANCHISE nodes (and pure-franchise carts) — the facade's seller-row /
+      // seller-service-area lookups don't apply to franchises, so run the
+      // admin rule engine directly (pincode / value / customer rules; sellerId
+      // omitted by design — SELLER_DENY is a seller concept). Also covers the
+      // case where there were NO seller nodes so the loop above ran zero times.
+      const hasFranchiseNode = session.items.some(
+        (i) => i.allocatedNodeType === 'FRANCHISE',
+      );
+      if (hasFranchiseNode || codSellerIds.length === 0) {
+        const verdict = await this.codRuleEngine.evaluate({
+          pincode,
+          customerId: userId,
+          orderTotalInr,
+        });
+        if (!verdict.eligible) {
+          throw new BadRequestAppException(
+            `COD not available for this order: ${verdict.reason ?? 'blocked by COD rule'}`,
+          );
+        }
       }
     }
 
@@ -1244,16 +1308,12 @@ export class CheckoutService {
           this.logger.warn(
             `Idempotency conflict resolved for user ${userId}; returning existing order ${existing.orderNumber}`,
           );
-          // Release discount reservation just in case the conflict
-          // path leaked it (best-effort).
-          if (discountReservationId) {
-            try {
-              await this.discountReservation.release({
-                redemptionId: discountReservationId,
-                reason: 'CHECKOUT_FAILED',
-              });
-            } catch { /* ignore */ }
-          }
+          // Do NOT release the discount reservation here. It is keyed on
+          // session.createdAt, so this losing concurrent request shares the
+          // SAME reservation row as the winner (the order-creating request),
+          // which owns its lifecycle (commit on success / release on its own
+          // failure). Releasing here races that commit and can flip a valid
+          // redemption to RELEASED — coupon usage silently uncounted.
           return {
             orderNumber: existing.orderNumber,
             totalAmount: existing.totalAmount,
@@ -1318,6 +1378,34 @@ export class CheckoutService {
         }
       }
       throw err;
+    }
+
+    // Idempotency fast-path: the repo found an existing order with this
+    // deterministic key (a concurrent double-submit / retry where the original
+    // already committed). Its post-tx side effects — stock confirm, wallet
+    // debit, Razorpay order, discount commit, finalize, events — ALL ran during
+    // the original placement. Re-running them here would double-deduct stock,
+    // double-debit the wallet, and mint a second Razorpay order. Short-circuit
+    // exactly like the IDEMPOTENCY_CONFLICT path: release THIS request's
+    // orphaned discount reservation and return the existing order's summary.
+    if (result.reusedExistingOrder) {
+      this.logger.warn(
+        `Reused existing order ${result.orderNumber} for user ${userId} (idempotent replay); skipping post-tx side effects.`,
+      );
+      // Do NOT release the discount reservation here. The reservation is keyed
+      // on session.createdAt, so this concurrent duplicate shares the SAME
+      // reservation row as the order-creating request — which owns its
+      // lifecycle (commits it on success, releases it on its own failure).
+      // Releasing here would race that commit and flip a valid redemption to
+      // RELEASED (lost coupon usage count).
+      return {
+        orderNumber: result.orderNumber,
+        totalAmount: result.totalAmount,
+        walletPaidAmount: 0,
+        itemCount: result.itemCount,
+        paymentMethod: method,
+        idempotencyReplay: true,
+      };
     }
 
     // Confirm all seller reservations (deducts from actual stockQty)
@@ -1420,6 +1508,28 @@ export class CheckoutService {
           }
         }
       });
+      // Release the FRANCHISE holds placed at initiate. These are ledger
+      // reservations (no StockReservation entity), so they're untouched by the
+      // seller restoreForReservation loop above — without this they'd sit
+      // locked until the 15-min cleanup cron, stranding franchise stock for an
+      // order that's now CANCELLED. Mirrors the placeOrderTransaction-failure
+      // compensation path. Best-effort; FranchiseReservationCleanupService is
+      // the TTL backstop.
+      for (const item of session.items) {
+        if (item.allocatedNodeType === 'FRANCHISE' && item.allocatedSellerId) {
+          try {
+            await this.franchiseFacade.unreserveStock(
+              item.allocatedSellerId,
+              item.productId,
+              item.variantId,
+              item.quantity,
+              item.reservationId ?? undefined,
+            );
+          } catch {
+            /* best-effort — cleanup cron releases stragglers */
+          }
+        }
+      }
       // Release the discount reservation too — order is dead.
       if (discountReservationId) {
         try {
@@ -1837,6 +1947,16 @@ export class CheckoutService {
           data: this.moneyDualWrite.applyPaise('masterOrder', {
             razorpayOrderId: razorpayOrder.providerOrderId,
             paymentExpiresAt,
+            // PENDING → CREATED: the gateway order intent is minted (modal not
+            // yet completed). Lets the expiry sweep / analytics distinguish
+            // "Razorpay order created, awaiting customer" from a bare PENDING.
+            // verify + webhook both accept CREATED as a pre-paid state.
+            paymentStatus: 'CREATED',
+            // Stamp the EXACT paise we asked the gateway to capture (payable
+            // = total − wallet). Written directly (passes through applyPaise
+            // untouched — not a registry field), so verify is correct for
+            // wallet-assisted orders AND independent of MONEY_DUAL_WRITE.
+            gatewayAmountInPaise: BigInt(Math.round(payableInRupees * 100)),
           }),
         });
 
@@ -2137,7 +2257,14 @@ export class CheckoutService {
             `(razorpay_order ${input.razorpayOrderId}, payment ${input.razorpayPaymentId}). ` +
             `Computed HMAC did not match the signature provided.`,
         })
-        .catch(() => undefined);
+        // Money-safety alert: a write failure must NOT be silent — log LOUDLY
+        // so a degraded alert store is visible to ops (the throw below is the
+        // load-bearing guard; this just preserves observability).
+        .catch((alertErr) =>
+          this.logger.error(
+            `Failed to record SIGNATURE_INVALID alert for ${order.orderNumber}: ${(alertErr as Error)?.message ?? alertErr}`,
+          ),
+        );
       throw new BadRequestAppException('Payment verification failed — invalid signature');
     }
 
@@ -2177,7 +2304,11 @@ export class CheckoutService {
 
     try {
       assertGatewayPaymentMatchesOrder(gatewayPayment, {
-        totalAmountInPaise: BigInt(order.totalAmountInPaise),
+        // The gateway was charged the PAYABLE (total − wallet), not the full
+        // order total. Comparing against totalAmountInPaise rejected every
+        // wallet-assisted online payment. resolveExpectedGatewayPaise reads
+        // the authoritative gatewayAmountInPaise (or the net fallback).
+        expectedAmountInPaise: resolveExpectedGatewayPaise(order),
         razorpayOrderId: input.razorpayOrderId,
       });
     } catch (err: any) {
@@ -2204,14 +2335,22 @@ export class CheckoutService {
           // Phase 165 (#12) — pass BigInt paise directly; the facade accepts
           // number | bigint | string, so we avoid the lossy Number() coercion
           // that truncated amounts above ~₹90L.
-          expectedInPaise: BigInt(order.totalAmountInPaise),
+          // Report the GATEWAY-expected amount (payable), not the full order
+          // total, so finance sees the real comparison baseline.
+          expectedInPaise: resolveExpectedGatewayPaise(order),
           actualInPaise: gatewayPayment.amount,
           severity: 95,
           description:
             `Gateway verification rejected for order ${order.orderNumber}: ${err.message} ` +
             `(razorpay_order ${input.razorpayOrderId}, payment ${input.razorpayPaymentId}).`,
         })
-        .catch(() => undefined);
+        // Money-safety alert (AMOUNT_MISMATCH/SIGNATURE) — log on write failure
+        // instead of swallowing, so finance loses no visibility on anomalies.
+        .catch((alertErr) =>
+          this.logger.error(
+            `Failed to record gateway-mismatch alert for ${order.orderNumber}: ${(alertErr as Error)?.message ?? alertErr}`,
+          ),
+        );
       throw err;
     }
 
@@ -2306,7 +2445,8 @@ export class CheckoutService {
         status: 'SUCCESS',
         providerOrderId: input.razorpayOrderId,
         providerPaymentId: input.razorpayPaymentId,
-        amountInPaise: BigInt(order.totalAmountInPaise),
+        // The captured (gateway) amount = payable, not the full order total.
+        amountInPaise: resolveExpectedGatewayPaise(order),
       })
       .catch(() => undefined);
 
@@ -2324,7 +2464,17 @@ export class CheckoutService {
           amount: Number(order.totalAmount),
         },
       })
-      .catch(() => {});
+      // The order is already durably PAID at this point. If this publish fails
+      // (or the process dies before it), downstream effects (commission lock,
+      // confirmation email, loyalty) are missed and the poller won't re-find
+      // the order (razorpayPaymentId is set). Log LOUDLY so ops can replay.
+      // The durable exactly-once fix is the transactional outbox (OUTBOX_ENABLED)
+      // — emit the event in the same tx as the CAS flip; tracked separately.
+      .catch((pubErr) =>
+        this.logger.error(
+          `payments.payment.captured publish FAILED for PAID order ${order.orderNumber}: ${(pubErr as Error)?.message ?? pubErr} — downstream side-effects may be missed`,
+        ),
+      );
 
     // Phase 165 (#15) — compliance audit on a successful payment verification
     // (PaymentAttempt is observability; this is the actor-attributed ledger).
@@ -2391,10 +2541,16 @@ export class CheckoutService {
     });
     const idempotencyKey = `checkout-order-${order.id}-retry-${retryIndex}`;
 
+    // Charge the PAYABLE (total − wallet), NOT the full total. The wallet
+    // portion was already debited at place-order; re-charging the full amount
+    // on retry would over-collect and then fail verification.
+    // resolveExpectedGatewayPaise returns the original gatewayAmountInPaise
+    // (or the net fallback for rows predating that column).
+    const gatewayChargeInPaise = resolveExpectedGatewayPaise(order);
+
     // Create a new Razorpay order (previous one may have expired on Razorpay side).
-    // Phase 0 (PR 0.5) — pass paise from the order's BigInt column directly.
     const razorpayOrder = await this.razorpayAdapter.createOrder({
-      amountInPaise: BigInt(order.totalAmountInPaise),
+      amountInPaise: gatewayChargeInPaise,
       receipt: order.orderNumber,
       notes: {
         masterOrderId: order.id,
@@ -2414,6 +2570,8 @@ export class CheckoutService {
       data: this.moneyDualWrite.applyPaise('masterOrder', {
         razorpayOrderId: razorpayOrder.providerOrderId,
         paymentExpiresAt: newExpiry,
+        // Keep the authoritative gateway charge in sync with the new order.
+        gatewayAmountInPaise: gatewayChargeInPaise,
       }),
     });
 
@@ -2424,7 +2582,9 @@ export class CheckoutService {
     // (previously invisible — a real money-loss blind spot).
     await this.paymentLifecycle.recordOnlinePaymentCreated({
       masterOrderId: order.id,
-      amountInPaise: BigInt(order.totalAmountInPaise),
+      // Payment.amountInPaise is the amount sent to the gateway (payable),
+      // so orphan-recovery can match it against the captured amount.
+      amountInPaise: gatewayChargeInPaise,
       providerOrderId: razorpayOrder.providerOrderId,
       idempotencyKey,
       expiresAt: newExpiry,
@@ -2436,7 +2596,7 @@ export class CheckoutService {
         kind: 'CREATE_ORDER',
         status: 'SUCCESS',
         providerOrderId: razorpayOrder.providerOrderId,
-        amountInPaise: BigInt(order.totalAmountInPaise),
+        amountInPaise: gatewayChargeInPaise,
       })
       .catch(() => undefined);
 

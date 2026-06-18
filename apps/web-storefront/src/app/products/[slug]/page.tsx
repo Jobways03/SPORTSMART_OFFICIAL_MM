@@ -378,14 +378,14 @@ export default function ProductDetailPage() {
           </div>
 
           {/* Info */}
-          <div>
+          <div className="min-w-0">
             {product.brand && (
               <div className="text-caption uppercase tracking-[0.18em] text-ink-600 font-semibold">
                 {product.brand.name}
               </div>
             )}
             <div className="mt-2 flex items-start justify-between gap-4">
-              <h1 className="font-display text-4xl sm:text-5xl text-ink-900 leading-[1.05]">
+              <h1 className="font-display text-2xl sm:text-3xl text-ink-900 leading-[1.15]">
                 {product.title}
               </h1>
               {/* Phase 202 (#1) — PDP wishlist heart. Saves the selected
