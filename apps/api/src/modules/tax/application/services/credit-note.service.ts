@@ -307,6 +307,9 @@ export class CreditNoteService {
         // Phase 164 (#8) — cess now reverses proportionally instead of
         // being dropped to 0n.
         originalCessInPaise: snapshot.cessAmountInPaise,
+        // Inclusive snapshots bake GST into gross — the reversal must not
+        // re-add it on top (would over-reverse the credit note + GSTR-8).
+        priceIncludesTax: snapshot.priceIncludesTax,
         purchasedQuantity: purchasedQty,
         returnedQuantity: returnedQty,
       });

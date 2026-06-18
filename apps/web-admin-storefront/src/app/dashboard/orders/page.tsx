@@ -54,10 +54,13 @@ const ORDER_STATUS_OPTIONS = [
   { value: 'DELIVERED', label: 'Delivered' },
   { value: 'CANCELLED', label: 'Cancelled' },
   { value: 'EXCEPTION_QUEUE', label: 'Exception Queue' },
+  // Pre-payment ONLINE carts — hidden from the default list; pick this to view.
+  { value: 'PENDING_PAYMENT', label: 'Pending Payment (unpaid)' },
 ];
 
 const orderStatusColor = (status: string): string => {
   switch (status) {
+    case 'PENDING_PAYMENT': return '#94a3b8';
     case 'PLACED': return '#d97706';
     case 'PENDING_VERIFICATION': return '#d97706';
     case 'VERIFIED': return '#2563eb';
@@ -66,6 +69,7 @@ const orderStatusColor = (status: string): string => {
     case 'DISPATCHED': return '#0d9488';
     case 'DELIVERED': return '#15803d';
     case 'CANCELLED': return '#dc2626';
+    case 'PARTIALLY_CANCELLED': return '#c2410c';
     case 'EXCEPTION_QUEUE': return '#dc2626';
     // Return-derived statuses (synthetic on the client — there's no
     // RETURN_* entry on the master order enum yet, but we surface the
@@ -80,6 +84,7 @@ const orderStatusColor = (status: string): string => {
 
 const orderStatusLabel = (status: string): string => {
   switch (status) {
+    case 'PENDING_PAYMENT': return 'Pending Payment';
     case 'PLACED': return 'Placed';
     case 'PENDING_VERIFICATION': return 'Pending Verification';
     case 'VERIFIED': return 'Verified';
@@ -88,6 +93,7 @@ const orderStatusLabel = (status: string): string => {
     case 'DISPATCHED': return 'Dispatched';
     case 'DELIVERED': return 'Delivered';
     case 'CANCELLED': return 'Cancelled';
+    case 'PARTIALLY_CANCELLED': return 'Partially Cancelled';
     case 'EXCEPTION_QUEUE': return 'Exception Queue';
     case 'RETURN_REQUESTED': return 'Return Requested';
     case 'RETURN_IN_PROGRESS': return 'Return In Progress';
@@ -287,6 +293,8 @@ export default function OrdersPage() {
             { value: 'DELIVERED', label: 'Delivered' },
             { value: 'EXCEPTION_QUEUE', label: 'Exception Queue', count: exceptionCount },
             { value: 'CANCELLED', label: 'Cancelled' },
+            // Pre-payment carts — excluded from the default list; click to view.
+            { value: 'PENDING_PAYMENT', label: 'Pending Payment' },
           ].map((tab) => {
             const active = statusFilter === tab.value;
             return (
@@ -440,15 +448,30 @@ export default function OrdersPage() {
                     // cancelled/rejected even if the master orderStatus didn't
                     // roll up (pre-FSM-fix stuck orders), matching the customer
                     // side + the fulfillment column.
+                    const cancelledSubCount = order.subOrders.filter(
+                      s => s.fulfillmentStatus === 'CANCELLED' || s.acceptStatus === 'REJECTED',
+                    ).length;
                     const allSubOrdersCancelled =
                       order.subOrders.length > 0 &&
-                      order.subOrders.every(
-                        s => s.fulfillmentStatus === 'CANCELLED' || s.acceptStatus === 'REJECTED',
-                      );
+                      cancelledSubCount === order.subOrders.length;
+                    // Some-but-not-all cancelled on a still-active master =
+                    // partially cancelled. Surfaces both new FSM-rolled-up
+                    // PARTIALLY_CANCELLED masters AND pre-fix stuck rows whose
+                    // master stayed PLACED/PENDING_VERIFICATION (so the badge
+                    // matches the fulfillment column without a DB backfill).
+                    const PRE_ROUTING_ACTIVE = [
+                      'PLACED', 'PENDING_VERIFICATION', 'VERIFIED', 'ROUTED_TO_SELLER',
+                    ];
+                    const someSubOrdersCancelled =
+                      cancelledSubCount > 0 && cancelledSubCount < order.subOrders.length;
                     const baseStatus =
                       allSubOrdersCancelled || order.orderStatus === 'CANCELLED'
                         ? 'CANCELLED'
-                        : order.orderStatus || (order.verified ? 'VERIFIED' : 'PLACED');
+                        : order.orderStatus === 'PARTIALLY_CANCELLED' ||
+                            (someSubOrdersCancelled &&
+                              PRE_ROUTING_ACTIVE.includes(order.orderStatus ?? ''))
+                          ? 'PARTIALLY_CANCELLED'
+                          : order.orderStatus || (order.verified ? 'VERIFIED' : 'PLACED');
                     const effectiveStatus = latestReturn
                       ? returnToOrderStatus(latestReturn.status)
                       : baseStatus;

@@ -19,6 +19,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { OnEvent } from '@nestjs/event-emitter';
 
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 import { DomainEvent } from '../../../../bootstrap/events/domain-event.interface';
 import { IdempotentHandler } from '../../../../bootstrap/events/outbox/idempotent-handler.decorator';
 import { EventDeduplicationService } from '../../../../bootstrap/events/outbox/event-deduplication.service';
@@ -39,11 +40,16 @@ export class ReturnReverseAutoBookHandler {
     @Inject(COURIER_GATEWAY_RESOLVER)
     private readonly resolver: CourierGatewayResolver,
     private readonly eventBus: EventBusService,
+    private readonly env: EnvService,
   ) {}
 
   @OnEvent('returns.return.approved')
   @IdempotentHandler()
   async onReturnApproved(event: DomainEvent): Promise<void> {
+    // Kill-switch — when off, every return falls back to the manual
+    // schedule-pickup flow (no carrier call). Defaults on (existing behaviour).
+    if (!this.env.getBoolean('RETURN_AUTO_RVP_ENABLED', true)) return;
+
     const payload = (event.payload as any) ?? {};
     const returnId = payload.returnId as string | undefined;
     if (!returnId) return;

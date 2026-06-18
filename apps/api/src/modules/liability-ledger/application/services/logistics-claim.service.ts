@@ -6,6 +6,23 @@ import type {
   LogisticsClaimStatus,
 } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { BadRequestAppException } from '../../../../core/exceptions';
+
+/**
+ * Allowed logistics-claim state transitions. The recovery lifecycle is a
+ * strict DAG — PENDING → SUBMITTED → ACCEPTED → RECOVERED — with REJECTED
+ * reachable from any in-flight state (courier denies the claim) and
+ * CANCELLED only from PENDING (withdrawn before it's filed). Terminal
+ * states (RECOVERED / REJECTED / CANCELLED) accept no further moves.
+ */
+const CLAIM_TRANSITIONS: Record<LogisticsClaimStatus, LogisticsClaimStatus[]> = {
+  PENDING: ['SUBMITTED', 'REJECTED', 'CANCELLED'],
+  SUBMITTED: ['ACCEPTED', 'REJECTED'],
+  ACCEPTED: ['RECOVERED', 'REJECTED'],
+  RECOVERED: [],
+  REJECTED: [],
+  CANCELLED: [],
+};
 
 /**
  * Logistics claim ledger. Created when a customer-favoured dispute is
@@ -83,6 +100,21 @@ export class LogisticsClaimService {
     nextStatus: LogisticsClaimStatus,
     extra?: { recoveredAt?: Date; notes?: string },
   ): Promise<LogisticsClaim> {
+    const current = await this.prisma.logisticsClaim.findUnique({
+      where: { id },
+    });
+    if (!current) {
+      throw new BadRequestAppException(`Logistics claim ${id} not found`);
+    }
+    // Idempotent no-op: re-issuing the current status just returns the row.
+    if (current.status === nextStatus) return current;
+    const allowed = CLAIM_TRANSITIONS[current.status] ?? [];
+    if (!allowed.includes(nextStatus)) {
+      throw new BadRequestAppException(
+        `Illegal logistics-claim transition ${current.status} → ${nextStatus}. ` +
+          `From ${current.status} you can move to: ${allowed.join(', ') || '(none — terminal)'}.`,
+      );
+    }
     return this.prisma.logisticsClaim.update({
       where: { id },
       data: {

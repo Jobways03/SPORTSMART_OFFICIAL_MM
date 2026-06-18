@@ -111,7 +111,7 @@ export default function TopPerformersPage() {
                       <td style={numTd}>{formatINR(s.platformMargin)}</td>
                       <td style={numTd}>{s.marginPercentage}%</td>
                       <td style={{ ...td, textAlign: 'right' }}>
-                        <Link href={`/dashboard/accounts/sellers/${s.sellerId}/overview`} style={linkBtn}>View →</Link>
+                        <Link href={`/dashboard/accounts/sellers/${s.sellerId}`} style={linkBtn}>View →</Link>
                       </td>
                     </tr>
                   ))}
@@ -147,7 +147,7 @@ export default function TopPerformersPage() {
                       <td style={numTd}>{formatINR(f.platformEarning)}</td>
                       <td style={numTd}>{f.marginPercentage}%</td>
                       <td style={{ ...td, textAlign: 'right' }}>
-                        <Link href={`/dashboard/accounts/franchises/${f.franchiseId}/overview`} style={linkBtn}>View →</Link>
+                        <Link href={`/dashboard/accounts/franchises/${f.franchiseId}`} style={linkBtn}>View →</Link>
                       </td>
                     </tr>
                   ))}

@@ -279,6 +279,9 @@ export class WalletAdjustmentService {
           originalCgstInPaise: snap.cgstAmountInPaise,
           originalSgstInPaise: snap.sgstAmountInPaise,
           originalIgstInPaise: snap.igstAmountInPaise,
+          // Inclusive snapshots bake GST into gross — keep the reversal from
+          // double-counting tax in the time-barred wallet adjustment.
+          priceIncludesTax: snap.priceIncludesTax,
           purchasedQuantity: purchased,
           returnedQuantity: returned,
         });

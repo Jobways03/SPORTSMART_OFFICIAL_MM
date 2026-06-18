@@ -219,6 +219,17 @@ export class OrdersService {
     const where: Prisma.MasterOrderWhereInput = {};
     if (paymentStatus) where.paymentStatus = paymentStatus as any;
     if (orderStatus) where.orderStatus = orderStatus as any;
+    // Option A — an ONLINE order sits at PENDING_PAYMENT before its gateway
+    // payment is captured: it's a pre-payment cart, not a real order, so it
+    // must not pollute the default admin list (ops only acts on paid orders).
+    // Hidden from the default view; shown only when explicitly requested (the
+    // "Pending Payment" tab passes orderStatus=PENDING_PAYMENT). Keyed on
+    // orderStatus, NOT paymentStatus='PENDING' — COD orders are legitimately
+    // PLACED + PENDING and must stay visible. Paid-but-stuck online orders are
+    // still recovered by PaymentStatusPollerService, independent of this view.
+    if (!orderStatus && !paymentStatus) {
+      where.orderStatus = { not: 'PENDING_PAYMENT' } as any;
+    }
     if (search) {
       where.OR = [
         { orderNumber: { contains: search, mode: 'insensitive' } },

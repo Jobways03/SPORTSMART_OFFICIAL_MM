@@ -6,6 +6,7 @@ import type {
   PlatformExpenseType,
 } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { BadRequestAppException } from '../../../../core/exceptions';
 
 /**
  * Platform-expense ledger. Used when the platform absorbs the cost:
@@ -106,5 +107,30 @@ export class PlatformExpenseService {
       `PlatformExpense ${row.id} reversed for ${args.sourceType}:${args.sourceId}: ${args.reason}`,
     );
     return 'reversed';
+  }
+
+  /**
+   * Admin-driven reversal by row id — un-books a mis-attributed absorbed
+   * cost so it no longer stands in finance reporting (e.g. the cost actually
+   * belonged to the seller/courier). Soft mark only; finance re-attributes
+   * via a manual seller debit / re-filed claim. Idempotent-safe: a second
+   * reverse is rejected rather than silently re-stamped.
+   */
+  async reverseById(id: string, reason: string): Promise<PlatformExpense> {
+    const row = await this.prisma.platformExpense.findUnique({ where: { id } });
+    if (!row) {
+      throw new BadRequestAppException(`Platform expense ${id} not found`);
+    }
+    if (row.reversedAt) {
+      throw new BadRequestAppException(
+        'Platform expense is already reversed',
+      );
+    }
+    const updated = await this.prisma.platformExpense.update({
+      where: { id },
+      data: { reversedAt: new Date(), reversalReason: reason },
+    });
+    this.logger.log(`PlatformExpense ${id} reversed by admin: ${reason}`);
+    return updated;
   }
 }

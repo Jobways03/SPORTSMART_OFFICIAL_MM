@@ -243,3 +243,61 @@ describe('calculateGstReversal — partial returns', () => {
     ).toThrow();
   });
 });
+
+describe('calculateGstReversal — tax-INCLUSIVE pricing (regression: GST double-count)', () => {
+  // Bug (2026-06-16): a tax-INCLUSIVE ₹5,000 line (5% IGST → taxable ₹4,761.90
+  // + IGST ₹238.10 baked INSIDE the ₹5,000) was reversed with the exclusive
+  // formula: taxable = gross ₹5,000, then + IGST ₹238.10 = ₹5,238.10. That
+  // over-reversed GST (inflated credit note / GSTR-8) AND produced a fractional
+  // rupee that crashed partial-VALUE refunds in toPaise. With priceIncludesTax
+  // the credit note is the ₹5,000 actually paid; the tax is carved OUT.
+  it('full inclusive return: credit note = price paid, tax carved out (not added)', () => {
+    const r = calculateGstReversal({
+      originalGrossInPaise: 500_000n, // ₹5,000 INCLUSIVE of GST
+      originalDiscountInPaise: 0n,
+      originalCgstInPaise: 0n,
+      originalSgstInPaise: 0n,
+      originalIgstInPaise: 23_810n, // ₹238.10 sitting INSIDE the ₹5,000
+      priceIncludesTax: true,
+      purchasedQuantity: 1,
+      returnedQuantity: 1,
+    });
+    expect(r.totalCreditNoteInPaise).toBe(500_000n); // ₹5,000, NOT ₹5,238.10
+    expect(r.taxableReversalInPaise).toBe(476_190n); // ₹4,761.90
+    expect(r.igstReversalInPaise).toBe(23_810n); // ₹238.10
+    // Invariant for inclusive: taxable + tax === credit note (tax is inside).
+    expect(
+      r.taxableReversalInPaise + r.totalTaxReversalInPaise,
+    ).toBe(r.totalCreditNoteInPaise);
+  });
+
+  it('exclusive path (flag omitted) is unchanged — documents the pre-fix formula', () => {
+    const r = calculateGstReversal({
+      originalGrossInPaise: 500_000n,
+      originalDiscountInPaise: 0n,
+      originalCgstInPaise: 0n,
+      originalSgstInPaise: 0n,
+      originalIgstInPaise: 23_810n,
+      // priceIncludesTax omitted → defaults to exclusive (tax on top)
+      purchasedQuantity: 1,
+      returnedQuantity: 1,
+    });
+    expect(r.totalCreditNoteInPaise).toBe(523_810n); // gross + tax (exclusive)
+  });
+
+  it('partial-QUANTITY inclusive: 1 of 2 units scales the inclusive total cleanly', () => {
+    const r = calculateGstReversal({
+      originalGrossInPaise: 1_000_000n, // 2 × ₹5,000 inclusive
+      originalDiscountInPaise: 0n,
+      originalCgstInPaise: 0n,
+      originalSgstInPaise: 0n,
+      originalIgstInPaise: 47_620n, // ₹476.20 across both units
+      priceIncludesTax: true,
+      purchasedQuantity: 2,
+      returnedQuantity: 1,
+    });
+    expect(r.totalCreditNoteInPaise).toBe(500_000n); // ₹5,000 for the 1 unit
+    expect(r.taxableReversalInPaise).toBe(476_190n); // ₹4,761.90
+    expect(r.igstReversalInPaise).toBe(23_810n); // ₹238.10
+  });
+});

@@ -844,6 +844,9 @@ export class DiscountAllocationService {
       originalCgstInPaise: BigInt(snapshot.cgstAmountInPaise),
       originalSgstInPaise: BigInt(snapshot.sgstAmountInPaise),
       originalIgstInPaise: BigInt(snapshot.igstAmountInPaise),
+      // Inclusive snapshots store gross WITH tax baked in — without this the
+      // reversal double-counts GST (inflated credit note + fractional refund).
+      priceIncludesTax: snapshot.priceIncludesTax,
       purchasedQuantity: args.purchasedQuantity,
       returnedQuantity: args.approvedQuantity,
     });

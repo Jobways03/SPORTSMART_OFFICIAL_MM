@@ -436,7 +436,21 @@ export default function RefundApprovalDetailPage() {
 
           {src && src.sourceType === 'RETURN' && (
             <Card title="Return summary">
-              <KV label="Return number" value={src.number ?? '—'} />
+              <KV
+                label="Return number"
+                value={
+                  src.number ? (
+                    <Link
+                      href={`/dashboard/returns/${row.sourceId}`}
+                      style={{ color: '#2A8595', fontWeight: 600, textDecoration: 'none' }}
+                    >
+                      {src.number}
+                    </Link>
+                  ) : (
+                    '—'
+                  )
+                }
+              />
               <KV label="Status" value={(src.status ?? '').replace(/_/g, ' ').toLowerCase()} />
               {src.orderNumber && <KV label="Order" value={src.orderNumber} />}
               {src.refundAmount && <KV label="Approved refund" value={`₹${src.refundAmount}`} />}

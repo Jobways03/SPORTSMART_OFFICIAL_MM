@@ -92,6 +92,14 @@ export default function LiabilityLedgerPage() {
     loadTab('platform_expense');
   }, [loadTab]);
 
+  // Reload every tab after a recovery action — a claim REJECT reclassifies
+  // into platform expenses, so two tabs (and the KPI strip) change at once.
+  const reloadAll = useCallback(() => {
+    loadTab('seller_debit');
+    loadTab('logistics_claim');
+    loadTab('platform_expense');
+  }, [loadTab]);
+
   const active = tabData[tab];
 
   /* ── Derived numbers ──────────────────────────────────────── */
@@ -331,11 +339,11 @@ export default function LiabilityLedgerPage() {
             )}
           </div>
         ) : tab === 'seller_debit' ? (
-          <SellerDebitTable rows={visibleRows as SellerDebitRow[]} />
+          <SellerDebitTable rows={visibleRows as SellerDebitRow[]} onChanged={reloadAll} />
         ) : tab === 'logistics_claim' ? (
-          <LogisticsClaimTable rows={visibleRows as LogisticsClaimRow[]} />
+          <LogisticsClaimTable rows={visibleRows as LogisticsClaimRow[]} onChanged={reloadAll} />
         ) : (
-          <PlatformExpenseTable rows={visibleRows as PlatformExpenseRow[]} />
+          <PlatformExpenseTable rows={visibleRows as PlatformExpenseRow[]} onChanged={reloadAll} />
         )}
       </div>
 
@@ -382,7 +390,7 @@ function KpiCard({
 
 /* ── Tables ─────────────────────────────────────────────────── */
 
-function SellerDebitTable({ rows }: { rows: SellerDebitRow[] }) {
+function SellerDebitTable({ rows, onChanged }: { rows: SellerDebitRow[]; onChanged: () => void }) {
   return (
     <div style={styles.tableScroll}>
       <table style={styles.table}>
@@ -394,6 +402,7 @@ function SellerDebitTable({ rows }: { rows: SellerDebitRow[] }) {
             <th style={styles.th}>Status</th>
             <th style={styles.th}>Reason</th>
             <th style={{ ...styles.th, textAlign: 'right' }}>Created</th>
+            <th style={{ ...styles.th, textAlign: 'right' }}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -415,6 +424,9 @@ function SellerDebitTable({ rows }: { rows: SellerDebitRow[] }) {
               <td style={{ ...styles.td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                 <RelativeTime iso={r.createdAt} />
               </td>
+              <td style={{ ...styles.td, textAlign: 'right' }}>
+                <SellerDebitActions row={r} onChanged={onChanged} />
+              </td>
             </tr>
           ))}
         </tbody>
@@ -423,7 +435,7 @@ function SellerDebitTable({ rows }: { rows: SellerDebitRow[] }) {
   );
 }
 
-function LogisticsClaimTable({ rows }: { rows: LogisticsClaimRow[] }) {
+function LogisticsClaimTable({ rows, onChanged }: { rows: LogisticsClaimRow[]; onChanged: () => void }) {
   return (
     <div style={styles.tableScroll}>
       <table style={styles.table}>
@@ -435,6 +447,7 @@ function LogisticsClaimTable({ rows }: { rows: LogisticsClaimRow[] }) {
             <th style={{ ...styles.th, textAlign: 'right' }}>Amount</th>
             <th style={styles.th}>Status</th>
             <th style={{ ...styles.th, textAlign: 'right' }}>Created</th>
+            <th style={{ ...styles.th, textAlign: 'right' }}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -456,6 +469,9 @@ function LogisticsClaimTable({ rows }: { rows: LogisticsClaimRow[] }) {
               <td style={{ ...styles.td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                 <RelativeTime iso={r.createdAt} />
               </td>
+              <td style={{ ...styles.td, textAlign: 'right' }}>
+                <LogisticsClaimActions row={r} onChanged={onChanged} />
+              </td>
             </tr>
           ))}
         </tbody>
@@ -464,7 +480,7 @@ function LogisticsClaimTable({ rows }: { rows: LogisticsClaimRow[] }) {
   );
 }
 
-function PlatformExpenseTable({ rows }: { rows: PlatformExpenseRow[] }) {
+function PlatformExpenseTable({ rows, onChanged }: { rows: PlatformExpenseRow[]; onChanged: () => void }) {
   return (
     <div style={styles.tableScroll}>
       <table style={styles.table}>
@@ -475,6 +491,7 @@ function PlatformExpenseTable({ rows }: { rows: PlatformExpenseRow[] }) {
             <th style={{ ...styles.th, textAlign: 'right' }}>Amount</th>
             <th style={styles.th}>Reason</th>
             <th style={{ ...styles.th, textAlign: 'right' }}>Created</th>
+            <th style={{ ...styles.th, textAlign: 'right' }}>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -493,10 +510,187 @@ function PlatformExpenseTable({ rows }: { rows: PlatformExpenseRow[] }) {
               <td style={{ ...styles.td, textAlign: 'right', whiteSpace: 'nowrap' }}>
                 <RelativeTime iso={r.createdAt} />
               </td>
+              <td style={{ ...styles.td, textAlign: 'right' }}>
+                <PlatformExpenseActions row={r} onChanged={onChanged} />
+              </td>
             </tr>
           ))}
         </tbody>
       </table>
+    </div>
+  );
+}
+
+/* ── Row actions (drive recovery) ───────────────────────────── */
+
+function ActionBtn({
+  label,
+  onClick,
+  busy,
+  tone = 'default',
+  title,
+}: {
+  label: string;
+  onClick: () => void;
+  busy: boolean;
+  tone?: 'default' | 'primary' | 'danger';
+  title?: string;
+}) {
+  const palette = {
+    default: { bg: '#fff', fg: '#334155', border: '#cbd5e1' },
+    primary: { bg: '#2563eb', fg: '#fff', border: '#2563eb' },
+    danger: { bg: '#fff', fg: '#b91c1c', border: '#fecaca' },
+  }[tone];
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={busy}
+      title={title}
+      style={{
+        fontSize: 11.5,
+        fontWeight: 600,
+        padding: '4px 9px',
+        borderRadius: 6,
+        border: `1px solid ${palette.border}`,
+        background: palette.bg,
+        color: palette.fg,
+        cursor: busy ? 'not-allowed' : 'pointer',
+        opacity: busy ? 0.55 : 1,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {busy ? '…' : label}
+    </button>
+  );
+}
+
+function LogisticsClaimActions({
+  row,
+  onChanged,
+}: {
+  row: LogisticsClaimRow;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const run = async (
+    toStatus: 'SUBMITTED' | 'ACCEPTED' | 'RECOVERED' | 'REJECTED',
+    msg: string,
+    needsReason?: boolean,
+  ) => {
+    let note: string | undefined;
+    if (needsReason) {
+      const r = window.prompt(msg);
+      if (r == null || !r.trim()) return;
+      note = r.trim();
+    } else if (!window.confirm(msg)) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await adminLiabilityLedgerService.transitionClaim(
+        row.id,
+        toStatus,
+        note,
+      );
+      if (!res.success) alert(res.message || 'Action failed');
+      onChanged();
+    } catch (e: unknown) {
+      const err = e as { body?: { message?: string }; message?: string };
+      alert(err?.body?.message || err?.message || 'Action failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+  const s = row.status;
+  const inFlight = s === 'PENDING' || s === 'SUBMITTED' || s === 'ACCEPTED';
+  return (
+    <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
+      {s === 'PENDING' && (
+        <ActionBtn label="Submit to courier" tone="primary" busy={busy} onClick={() => run('SUBMITTED', 'Mark this claim as submitted to the courier?')} />
+      )}
+      {s === 'SUBMITTED' && (
+        <ActionBtn label="Mark accepted" tone="primary" busy={busy} onClick={() => run('ACCEPTED', 'Courier accepted liability for this claim?')} />
+      )}
+      {s === 'ACCEPTED' && (
+        <ActionBtn label="Mark recovered" tone="primary" busy={busy} onClick={() => run('RECOVERED', 'Money received from the courier for this claim?')} />
+      )}
+      {inFlight && (
+        <ActionBtn
+          label="Reject"
+          tone="danger"
+          busy={busy}
+          title="Courier denied — cost reclassifies to a platform expense"
+          onClick={() => run('REJECTED', 'Reason the courier rejected this claim (the cost will be reclassified to a platform expense):', true)}
+        />
+      )}
+      {!inFlight && <span style={{ ...styles.muted, fontSize: 11 }}>—</span>}
+    </div>
+  );
+}
+
+function SellerDebitActions({
+  row,
+  onChanged,
+}: {
+  row: SellerDebitRow;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  if (row.status !== 'PENDING') {
+    return <span style={{ ...styles.muted, fontSize: 11 }}>—</span>;
+  }
+  const cancel = async () => {
+    const reason = window.prompt('Reason for cancelling this pending seller debit (seller contested):');
+    if (reason == null || !reason.trim()) return;
+    setBusy(true);
+    try {
+      const res = await adminLiabilityLedgerService.cancelDebit(row.id, reason.trim());
+      if (!res.success) alert(res.message || 'Cancel failed');
+      onChanged();
+    } catch (e: unknown) {
+      const err = e as { body?: { message?: string }; message?: string };
+      alert(err?.body?.message || err?.message || 'Cancel failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <ActionBtn label="Cancel" tone="danger" busy={busy} onClick={cancel} title="Cancel this pending debit before it nets into a settlement" />
+    </div>
+  );
+}
+
+function PlatformExpenseActions({
+  row,
+  onChanged,
+}: {
+  row: PlatformExpenseRow;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  if (row.reversedAt) {
+    return <span style={{ ...styles.muted, fontSize: 11 }}>Reversed</span>;
+  }
+  const reverse = async () => {
+    const reason = window.prompt('Reason for reversing (un-booking) this platform expense:');
+    if (reason == null || !reason.trim()) return;
+    setBusy(true);
+    try {
+      const res = await adminLiabilityLedgerService.reverseExpense(row.id, reason.trim());
+      if (!res.success) alert(res.message || 'Reverse failed');
+      onChanged();
+    } catch (e: unknown) {
+      const err = e as { body?: { message?: string }; message?: string };
+      alert(err?.body?.message || err?.message || 'Reverse failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <ActionBtn label="Reverse" tone="danger" busy={busy} onClick={reverse} title="Un-book this absorbed cost (mis-attributed)" />
     </div>
   );
 }

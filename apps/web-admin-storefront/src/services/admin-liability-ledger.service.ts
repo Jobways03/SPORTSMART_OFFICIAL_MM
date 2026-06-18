@@ -51,6 +51,8 @@ export interface PlatformExpenseRow {
   expenseType: string;
   amountInPaise: string;
   reason: string;
+  reversedAt: string | null;
+  reversalReason: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -78,5 +80,34 @@ export const adminLiabilityLedgerService = {
     return apiClient<LedgerListResponse>(
       `/admin/liability-ledger/${type}?${qs.toString()}`,
     );
+  },
+
+  /** Advance a logistics claim's recovery lifecycle (or REJECT it, which
+   *  auto-reclassifies the cost to a platform expense). */
+  transitionClaim(
+    id: string,
+    toStatus: 'SUBMITTED' | 'ACCEPTED' | 'RECOVERED' | 'REJECTED' | 'CANCELLED',
+    note?: string,
+  ): Promise<ApiResponse<LogisticsClaimRow & { reclassifiedExpenseId: string | null }>> {
+    return apiClient(`/admin/liability-ledger/claims/${id}/transition`, {
+      method: 'PATCH',
+      body: JSON.stringify({ toStatus, note }),
+    });
+  },
+
+  /** Un-book a mis-attributed platform expense (soft reversal). */
+  reverseExpense(id: string, reason: string): Promise<ApiResponse<PlatformExpenseRow>> {
+    return apiClient(`/admin/liability-ledger/expenses/${id}/reverse`, {
+      method: 'PATCH',
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  /** Cancel a PENDING seller debit (already-wired API, now surfaced in UI). */
+  cancelDebit(id: string, reason: string): Promise<ApiResponse<SellerDebitRow>> {
+    return apiClient(`/admin/liability-ledger/debits/${id}/cancel`, {
+      method: 'PATCH',
+      body: JSON.stringify({ reason }),
+    });
   },
 };
