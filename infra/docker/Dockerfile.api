@@ -61,7 +61,10 @@ WORKDIR /workspace
 
 # Copy only the manifests first so `pnpm install` is cached between
 # rebuilds whenever source changes but deps don't.
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+# .npmrc carries `shamefully-hoist=true` — without it the install uses pnpm's
+# strict layout and directly-imported-but-undeclared deps (express, undici)
+# fail to resolve at build time, even though they build locally.
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc ./
 COPY apps/api/package.json apps/api/package.json
 COPY packages/shared-utils/package.json packages/shared-utils/package.json
 COPY packages/ui/package.json packages/ui/package.json

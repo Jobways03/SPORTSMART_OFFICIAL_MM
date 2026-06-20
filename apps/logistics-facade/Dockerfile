@@ -28,7 +28,10 @@ WORKDIR /workspace
 
 # Copy only the manifests first so `pnpm install` is cached between
 # rebuilds whenever source changes but deps don't.
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+# .npmrc carries `shamefully-hoist=true` — without it the strict install can't
+# resolve directly-imported deps (express) or the @sportsmart/logistics-contracts
+# workspace package at build time, even though it builds locally.
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc ./
 COPY apps/logistics-facade/package.json apps/logistics-facade/package.json
 COPY packages/logistics-contracts/package.json packages/logistics-contracts/package.json
 
