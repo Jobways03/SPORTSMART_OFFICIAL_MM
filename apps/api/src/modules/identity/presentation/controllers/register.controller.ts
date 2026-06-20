@@ -46,9 +46,10 @@ export class RegisterController {
   ) {}
 
   @Post('register')
-  // 3 registrations / 60s / IP. Strict to defeat signup flooding +
-  // enumeration probes. Tighter than the global 300/60s default.
-  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  // 7 registrations / 60s / IP. Humane enough that a genuine user fumbling the
+  // form a few times isn't blocked before a valid submission, while still
+  // defeating signup flooding + enumeration probes (well under the 300/60s default).
+  @Throttle({ default: { limit: 7, ttl: 60_000 } })
   // Phase 21 (2026-05-20) — @Idempotent so a client retrying after a
   // network blip (X-Idempotency-Key replay) gets the cached 202 back
   // instead of paying another bcrypt-cost-12 hash and creating a

@@ -39,7 +39,17 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
       )`);
     }
 
-    if (brandFilter) conditions.push(Prisma.sql`p.brand_id = ${brandFilter}`);
+    // brandFilter arrives as a comma-joined list of brand ids (the storefront
+    // sidebar lets you tick more than one brand). Split + IN so a multi-brand
+    // selection matches ANY of them — this mirrors the facet-count query in
+    // storefront-filters.controller (`p.brand_id IN (...)`). The previous
+    // `p.brand_id = ${brandFilter}` compared the column against the whole
+    // joined string ("id1,id2"), which only matched a single-brand pick and
+    // returned 0 products for 2+ brands.
+    if (brandFilter) {
+      const brandIds = String(brandFilter).split(',').map((s) => s.trim()).filter(Boolean);
+      if (brandIds.length > 0) conditions.push(Prisma.sql`p.brand_id IN (${Prisma.join(brandIds)})`);
+    }
     if (categoryId) conditions.push(Prisma.sql`p.category_id = ${categoryId}`);
     // Phase 192 (#11) — a product in a deactivated category must not surface
     // even via a direct ?categoryId= URL (the nav already hides inactive

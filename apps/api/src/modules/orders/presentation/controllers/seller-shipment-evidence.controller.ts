@@ -25,6 +25,10 @@ import { FileService } from '../../../files/application/services/file.service';
 import { ShipmentEvidenceService } from '../../../shipping/application/services/shipment-evidence.service';
 
 const UPLOAD_LIMIT_BYTES = 8 * 1024 * 1024;
+// Hard cap on seller pre-ship dispatch photos per sub-order. Mirrors the
+// SHIPMENT_EVIDENCE_REQUIRED minimum on the seller UI — today they're equal
+// (exactly 4). The picker enforces this too, but the API is the source of truth.
+const SHIPMENT_EVIDENCE_MAX = 4;
 
 // Phase 88 (2026-05-23) — Gap #23 DX. Documented soft-delete body.
 export class DeleteEvidenceDto {
@@ -134,6 +138,17 @@ export class SellerShipmentEvidenceController {
       );
     }
     await this.assertOwnership(subOrderId, req.sellerId);
+
+    // Hard cap — reject extras beyond the allowed count BEFORE storing the file.
+    // (An identical re-upload is collapsed by the service's hash-dedupe, so this
+    // only blocks genuinely-new photos past the max.)
+    const existingCount =
+      await this.shipmentEvidence.countPackingForGate(subOrderId);
+    if (existingCount >= SHIPMENT_EVIDENCE_MAX) {
+      throw new BadRequestAppException(
+        `This order already has the maximum of ${SHIPMENT_EVIDENCE_MAX} dispatch photos.`,
+      );
+    }
 
     const meta = await this.fileService.uploadDirect({
       purpose: 'SHIPMENT_EVIDENCE',

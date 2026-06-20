@@ -100,7 +100,7 @@ export function PincodeFields({
 
   return (
     <div className="pin">
-      <div className="pin__grid">
+      <div className={`pin__grid${showCountry ? '' : ' pin__grid--single'}`}>
         <div className="pin__field">
           <label htmlFor={`${idPrefix}-pincode`}>{pincodeLabel}</label>
           <input

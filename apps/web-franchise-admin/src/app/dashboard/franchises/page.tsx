@@ -198,7 +198,12 @@ export default function FranchisesPage() {
         {/* Toolbar (search + filters) */}
         <div className="franchises-toolbar">
           <div className="franchises-search">
-            <span className="franchises-search-icon">&#128269;</span>
+            <span className="franchises-search-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="7" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </span>
             <input
               type="text"
               placeholder="Search by code, owner, business, email, phone..."

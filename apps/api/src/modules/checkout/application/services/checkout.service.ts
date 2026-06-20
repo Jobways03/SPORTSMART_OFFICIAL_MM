@@ -1980,11 +1980,32 @@ export class CheckoutService {
       itemCount: result.itemCount,
     });
 
-    // Phase 70 — shadow Payment row for COD.
-    await this.paymentLifecycle.recordCodPayment({
-      masterOrderId: result.masterOrderId,
-      amountInPaise: BigInt(Math.round(result.totalAmount * 100)),
-    });
+    // When the wallet covers a COD order in full there is nothing left to
+    // collect at delivery, so the order is already paid. Mirror the ONLINE
+    // full-wallet path above: flip paymentStatus to PAID and record a
+    // CAPTURED wallet-only payment instead of a PENDING COD row. Without
+    // this the order stays at "Payment Pending" forever even though the
+    // wallet was already debited for the whole amount. A partial-wallet COD
+    // (payable > 0) still records a PENDING COD row — that balance really is
+    // collected at delivery.
+    if (payableInRupees <= 0 && walletDebitInPaise > 0) {
+      await this.prisma.masterOrder.update({
+        where: { id: result.masterOrderId },
+        data: this.moneyDualWrite.applyPaise('masterOrder', {
+          paymentStatus: 'PAID',
+        }),
+      });
+      await this.paymentLifecycle.recordWalletOnlyPayment({
+        masterOrderId: result.masterOrderId,
+        amountInPaise: BigInt(walletDebitInPaise),
+      });
+    } else {
+      // Phase 70 — shadow Payment row for COD (collected at delivery).
+      await this.paymentLifecycle.recordCodPayment({
+        masterOrderId: result.masterOrderId,
+        amountInPaise: BigInt(Math.round(result.totalAmount * 100)),
+      });
+    }
 
     return {
       orderNumber: result.orderNumber,

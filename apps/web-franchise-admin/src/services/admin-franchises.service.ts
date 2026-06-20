@@ -206,6 +206,35 @@ export interface FranchiseSubOrderRaw {
   } | null;
 }
 
+// Flat row for the global franchise-admin Orders table
+// (GET /admin/franchise-orders). One row = one franchise sub-order.
+export interface FranchiseOrderRow {
+  id: string;
+  subTotal: string | number | null;
+  fulfillmentStatus: string;
+  acceptStatus: string;
+  deliveryMethod?: string | null;
+  createdAt: string;
+  masterOrder?: {
+    id?: string;
+    orderNumber?: string;
+    totalAmount?: string | number | null;
+    paymentMethod?: string | null;
+    paymentStatus?: string | null;
+    orderStatus?: string | null;
+    createdAt?: string;
+    shippingAddressSnapshot?: { fullName?: string; name?: string; phone?: string } | null;
+    customer?: { firstName?: string | null; lastName?: string | null; email?: string | null } | null;
+  } | null;
+  franchise?: { id: string; businessName: string } | null;
+  _count?: { items: number } | null;
+}
+
+export interface FranchiseAllOrdersResponse {
+  subOrders: FranchiseOrderRow[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
 // Full franchise sub-order detail (GET /admin/franchise-orders/sub-orders/:id).
 export interface FranchiseSubOrderDetailItem {
   id: string;
@@ -352,6 +381,31 @@ export const adminFranchisesService = {
     if (params.limit) query.set('limit', String(params.limit));
     const qs = query.toString();
     return apiClient(`/admin/franchise-orders/franchises/${franchiseId}${qs ? `?${qs}` : ''}`);
+  },
+
+  // Global flat list across ALL franchises — powers the franchise-admin
+  // Orders table (parity with the seller-admin orders page).
+  listAllFranchiseOrders(
+    params: {
+      page?: number;
+      limit?: number;
+      search?: string;
+      orderStatus?: string;
+      paymentStatus?: string;
+      fulfillmentStatus?: string;
+      acceptStatus?: string;
+    } = {},
+  ): Promise<ApiResponse<FranchiseAllOrdersResponse>> {
+    const q = new URLSearchParams();
+    if (params.page) q.set('page', String(params.page));
+    if (params.limit) q.set('limit', String(params.limit));
+    if (params.search) q.set('search', params.search);
+    if (params.orderStatus) q.set('orderStatus', params.orderStatus);
+    if (params.paymentStatus) q.set('paymentStatus', params.paymentStatus);
+    if (params.fulfillmentStatus) q.set('fulfillmentStatus', params.fulfillmentStatus);
+    if (params.acceptStatus) q.set('acceptStatus', params.acceptStatus);
+    const qs = q.toString();
+    return apiClient(`/admin/franchise-orders${qs ? `?${qs}` : ''}`);
   },
 
   getFranchiseOrder(
@@ -506,6 +560,17 @@ export const adminFranchisesService = {
     return apiClient(`/admin/franchise-settlements${qs ? `?${qs}` : ''}`);
   },
 
+  // Full settlement detail incl. the per-order ledger entries (ledgerEntries[]).
+  getSettlement(id: string): Promise<ApiResponse> {
+    return apiClient(`/admin/franchise-settlements/${id}`);
+  },
+
+  // Dry-run: what a Create-cycle would settle for the period, before committing.
+  previewSettlementCycle(periodStart: string, periodEnd: string): Promise<ApiResponse> {
+    const qs = new URLSearchParams({ periodStart, periodEnd }).toString();
+    return apiClient(`/admin/franchise-settlements/preview?${qs}`);
+  },
+
   createSettlementCycle(periodStart: string, periodEnd: string): Promise<ApiResponse> {
     return apiClient(`/admin/franchise-settlements`, {
       method: 'POST',
@@ -517,10 +582,17 @@ export const adminFranchisesService = {
     return apiClient(`/admin/franchise-settlements/${id}/approve`, { method: 'PATCH' });
   },
 
-  markSettlementPaid(id: string, paymentReference?: string): Promise<ApiResponse> {
+  markSettlementPaid(
+    id: string,
+    payload: {
+      paymentReference: string;
+      paymentMethod?: string;
+      paymentProofUrl?: string;
+    },
+  ): Promise<ApiResponse> {
     return apiClient(`/admin/franchise-settlements/${id}/pay`, {
       method: 'PATCH',
-      body: JSON.stringify({ paymentReference }),
+      body: JSON.stringify(payload),
     });
   },
 

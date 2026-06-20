@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { adminAuthService } from '@/services/admin-auth.service';
 import { adminProductsService } from '@/services/admin-products.service';
+import { apiClient } from '@/lib/api-client';
 import './dashboard.css';
 
 interface AdminInfo {
@@ -35,6 +36,7 @@ export default function DashboardLayout({
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [pendingMappingsCount, setPendingMappingsCount] = useState(0);
+  const [ordersCount, setOrdersCount] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -82,6 +84,23 @@ export default function DashboardLayout({
         .catch(() => {});
     }, 60000);
 
+    return () => clearInterval(interval);
+  }, [admin]);
+
+  // New-order count for the Orders sidebar badge (orders placed but not yet
+  // routed/verified). Polls every 60s; silent-fail like the mappings badge.
+  useEffect(() => {
+    if (!admin) return;
+    const fetchOrders = () => {
+      apiClient<{ pagination?: { total?: number } }>('/admin/orders?orderStatus=PLACED&limit=1')
+        .then((res) => {
+          const total = res.data?.pagination?.total;
+          if (typeof total === 'number') setOrdersCount(total);
+        })
+        .catch(() => {});
+    };
+    fetchOrders();
+    const interval = setInterval(fetchOrders, 60000);
     return () => clearInterval(interval);
   }, [admin]);
 
@@ -252,6 +271,22 @@ export default function DashboardLayout({
                   lineHeight: '16px',
                 }}>
                   {pendingMappingsCount > 99 ? '99+' : pendingMappingsCount}
+                </span>
+              )}
+              {item.href === '/dashboard/orders' && ordersCount > 0 && (
+                <span style={{
+                  marginLeft: 'auto',
+                  background: '#ef4444',
+                  color: '#fff',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  padding: '2px 7px',
+                  borderRadius: 10,
+                  minWidth: 18,
+                  textAlign: 'center',
+                  lineHeight: '16px',
+                }}>
+                  {ordersCount > 99 ? '99+' : ordersCount}
                 </span>
               )}
             </Link>

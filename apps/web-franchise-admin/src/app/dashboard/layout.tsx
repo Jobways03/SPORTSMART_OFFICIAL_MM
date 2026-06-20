@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { adminAuthService } from '@/services/admin-auth.service';
+import { apiClient } from '@/lib/api-client';
 import './dashboard.css';
 
 interface AdminInfo {
@@ -33,6 +34,7 @@ export default function DashboardLayout({
   const [admin, setAdmin] = useState<AdminInfo | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [ordersCount, setOrdersCount] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -62,6 +64,23 @@ export default function DashboardLayout({
   useEffect(() => {
     setSidebarOpen(false);
   }, [pathname]);
+
+  // New-order count for the Orders sidebar badge — franchise sub-orders
+  // awaiting acceptance across ALL franchises. Polls every 60s; silent-fail.
+  useEffect(() => {
+    if (!admin) return;
+    const fetchOrders = () => {
+      apiClient<{ total?: number }>('/admin/franchise-orders/count?acceptStatus=OPEN')
+        .then((res) => {
+          const total = res.data?.total;
+          if (typeof total === 'number') setOrdersCount(total);
+        })
+        .catch(() => {});
+    };
+    fetchOrders();
+    const interval = setInterval(fetchOrders, 60000);
+    return () => clearInterval(interval);
+  }, [admin]);
 
   const handleLogout = useCallback(async () => {
     try {
@@ -196,6 +215,22 @@ export default function DashboardLayout({
                 dangerouslySetInnerHTML={{ __html: item.icon }}
               />
               {item.label}
+              {item.href === '/dashboard/orders' && ordersCount > 0 && (
+                <span style={{
+                  marginLeft: 'auto',
+                  background: '#ef4444',
+                  color: '#fff',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  padding: '2px 7px',
+                  borderRadius: 10,
+                  minWidth: 18,
+                  textAlign: 'center',
+                  lineHeight: '16px',
+                }}>
+                  {ordersCount > 99 ? '99+' : ordersCount}
+                </span>
+              )}
             </Link>
           ))}
         </div>

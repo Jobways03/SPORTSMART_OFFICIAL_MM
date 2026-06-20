@@ -736,9 +736,24 @@ const { id } = useParams<{ id: string }>();
   const canMarkPacked =
     order.acceptStatus === 'ACCEPTED' &&
     order.fulfillmentStatus === 'UNFULFILLED';
-  // Mark-Shipped is gated on the shipment-evidence count. Same constant
-  // as the API's SHIPMENT_EVIDENCE_REQUIRED — keep in sync.
+  // Mark-Shipped is gated on the shipment-evidence count. Same constants
+  // as the API's SHIPMENT_EVIDENCE_REQUIRED / _MAX — keep in sync.
+  // REQUIRED = the minimum to pack/ship; MAX = the hard upper cap (the picker
+  // + backend reject extras). Today they're equal (exactly 4); bump MAX to
+  // allow more.
   const SHIPMENT_EVIDENCE_REQUIRED = 4;
+  const SHIPMENT_EVIDENCE_MAX = 4;
+  // Slots still open for upload on THIS order.
+  const evidenceSlotsLeft = Math.max(
+    0,
+    SHIPMENT_EVIDENCE_MAX - shipmentEvidence.length,
+  );
+  // Badge denominator — never show numerator > denominator. New orders cap at
+  // MAX (e.g. "4/4"); any pre-cap order that already has extras reads "5/5".
+  const evidenceBadgeTotal = Math.max(
+    shipmentEvidence.length,
+    SHIPMENT_EVIDENCE_MAX,
+  );
   const hasEnoughEvidence =
     shipmentEvidence.length >= SHIPMENT_EVIDENCE_REQUIRED;
   const canMarkShipped =
@@ -1124,7 +1139,7 @@ const { id } = useParams<{ id: string }>();
                       fontWeight: 700,
                     }}
                   >
-                    {shipmentEvidence.length} / {SHIPMENT_EVIDENCE_REQUIRED}
+                    {shipmentEvidence.length} / {evidenceBadgeTotal}
                   </span>
                 </h3>
                 <p style={{ fontSize: 12, color: '#047857', marginBottom: 12, lineHeight: 1.5 }}>
@@ -1202,7 +1217,7 @@ const { id } = useParams<{ id: string }>();
                     once; the handler POSTs them sequentially with a
                     "Uploading 2 of 4..." progress label. */}
                 {!['DELIVERED', 'FULFILLED'].includes(order.fulfillmentStatus) &&
-                  shipmentEvidence.length < SHIPMENT_EVIDENCE_REQUIRED && (
+                  shipmentEvidence.length < SHIPMENT_EVIDENCE_MAX && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                       <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
                         <input
@@ -1219,6 +1234,7 @@ const { id } = useParams<{ id: string }>();
                           // re-fires onChange (browsers suppress same-value).
                           onChange={(e) => {
                             const incoming = Array.from(e.target.files ?? []);
+                            e.target.value = '';
                             if (incoming.length === 0) return;
                             setEvidenceFiles((prev) => {
                               const seen = new Set(prev.map((f) => `${f.name}:${f.size}`));
@@ -1230,10 +1246,19 @@ const { id } = useParams<{ id: string }>();
                                   seen.add(key);
                                 }
                               }
+                              // Hard cap: already-uploaded + queued must not exceed
+                              // the max. Trim the overflow and tell the seller.
+                              if (merged.length > evidenceSlotsLeft) {
+                                setEvidenceMsg(
+                                  `You can upload at most ${SHIPMENT_EVIDENCE_MAX} photos for this order — extra file${
+                                    merged.length - evidenceSlotsLeft === 1 ? ' was' : 's were'
+                                  } skipped.`,
+                                );
+                                return merged.slice(0, evidenceSlotsLeft);
+                              }
+                              setEvidenceMsg('');
                               return merged;
                             });
-                            setEvidenceMsg('');
-                            e.target.value = '';
                           }}
                           disabled={evidenceUploading}
                           style={{ fontSize: 13 }}

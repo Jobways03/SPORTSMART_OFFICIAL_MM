@@ -196,7 +196,8 @@ export class WalletPublicFacade {
       type: 'CREDIT_ADJUSTMENT',
       referenceType: 'order_cancellation',
       referenceId: args.orderId,
-      description: `Refund: order ${args.orderId} could not be completed`,
+      // Customer-visible: this credit IS the refund landing, not a failure.
+      description: `Order cancellation refund`,
       internalNotes: args.reason,
     });
   }

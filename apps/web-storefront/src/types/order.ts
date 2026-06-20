@@ -96,6 +96,14 @@ export interface OrderDetail {
     feeInPaise: string;
     feeInRupees: string;
   } | null;
+  // Wallet-refund summary (cancellation / etc.). Null when nothing refunded.
+  // status CREDITED = money already in the wallet; PENDING = awaiting finance
+  // approval (post-shipment cancels).
+  refund?: {
+    toWalletInPaise: string;
+    toWalletInRupees: string;
+    status: 'CREDITED' | 'PENDING';
+  } | null;
   // Sprint 3 Story 2.5 — synthesized event list, oldest first.
   timeline?: OrderTimelineEvent[];
   // Phase 26 GST — per-item tax snapshot + roll-up totals. Empty

@@ -8,6 +8,7 @@ import { apiClient, ApiError } from '@/lib/api-client';
 import { validateAmount, filterAmount, filterInteger } from '@/lib/validators';
 import '../product-form.css';
 import { RichTextEditor, useModal } from '@sportsmart/ui';
+import { sanitizeRichHtml } from '@/lib/sanitize';
 // Phase 39 (2026-05-21) — category metafield section.
 import {
   CategoryMetafieldFormSection,
@@ -551,6 +552,7 @@ export default function CreateProductPage() {
               onChange={(val) => updateField('description', val)}
               placeholder="Full product description"
               minHeight={200}
+              sanitize={sanitizeRichHtml}
             />
           </div>
         </div>

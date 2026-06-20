@@ -13,6 +13,7 @@ import { apiClient, ApiError } from '@/lib/api-client';
 import { validateAmount, validateUploadFile, filterAmount, filterInteger } from '@/lib/validators';
 import '../../product-form.css';
 import { RichTextEditor, useModal } from '@sportsmart/ui';
+import { sanitizeRichHtml } from '@/lib/sanitize';
 // Phase 39 (2026-05-21) — category metafield form section + payload mapper.
 import {
   CategoryMetafieldFormSection,
@@ -1048,6 +1049,7 @@ const router = useRouter();
               onChange={(val) => updateField('description', val)}
               placeholder="Full product description"
               minHeight={200}
+              sanitize={sanitizeRichHtml}
             />
           </div>
         </div>

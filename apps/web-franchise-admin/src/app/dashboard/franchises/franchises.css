@@ -85,11 +85,13 @@
 
 .franchises-search-icon {
   position: absolute;
-  left: 11px;
+  left: 12px;
   top: 50%;
   transform: translateY(-50%);
-  color: var(--color-text-secondary);
-  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
   pointer-events: none;
 }
 
@@ -149,11 +151,12 @@
 
 .franchises-table tbody tr {
   cursor: pointer;
-  transition: background 0.12s ease;
+  transition: background 0.12s ease, box-shadow 0.12s ease;
 }
 
 .franchises-table tbody tr:hover {
   background: #f8fafc;
+  box-shadow: inset 3px 0 0 #2563eb;
 }
 
 .franchises-table tbody tr:last-child td {
@@ -336,22 +339,22 @@
 
 .completion-track {
   flex: 1;
-  height: 6px;
-  background: #e5e7eb;
-  border-radius: 3px;
+  height: 8px;
+  background: #eef2f7;
+  border-radius: 999px;
   overflow: hidden;
   min-width: 60px;
 }
 
 .completion-fill {
   height: 100%;
-  border-radius: 3px;
-  transition: width 0.3s;
+  border-radius: 999px;
+  transition: width 0.4s ease;
 }
 
-.completion-fill.low { background: #dc2626; }
-.completion-fill.medium { background: #d97706; }
-.completion-fill.high { background: #16a34a; }
+.completion-fill.low { background: linear-gradient(90deg, #dc2626, #ef4444); }
+.completion-fill.medium { background: linear-gradient(90deg, #d97706, #f59e0b); }
+.completion-fill.high { background: linear-gradient(90deg, #16a34a, #22c55e); }
 
 .completion-text {
   font-size: 12px;
@@ -559,6 +562,7 @@
 
 .filter-select:focus {
   border-color: var(--color-border-focus);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 .filter-clear-btn {
@@ -635,6 +639,7 @@
   border: 1px solid #e5e7eb;
   border-radius: 12px;
   padding: 16px;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.04), 0 1px 2px rgba(16, 24, 40, 0.03);
 }
 
 .franchise-sidebar-card h3 {
@@ -741,6 +746,7 @@
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
+  border-radius: 7px 7px 0 0;
   cursor: pointer;
   white-space: nowrap;
   transition: all 0.15s;
@@ -748,11 +754,13 @@
 
 .franchise-tab:hover {
   color: var(--color-text);
+  background: #f8fafc;
 }
 
 .franchise-tab.active {
   color: var(--color-primary);
   border-bottom-color: var(--color-primary);
+  font-weight: 600;
 }
 
 /* Cards */
@@ -760,8 +768,9 @@
   background: #fff;
   border: 1px solid #e5e7eb;
   border-radius: 12px;
-  padding: 20px;
+  padding: 22px;
   margin-bottom: 16px;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.04), 0 1px 2px rgba(16, 24, 40, 0.03);
 }
 
 .franchise-card-header {
@@ -769,13 +778,16 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 18px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #f1f5f9;
 }
 
 .franchise-card-header h2 {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--color-text);
+  font-size: 16px;
+  font-weight: 700;
+  color: #0f172a;
+  letter-spacing: -0.01em;
 }
 
 .franchise-card-header p {
@@ -812,6 +824,7 @@
 
 .info-value {
   font-size: 14px;
+  font-weight: 500;
   color: var(--color-text);
   word-break: break-word;
 }

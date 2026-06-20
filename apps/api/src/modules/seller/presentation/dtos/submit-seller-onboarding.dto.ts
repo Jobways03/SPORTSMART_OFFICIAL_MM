@@ -11,6 +11,14 @@ import {
   MinLength,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
+import {
+  GST_STATE_CODE_REGEX,
+  GSTIN_LENGTH,
+  GSTIN_REGEX,
+  PAN_LENGTH,
+  PAN_REGEX,
+  TAX_ID_MESSAGES,
+} from '../../../tax/domain/tax-id-rules';
 
 /**
  * GST registration type values mirror prisma enum `GstRegistrationType`.
@@ -57,9 +65,7 @@ export class SubmitSellerOnboardingDto {
   })
   legalBusinessName!: string;
 
-  @IsEnum(GstRegistrationTypeDto, {
-    message: 'GST registration type must be REGULAR, COMPOSITION, or CASUAL',
-  })
+  @IsEnum(GstRegistrationTypeDto, { message: TAX_ID_MESSAGES.GST_REG_TYPE })
   gstRegistrationType!: GstRegistrationTypeDto;
 
   @IsEnum(BusinessEntityTypeDto, {
@@ -74,29 +80,25 @@ export class SubmitSellerOnboardingDto {
    * "GSTIN is required" check is now belt-and-braces against
    * malformed clients, not load-bearing.
    */
-  @IsNotEmpty({ message: 'GSTIN is required' })
+  @IsNotEmpty({ message: TAX_ID_MESSAGES.GSTIN_REQUIRED })
   @IsString()
   @Transform(({ value }) => typeof value === 'string' ? value.trim().toUpperCase() : value)
-  @Length(15, 15, { message: 'GSTIN must be exactly 15 characters' })
-  @Matches(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/, {
-    message: 'GSTIN format is invalid (expected: 2-digit state + 10-char PAN + entity + Z + checksum)',
-  })
+  @Length(GSTIN_LENGTH, GSTIN_LENGTH, { message: TAX_ID_MESSAGES.GSTIN_LENGTH })
+  @Matches(GSTIN_REGEX, { message: TAX_ID_MESSAGES.GSTIN_FORMAT })
   gstin!: string;
 
-  @IsNotEmpty({ message: 'GST state code is required' })
+  @IsNotEmpty({ message: TAX_ID_MESSAGES.GST_STATE_CODE_REQUIRED })
   @IsString()
-  @Matches(/^[0-9]{2}$/, { message: 'GST state code must be 2 digits' })
+  @Matches(GST_STATE_CODE_REGEX, { message: TAX_ID_MESSAGES.GST_STATE_CODE_FORMAT })
   gstStateCode!: string;
 
   // PAN is mandatory regardless of GST registration — required for TDS,
   // payouts, and Form 26AS reconciliation.
-  @IsNotEmpty({ message: 'PAN number is required' })
+  @IsNotEmpty({ message: TAX_ID_MESSAGES.PAN_REQUIRED })
   @IsString()
   @Transform(({ value }) => typeof value === 'string' ? value.trim().toUpperCase() : value)
-  @Length(10, 10, { message: 'PAN must be exactly 10 characters' })
-  @Matches(/^[A-Z]{5}[0-9]{4}[A-Z]$/, {
-    message: 'PAN format is invalid (expected: 5 letters + 4 digits + 1 letter)',
-  })
+  @Length(PAN_LENGTH, PAN_LENGTH, { message: TAX_ID_MESSAGES.PAN_LENGTH })
+  @Matches(PAN_REGEX, { message: TAX_ID_MESSAGES.PAN_FORMAT })
   panNumber!: string;
 
   // Registered business address — separate from store address since the

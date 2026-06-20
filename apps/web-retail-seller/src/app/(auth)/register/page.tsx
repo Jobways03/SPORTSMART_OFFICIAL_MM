@@ -77,6 +77,26 @@ export default function SellerRegisterPage() {
     setErrors((prev) => ({ ...prev, [field]: error || undefined }));
   };
 
+  // Live validation as the user types: show format errors immediately, but
+  // never nag "required" on an empty field (blur + submit still enforce that).
+  const liveValidate = (field: string, value: string) => {
+    if (!value.trim()) {
+      setErrors((prev) => ({ ...prev, [field]: undefined }));
+      return;
+    }
+    setErrors((prev) => ({ ...prev, [field]: validateField(field, value) || undefined }));
+  };
+
+  // Live password-match check — only once the confirm field has content, so it
+  // doesn't nag before the user has re-typed the password.
+  const liveConfirm = (pw: string, confirm: string) => {
+    if (!confirm) {
+      setErrors((prev) => ({ ...prev, confirmPassword: undefined }));
+      return;
+    }
+    setErrors((prev) => ({ ...prev, confirmPassword: validateConfirmPassword(pw, confirm) || undefined }));
+  };
+
   const validateAll = (): boolean => {
     const newErrors: FormErrors = {};
     const snErr = validateSellerName(sellerName);
@@ -215,10 +235,12 @@ export default function SellerRegisterPage() {
                     placeholder="Enter your full name"
                     value={sellerName}
                     maxLength={100}
-                    onChange={(e) =>
+                    onChange={(e) => {
                       // Person name — letters/space/period/apostrophe/hyphen only.
-                      setSellerName(e.target.value.replace(/[^A-Za-z .'-]/g, ''))
-                    }
+                      const v = e.target.value.replace(/[^A-Za-z .'-]/g, '');
+                      setSellerName(v);
+                      liveValidate('sellerName', v);
+                    }}
                     onBlur={() => handleBlur('sellerName', sellerName)}
                     aria-invalid={!!errors.sellerName}
                     aria-describedby={errors.sellerName ? 'sellerName-error' : undefined}
@@ -240,11 +262,13 @@ export default function SellerRegisterPage() {
                     placeholder="Your shop or business name"
                     value={sellerShopName}
                     maxLength={150}
-                    onChange={(e) =>
+                    onChange={(e) => {
                       // Business name — keep letters, digits, and a small
                       // punctuation set; do NOT strip digits.
-                      setSellerShopName(e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, ''))
-                    }
+                      const v = e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, '');
+                      setSellerShopName(v);
+                      liveValidate('sellerShopName', v);
+                    }}
                     onBlur={() => handleBlur('sellerShopName', sellerShopName)}
                     aria-invalid={!!errors.sellerShopName}
                     aria-describedby={errors.sellerShopName ? 'sellerShopName-error' : undefined}
@@ -267,7 +291,7 @@ export default function SellerRegisterPage() {
                     placeholder="you@example.com"
                     value={email}
                     maxLength={255}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => { setEmail(e.target.value); liveValidate('email', e.target.value); }}
                     onBlur={() => handleBlur('email', email)}
                     aria-invalid={!!errors.email}
                     aria-describedby={errors.email ? 'email-error' : undefined}
@@ -289,15 +313,21 @@ export default function SellerRegisterPage() {
                     placeholder="10-digit mobile"
                     value={phoneNumber}
                     maxLength={10}
-                    onChange={(e) =>
-                      // Indian mobile — digits only, capped at 10.
-                      setPhoneNumber(e.target.value.replace(/\D/g, '').slice(0, 10))
-                    }
+                    onChange={(e) => {
+                      // Indian mobile — digits only; drop any leading 0–5 so it
+                      // can only start with 6/7/8/9; cap at 10. No red error —
+                      // the wrong start simply can't be typed, and the hint guides.
+                      const v = e.target.value.replace(/\D/g, '').replace(/^[0-5]+/, '').slice(0, 10);
+                      setPhoneNumber(v);
+                    }}
                     onBlur={() => handleBlur('phoneNumber', phoneNumber)}
                     aria-invalid={!!errors.phoneNumber}
                     aria-describedby={errors.phoneNumber ? 'phoneNumber-error' : undefined}
                     autoComplete="tel"
                   />
+                  <span style={{ display: 'block', marginTop: 4, fontSize: 12, color: '#6b7280' }}>
+                    Indian mobile — should start with 6, 7, 8, or 9.
+                  </span>
                   {errors.phoneNumber && (
                     <span id="phoneNumber-error" className="field-error" role="alert">
                       {errors.phoneNumber}
@@ -316,7 +346,7 @@ export default function SellerRegisterPage() {
                       placeholder="Create a strong password"
                       value={password}
                       maxLength={128}
-                      onChange={(e) => setPassword(e.target.value)}
+                      onChange={(e) => { setPassword(e.target.value); liveConfirm(e.target.value, confirmPassword); }}
                       onBlur={() => handleBlur('password', password)}
                       aria-invalid={!!errors.password}
                       aria-describedby="password-strength"
@@ -348,7 +378,7 @@ export default function SellerRegisterPage() {
                       placeholder="Re-enter your password"
                       value={confirmPassword}
                       maxLength={128}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      onChange={(e) => { setConfirmPassword(e.target.value); liveConfirm(password, e.target.value); }}
                       onBlur={() => handleBlur('confirmPassword', confirmPassword)}
                       aria-invalid={!!errors.confirmPassword}
                       autoComplete="new-password"

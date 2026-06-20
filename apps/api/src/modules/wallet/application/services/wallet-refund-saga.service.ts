@@ -100,7 +100,11 @@ export class WalletRefundSagaService {
         type: 'CREDIT_ADJUSTMENT',
         referenceType: 'order_cancellation',
         referenceId: saga.orderId,
-        description: `Refund: order ${saga.orderId} could not be completed`,
+        // Customer-visible wallet-history line. This saga is the SUCCESS path
+        // for wallet-portion refunds (and the recovery path for failed gateway
+        // refunds) — either way the customer is being made whole here, so the
+        // copy must read as a completed refund, not "could not be completed".
+        description: `Order cancellation refund`,
         internalNotes: saga.reason,
       });
       await this.prisma.walletRefundSaga.update({

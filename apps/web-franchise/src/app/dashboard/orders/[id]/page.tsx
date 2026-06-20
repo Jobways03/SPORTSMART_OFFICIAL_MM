@@ -430,6 +430,15 @@ const { id } = useParams<{ id: string }>();
   // required AT PACK (same rule as sellers). Keep SHIPMENT_EVIDENCE_REQUIRED in
   // sync with the API's SHIPMENT_EVIDENCE_REQUIRED_PHOTOS (default 4).
   const SHIPMENT_EVIDENCE_REQUIRED = 4;
+  const SHIPMENT_EVIDENCE_MAX = 4;
+  const evidenceSlotsLeft = Math.max(
+    0,
+    SHIPMENT_EVIDENCE_MAX - shipmentEvidence.length,
+  );
+  const evidenceBadgeTotal = Math.max(
+    shipmentEvidence.length,
+    SHIPMENT_EVIDENCE_MAX,
+  );
   const isDelhivery = order.deliveryMethod === 'DELHIVERY';
   const hasEnoughEvidence =
     shipmentEvidence.length >= SHIPMENT_EVIDENCE_REQUIRED;
@@ -750,7 +759,7 @@ const { id } = useParams<{ id: string }>();
                   }}
                 >
                   Shipment photos {shipmentEvidence.length}/
-                  {SHIPMENT_EVIDENCE_REQUIRED}
+                  {evidenceBadgeTotal}
                 </div>
                 <div
                   style={{ fontSize: 11.5, color: '#6b7280', marginBottom: 8 }}
@@ -831,9 +840,23 @@ const { id } = useParams<{ id: string }>();
                   accept="image/*"
                   multiple
                   disabled={evidenceUploading}
-                  onChange={(e) =>
-                    setEvidenceFiles(Array.from(e.target.files ?? []))
-                  }
+                  onChange={(e) => {
+                    const picked = Array.from(e.target.files ?? []);
+                    e.target.value = '';
+                    // Hard cap — never let queued exceed the remaining slots.
+                    if (picked.length > evidenceSlotsLeft) {
+                      setEvidenceMsg(
+                        `You can upload at most ${SHIPMENT_EVIDENCE_MAX} photos for this order — extra file${
+                          picked.length - evidenceSlotsLeft === 1
+                            ? ' was'
+                            : 's were'
+                        } skipped.`,
+                      );
+                      setEvidenceFiles(picked.slice(0, evidenceSlotsLeft));
+                    } else {
+                      setEvidenceFiles(picked);
+                    }
+                  }}
                   style={{ fontSize: 12, marginBottom: 8, width: '100%' }}
                 />
                 {evidenceFiles.length > 0 && !evidenceUploading && (

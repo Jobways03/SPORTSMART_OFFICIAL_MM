@@ -6,12 +6,15 @@ import {
   Matches,
   MaxLength,
 } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { PAN_REGEX, TAX_ID_MESSAGES } from '../../../tax/domain/tax-id-rules';
 
 export class SubmitAffiliateKycDto {
   @IsString()
-  @Matches(/^[A-Z]{5}[0-9]{4}[A-Z]$/i, {
-    message: 'PAN must be 10 chars: 5 letters + 4 digits + 1 letter (e.g. ABCDE1234F)',
-  })
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.trim().toUpperCase() : value,
+  )
+  @Matches(PAN_REGEX, { message: TAX_ID_MESSAGES.PAN_FORMAT })
   panNumber!: string;
 
   @IsOptional()

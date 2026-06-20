@@ -12,6 +12,7 @@ import {
   adminLiabilityLedgerService,
   LedgerType,
   LedgerRow,
+  LedgerSummary,
   SellerDebitRow,
   LogisticsClaimRow,
   PlatformExpenseRow,
@@ -44,10 +45,22 @@ export default function LiabilityLedgerPage() {
     platform_expense: { ...EMPTY_TAB },
   });
 
+  /* Whole-table KPI aggregates (server-computed; not page-limited). */
+  const [summary, setSummary] = useState<LedgerSummary | null>(null);
+
   /* Filters */
   const [sourceTypeFilter, setSourceTypeFilter] = useState<string>('');
   const [sourceIdFilter, setSourceIdFilter] = useState<string>('');
   const [search, setSearch] = useState('');
+
+  const loadSummary = useCallback(async () => {
+    try {
+      const res = await adminLiabilityLedgerService.summary();
+      if (res.data) setSummary(res.data);
+    } catch {
+      /* KPI cards are decoration — a failed total shouldn't break the page. */
+    }
+  }, []);
 
   const loadTab = useCallback(
     async (which: LedgerType) => {
@@ -90,7 +103,8 @@ export default function LiabilityLedgerPage() {
     loadTab('seller_debit');
     loadTab('logistics_claim');
     loadTab('platform_expense');
-  }, [loadTab]);
+    loadSummary();
+  }, [loadTab, loadSummary]);
 
   // Reload every tab after a recovery action — a claim REJECT reclassifies
   // into platform expenses, so two tabs (and the KPI strip) change at once.
@@ -98,30 +112,16 @@ export default function LiabilityLedgerPage() {
     loadTab('seller_debit');
     loadTab('logistics_claim');
     loadTab('platform_expense');
-  }, [loadTab]);
+    loadSummary();
+  }, [loadTab, loadSummary]);
 
   const active = tabData[tab];
 
   /* ── Derived numbers ──────────────────────────────────────── */
-
-  const sumPaise = (rows: LedgerRow[]) =>
-    rows.reduce((s, r) => s + Number(r.amountInPaise), 0);
-  const sumPending = (rows: LedgerRow[]) =>
-    rows
-      .filter((r) => 'status' in r && (r as any).status === 'PENDING')
-      .reduce((s, r) => s + Number(r.amountInPaise), 0);
-
-  const kpis = useMemo(() => {
-    const sd = tabData.seller_debit.rows;
-    const lc = tabData.logistics_claim.rows;
-    const px = tabData.platform_expense.rows;
-    return {
-      totalAtRisk: sumPaise(sd) + sumPaise(lc) + sumPaise(px),
-      sellerDebitPending: sumPending(sd),
-      logisticsClaimPending: sumPending(lc),
-      platformExpense: sumPaise(px),
-    };
-  }, [tabData]);
+  // KPI totals come from the server `summary/totals` aggregate (whole table,
+  // correct status filters) — NOT summed from the 50-row page, which
+  // under-counted and mishandled reversed/cancelled/reclassified rows.
+  const paise = (v: string | undefined) => Number(v ?? 0);
 
   /* ── Search filter (client-side) ──────────────────────────── */
 
@@ -222,27 +222,27 @@ export default function LiabilityLedgerPage() {
       <div style={styles.kpiStrip}>
         <KpiCard
           label="Total recorded"
-          value={fmtPaiseShort(kpis.totalAtRisk)}
+          value={fmtPaiseShort(paise(summary?.totalRecordedInPaise))}
           tone="neutral"
-          hint="Sum across all three categories"
+          hint="Live liability across all three (excl. cancelled / reversed)"
         />
         <KpiCard
           label="Seller debits pending"
-          value={fmtPaiseShort(kpis.sellerDebitPending)}
+          value={fmtPaiseShort(paise(summary?.sellerDebitsPendingInPaise))}
           tone="warning"
           hint="Recoverable via settlement adjustments"
         />
         <KpiCard
           label="Logistics claims pending"
-          value={fmtPaiseShort(kpis.logisticsClaimPending)}
+          value={fmtPaiseShort(paise(summary?.logisticsClaimsPendingInPaise))}
           tone="info"
-          hint="Awaiting courier reimbursement"
+          hint="Awaiting courier reimbursement (incl. submitted/accepted)"
         />
         <KpiCard
           label="Platform expense"
-          value={fmtPaiseShort(kpis.platformExpense)}
+          value={fmtPaiseShort(paise(summary?.platformExpenseInPaise))}
           tone="danger"
-          hint="Absorbed by the platform — not recoverable"
+          hint="Absorbed by the platform — not recoverable (excl. reversed)"
         />
       </div>
 

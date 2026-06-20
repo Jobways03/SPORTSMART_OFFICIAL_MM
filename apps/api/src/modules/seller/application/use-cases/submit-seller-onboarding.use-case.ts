@@ -9,6 +9,11 @@ import {
   NotFoundAppException,
 } from '../../../../core/exceptions';
 import {
+  gstinEmbedsPan,
+  gstinStateMatches,
+  TAX_ID_MESSAGES,
+} from '../../../tax/domain/tax-id-rules';
+import {
   SellerRepository,
   SELLER_REPOSITORY,
 } from '../../domain/repositories/seller.repository.interface';
@@ -174,18 +179,14 @@ export class SubmitSellerOnboardingUseCase {
 
     // PAN ↔ GSTIN cross-check: GSTIN embeds the PAN at positions 3-12
     // per CBIC spec.
-    if (input.gstin.substring(2, 12) !== input.panNumber) {
-      throw new BadRequestAppException(
-        'GSTIN does not embed the provided PAN. Check both fields — GSTIN positions 3-12 must equal the PAN.',
-      );
+    if (!gstinEmbedsPan(input.gstin, input.panNumber)) {
+      throw new BadRequestAppException(TAX_ID_MESSAGES.PAN_GSTIN_MISMATCH);
     }
 
     // Phase 19 (2026-05-20) — GSTIN state-code cross-check. The first
     // two digits of the GSTIN MUST match the declared gstStateCode.
-    if (input.gstin.substring(0, 2) !== input.gstStateCode) {
-      throw new BadRequestAppException(
-        'GSTIN state code mismatch. The first two digits of GSTIN must equal the declared GST state code.',
-      );
+    if (!gstinStateMatches(input.gstin, input.gstStateCode)) {
+      throw new BadRequestAppException(TAX_ID_MESSAGES.GSTIN_STATE_MISMATCH);
     }
 
     // Phase 19 (2026-05-20) — duplicate-legal-identity pre-check.

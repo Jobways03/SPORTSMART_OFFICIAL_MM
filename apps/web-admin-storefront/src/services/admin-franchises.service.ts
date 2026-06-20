@@ -153,6 +153,14 @@ export const adminFranchisesService = {
     });
   },
 
+  // Runs the automated government GSTN-portal check on the franchise's GSTIN +
+  // records the admin's PAN attestation (parity with the seller flow).
+  verifyTaxIds(id: string): Promise<ApiResponse<unknown>> {
+    return apiClient(`/admin/franchises/${id}/verify-tax-ids`, {
+      method: 'POST',
+    });
+  },
+
   setStatus(
     id: string,
     body: { status: FranchiseStatus; reason?: string },

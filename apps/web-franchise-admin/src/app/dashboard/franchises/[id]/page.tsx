@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, Fragment } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useRouter, useParams } from 'next/navigation';
 import {
   adminFranchisesService,
@@ -9,6 +9,7 @@ import {
   FranchiseCatalogMapping,
   FranchiseInventoryItem,
   FranchiseOrderItem,
+  FranchiseSubOrderDetail,
   FranchisePosSale,
 } from '@/services/admin-franchises.service';
 import { useModal } from '@sportsmart/ui';
@@ -223,6 +224,28 @@ export default function AdminFranchiseDetailPage() {
   // Orders
   const [orders, setOrders] = useState<FranchiseOrderItem[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
+  // Click an order row → open a focused drawer with its details + shipping.
+  const [selectedOrder, setSelectedOrder] = useState<FranchiseOrderItem | null>(null);
+  // Full order detail (line items, address, payment, totals) — fetched lazily
+  // when the drawer opens, so it mirrors the D2C / retail seller order view.
+  const [orderDetail, setOrderDetail] = useState<FranchiseSubOrderDetail | null>(null);
+  const [orderDetailLoading, setOrderDetailLoading] = useState(false);
+
+  useEffect(() => {
+    if (!selectedOrder) {
+      setOrderDetail(null);
+      return;
+    }
+    let cancelled = false;
+    setOrderDetail(null);
+    setOrderDetailLoading(true);
+    adminFranchisesService
+      .getFranchiseOrder(selectedOrder.id)
+      .then((res) => { if (!cancelled) setOrderDetail(res.data ?? null); })
+      .catch(() => { if (!cancelled) setOrderDetail(null); })
+      .finally(() => { if (!cancelled) setOrderDetailLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedOrder]);
   // Cancel sub-order — parity with the other admin panels.
   const [cancelOrderId, setCancelOrderId] = useState<string | null>(null);
   const [cancelOrderStatus, setCancelOrderStatus] = useState<string>('');
@@ -1358,8 +1381,12 @@ export default function AdminFranchiseDetailPage() {
                     </thead>
                     <tbody>
                       {orders.map(o => (
-                        <Fragment key={o.id}>
-                        <tr>
+                        <tr
+                          key={o.id}
+                          onClick={() => setSelectedOrder(o)}
+                          title="View order details"
+                          style={{ cursor: 'pointer' }}
+                        >
                           <td style={{ fontFamily: 'monospace', fontWeight: 500 }}>
                             {o.orderNumber}
                           </td>
@@ -1380,7 +1407,7 @@ export default function AdminFranchiseDetailPage() {
                           <td style={{ textAlign: 'right', color: 'var(--color-text-secondary)', fontSize: 12 }}>
                             {formatDate(o.createdAt)}
                           </td>
-                          <td style={{ textAlign: 'right' }}>
+                          <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
                             {o.status !== 'DELIVERED' && o.status !== 'CANCELLED' && (
                               <button
                                 className="btn btn-secondary"
@@ -1414,24 +1441,160 @@ export default function AdminFranchiseDetailPage() {
                                   Cancel
                                 </button>
                               )}
+                            <span style={{ marginLeft: 8, color: '#94a3b8', fontWeight: 600 }}>›</span>
                           </td>
                         </tr>
-                        {o.status !== 'CANCELLED' && (
-                          <tr>
-                            <td colSpan={7} style={{ background: '#fafafa' }}>
-                              {/* Delhivery carrier-actions panel — track / re-attempt /
-                                  cancel shipment / force-RTO. Same component the Super
-                                  Admin uses; o.id is the SubOrder id. */}
-                              <ShipmentPanel subOrderId={o.id} onChange={fetchOrders} />
-                            </td>
-                          </tr>
-                        )}
-                        </Fragment>
                       ))}
                     </tbody>
                   </table>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Order detail drawer — opens when an order row is clicked */}
+          {activeTab === 'orders' && selectedOrder && (
+            <div
+              onClick={() => setSelectedOrder(null)}
+              style={{
+                position: 'fixed', inset: 0, zIndex: 1000,
+                background: 'rgba(15,23,42,0.45)',
+                display: 'flex', justifyContent: 'flex-end',
+              }}
+            >
+              <div
+                onClick={(e) => e.stopPropagation()}
+                style={{
+                  width: 'min(560px, 94vw)', height: '100%', background: '#fff',
+                  boxShadow: '-8px 0 28px rgba(15,23,42,0.18)',
+                  display: 'flex', flexDirection: 'column', overflow: 'hidden',
+                }}
+              >
+                <div style={{
+                  display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+                  gap: 12, padding: '18px 22px', borderBottom: '1px solid #e5e7eb', flexShrink: 0,
+                }}>
+                  <div>
+                    <div style={{ fontFamily: 'monospace', fontWeight: 700, fontSize: 15, color: '#0f172a' }}>
+                      {selectedOrder.orderNumber}
+                    </div>
+                    <div style={{ fontSize: 13, color: '#64748b', marginTop: 2 }}>
+                      {selectedOrder.customerName}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOrder(null)}
+                    aria-label="Close"
+                    style={{
+                      width: 30, height: 30, borderRadius: 8, border: '1px solid #e5e7eb',
+                      background: '#fff', color: '#475569', fontSize: 15, cursor: 'pointer',
+                      flexShrink: 0, lineHeight: 1,
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+                <div style={{ padding: 22, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 18 }}>
+                  {/* Quick summary */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '12px 20px' }}>
+                    {([
+                      ['Status', formatStatus(selectedOrder.status)],
+                      ['Items', String(selectedOrder.itemsCount)],
+                      ['Total', `${'₹'}${selectedOrder.totalAmount?.toLocaleString?.() ?? selectedOrder.totalAmount}`],
+                      ['Created', formatDate(selectedOrder.createdAt)],
+                    ] as [string, string][]).map(([k, v]) => (
+                      <div key={k}>
+                        <div style={{ fontSize: 11, fontWeight: 600, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.3px' }}>{k}</div>
+                        <div style={{ fontSize: 14, fontWeight: 500, color: '#0f172a', marginTop: 2 }}>{v}</div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {orderDetailLoading && !orderDetail && (
+                    <p style={{ fontSize: 13, color: '#64748b' }}>Loading order details…</p>
+                  )}
+
+                  {orderDetail && (
+                    <>
+                      {/* Line items */}
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#0f172a', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 10 }}>Items</div>
+                        {(orderDetail.items ?? []).map((it) => (
+                          <div key={it.id} style={{ display: 'flex', gap: 10, alignItems: 'center', padding: '10px 0', borderBottom: '1px solid #f3f4f6' }}>
+                            <div style={{ width: 42, height: 42, borderRadius: 8, overflow: 'hidden', border: '1px solid #e5e7eb', background: '#f3f4f6', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+                              {it.imageUrl ? (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={it.imageUrl} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                              ) : (
+                                <span style={{ fontSize: 16, color: '#9ca3af' }}>&#128722;</span>
+                              )}
+                            </div>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>
+                                {it.productTitle}
+                                {it.variantTitle ? <span style={{ color: '#6b7280', fontWeight: 400 }}> — {it.variantTitle}</span> : null}
+                              </div>
+                              <div style={{ fontSize: 12, color: '#6b7280', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+                                {it.sku || '—'}
+                              </div>
+                            </div>
+                            <div style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
+                              <div style={{ fontSize: 12, color: '#6b7280' }}>
+                                {it.quantity} × {'₹'}{Number(it.unitPrice ?? 0).toLocaleString('en-IN')}
+                              </div>
+                              <div style={{ fontSize: 13, fontWeight: 600, color: '#0f172a' }}>
+                                {'₹'}{Number(it.totalPrice ?? 0).toLocaleString('en-IN')}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                        <div style={{ textAlign: 'right', marginTop: 10, fontSize: 14, fontWeight: 700, color: '#0f172a' }}>
+                          Sub-order total: {'₹'}{Number(orderDetail.subTotal ?? 0).toLocaleString('en-IN')}
+                        </div>
+                      </div>
+
+                      {/* Shipping address */}
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#0f172a', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 10 }}>Shipping address</div>
+                        {(() => {
+                          const a = orderDetail.masterOrder?.shippingAddressSnapshot;
+                          if (!a) return <p style={{ fontSize: 13, color: '#9ca3af' }}>No address snapshot</p>;
+                          return (
+                            <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.6 }}>
+                              <div style={{ fontWeight: 600, color: '#0f172a' }}>{a.fullName ?? a.name ?? '—'}</div>
+                              {a.phone && <div>{a.phone}</div>}
+                              <div>{a.addressLine1 ?? a.line1 ?? ''}</div>
+                              {(a.addressLine2 ?? a.line2) && <div>{a.addressLine2 ?? a.line2}</div>}
+                              <div>{[a.city, a.state, a.pincode].filter(Boolean).join(', ')}</div>
+                            </div>
+                          );
+                        })()}
+                      </div>
+
+                      {/* Payment & order */}
+                      <div>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#0f172a', textTransform: 'uppercase', letterSpacing: '0.4px', marginBottom: 10 }}>Payment &amp; order</div>
+                        <div style={{ fontSize: 13, color: '#374151', lineHeight: 1.9 }}>
+                          <div>Order #: {orderDetail.masterOrder?.orderNumber ?? selectedOrder.orderNumber}</div>
+                          <div>Payment: {orderDetail.masterOrder?.paymentMethodLabel ?? orderDetail.masterOrder?.paymentMethod ?? '—'}</div>
+                          <div>Payment status: {orderDetail.masterOrder?.paymentStatus ?? '—'}</div>
+                          <div>Accept status: {orderDetail.acceptStatus?.replace(/_/g, ' ') ?? '—'}</div>
+                          <div>Delivery: {orderDetail.deliveryMethod ?? '—'}</div>
+                          {orderDetail.trackingNumber && (
+                            <div>Tracking: {orderDetail.courierName ? `${orderDetail.courierName} · ` : ''}{orderDetail.trackingNumber}</div>
+                          )}
+                          <div>Order total: {'₹'}{Number(orderDetail.masterOrder?.totalAmount ?? 0).toLocaleString('en-IN')}</div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+
+                  {selectedOrder.status !== 'CANCELLED' && (
+                    <ShipmentPanel subOrderId={selectedOrder.id} onChange={fetchOrders} defaultExpanded />
+                  )}
+                </div>
+              </div>
             </div>
           )}
 
@@ -1606,10 +1769,22 @@ export default function AdminFranchiseDetailPage() {
                                 className="btn btn-primary"
                                 style={{ fontSize: 11, padding: '4px 10px' }}
                                 onClick={async () => {
+                                  // Payout reference (UTR) is required and must
+                                  // be unique; capture it before the money-out.
+                                  const ref = window
+                                    .prompt('Bank payout reference (UTR) — required to mark paid:')
+                                    ?.trim();
+                                  if (!ref) return;
                                   try {
-                                    await adminFranchisesService.markSettlementPaid(s.id);
+                                    await adminFranchisesService.markSettlementPaid(s.id, {
+                                      paymentReference: ref,
+                                    });
                                     fetchSettlements();
-                                  } catch { void notify('Failed to mark paid'); }
+                                  } catch (e) {
+                                    void notify(
+                                      (e as any)?.body?.message || 'Failed to mark paid',
+                                    );
+                                  }
                                 }}
                               >
                                 Mark Paid

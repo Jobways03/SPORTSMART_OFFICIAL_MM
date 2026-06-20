@@ -19,7 +19,7 @@ import { CaptchaVerifierService } from '../../../../integrations/captcha/captcha
  * endpoint) flips to ACTIVE.
  *
  * Phase 22 (2026-05-20) — Audit-driven hardening:
- *   • @Throttle 3/60s parity with customer + seller + franchise
+ *   • @Throttle 7/60s parity with customer + seller + franchise
  *     registers. Pre-Phase-22 the endpoint fell back to the global
  *     300/60s default, leaving it open to scripted flooding.
  *   • Captcha gate. hCaptcha / Turnstile token verified before the
@@ -38,7 +38,9 @@ export class AffiliateRegistrationController {
 
   @Post('register')
   @HttpCode(HttpStatus.CREATED)
-  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  // 7 registrations / 60s / IP — humane for an honest user fumbling the form,
+  // still defeats scripted flooding.
+  @Throttle({ default: { limit: 7, ttl: 60_000 } })
   async register(@Body() dto: RegisterAffiliateDto, @Req() req: Request) {
     await this.captcha.verify(dto.captchaToken, req.ip);
     const userAgent = req.headers['user-agent'];

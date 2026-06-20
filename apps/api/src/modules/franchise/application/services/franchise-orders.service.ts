@@ -123,6 +123,109 @@ export class FranchiseOrdersService {
     };
   }
 
+  /**
+   * Global count of franchise sub-orders matching a status filter — across ALL
+   * franchises. Powers the franchise-admin sidebar "Orders" badge (new orders
+   * awaiting acceptance). Lightweight: a single COUNT, no row hydration.
+   */
+  async countOrders(filters?: {
+    acceptStatus?: string;
+    fulfillmentStatus?: string;
+  }): Promise<{ total: number }> {
+    const where: Prisma.SubOrderWhereInput = {
+      fulfillmentNodeType: 'FRANCHISE',
+    };
+    if (filters?.acceptStatus) where.acceptStatus = filters.acceptStatus as any;
+    if (filters?.fulfillmentStatus) {
+      where.fulfillmentStatus = filters.fulfillmentStatus as any;
+    }
+    const total = await this.prisma.subOrder.count({ where });
+    return { total };
+  }
+
+  /**
+   * Global, filterable list of franchise sub-orders across ALL franchises —
+   * powers the franchise-admin flat Orders table (parity with the seller-admin
+   * orders page). One row = one franchise sub-order. Status filters split
+   * across the master order (orderStatus / paymentStatus) and the sub-order
+   * (fulfillmentStatus / acceptStatus).
+   */
+  async listAllOrders(
+    page: number,
+    limit: number,
+    filters?: {
+      search?: string;
+      orderStatus?: string;
+      paymentStatus?: string;
+      fulfillmentStatus?: string;
+      acceptStatus?: string;
+    },
+  ) {
+    const where: Prisma.SubOrderWhereInput = {
+      fulfillmentNodeType: 'FRANCHISE',
+    };
+    if (filters?.fulfillmentStatus) {
+      where.fulfillmentStatus = filters.fulfillmentStatus as any;
+    }
+    if (filters?.acceptStatus) {
+      where.acceptStatus = filters.acceptStatus as any;
+    }
+
+    const masterWhere: Prisma.MasterOrderWhereInput = {};
+    if (filters?.orderStatus) masterWhere.orderStatus = filters.orderStatus as any;
+    if (filters?.paymentStatus) masterWhere.paymentStatus = filters.paymentStatus as any;
+    if (filters?.search) {
+      const s = filters.search.trim();
+      masterWhere.OR = [
+        { orderNumber: { contains: s, mode: 'insensitive' } },
+        { customer: { email: { contains: s, mode: 'insensitive' } } },
+        { customer: { firstName: { contains: s, mode: 'insensitive' } } },
+        { customer: { lastName: { contains: s, mode: 'insensitive' } } },
+      ];
+    }
+    if (Object.keys(masterWhere).length > 0) {
+      where.masterOrder = masterWhere;
+    }
+
+    const skip = (page - 1) * limit;
+    const [subOrders, total] = await Promise.all([
+      this.prisma.subOrder.findMany({
+        where,
+        include: {
+          masterOrder: {
+            select: {
+              id: true,
+              orderNumber: true,
+              totalAmount: true,
+              paymentMethod: true,
+              paymentStatus: true,
+              orderStatus: true,
+              createdAt: true,
+              shippingAddressSnapshot: true,
+              customer: { select: { firstName: true, lastName: true, email: true } },
+            },
+          },
+          franchise: { select: { id: true, businessName: true } },
+          _count: { select: { items: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take: limit,
+      }),
+      this.prisma.subOrder.count({ where }),
+    ]);
+
+    return {
+      subOrders,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
   // ── Get single order detail ────────────────────────────────────────────
 
   async getOrder(subOrderId: string, franchiseId: string) {

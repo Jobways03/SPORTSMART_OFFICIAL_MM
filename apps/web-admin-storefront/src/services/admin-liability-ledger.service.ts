@@ -67,6 +67,18 @@ export interface LedgerListResponse {
   type: LedgerType;
 }
 
+/**
+ * Server-aggregated KPI totals (paise strings) over the WHOLE table — replaces
+ * the old page-summed KPIs which under-counted past 50 rows and mishandled
+ * reversed/cancelled/reclassified rows.
+ */
+export interface LedgerSummary {
+  totalRecordedInPaise: string;
+  sellerDebitsPendingInPaise: string;
+  logisticsClaimsPendingInPaise: string;
+  platformExpenseInPaise: string;
+}
+
 export const adminLiabilityLedgerService = {
   list(
     type: LedgerType,
@@ -109,5 +121,10 @@ export const adminLiabilityLedgerService = {
       method: 'PATCH',
       body: JSON.stringify({ reason }),
     });
+  },
+
+  /** Whole-table KPI aggregates for the headline cards (not page-limited). */
+  summary(): Promise<ApiResponse<LedgerSummary>> {
+    return apiClient<LedgerSummary>('/admin/liability-ledger/summary/totals');
   },
 };

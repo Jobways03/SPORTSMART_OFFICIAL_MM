@@ -210,6 +210,7 @@ const TIMELINE_KIND_STYLE: Record<string, { icon: TimelineIcon; color: string }>
   TRACKING_UPDATED: { icon: 'arrow-up-right', color: '#7c3aed' },
   SHIPMENT_DELIVERED: { icon: 'check', color: '#16a34a' },
   ORDER_CANCELLED: { icon: 'x', color: '#dc2626' },
+  REFUND_INITIATED: { icon: 'check', color: '#16a34a' },
 };
 
 function TimelineIconSvg({ name }: { name: TimelineIcon }) {
@@ -720,6 +721,54 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                   : 'UNFULFILLED'
               }
             />
+          </div>
+        )}
+
+        {/* Wallet-refund banner — shows the customer exactly how much came
+            back (and whether it's already credited or pending approval). */}
+        {order.refund && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 12,
+              border: `1px solid ${order.refund.status === 'CREDITED' ? '#bbf7d0' : '#fed7aa'}`,
+              background: order.refund.status === 'CREDITED' ? '#f0fdf4' : '#fff7ed',
+              borderRadius: 10,
+              padding: '12px 16px',
+              marginBottom: 20,
+            }}
+          >
+            <div
+              aria-hidden
+              style={{
+                width: 26,
+                height: 26,
+                borderRadius: '50%',
+                flexShrink: 0,
+                background: order.refund.status === 'CREDITED' ? '#16a34a' : '#ea580c',
+                color: '#fff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 14,
+                fontWeight: 700,
+              }}
+            >
+              ₹
+            </div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#111827' }}>
+                {order.refund.status === 'CREDITED'
+                  ? `₹${order.refund.toWalletInRupees} refunded to your wallet`
+                  : `Refund of ₹${order.refund.toWalletInRupees} to your wallet`}
+              </div>
+              <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>
+                {order.refund.status === 'CREDITED'
+                  ? 'Store credit — available to use on your next order.'
+                  : 'Pending finance approval; it will be credited to your wallet shortly.'}
+              </div>
+            </div>
           </div>
         )}
 

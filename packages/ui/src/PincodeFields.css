@@ -11,6 +11,11 @@
   grid-template-columns: 1fr 1fr;
   gap: 14px;
 }
+/* A PIN row with no Country field beside it: render a tidy single column
+   instead of a half-empty 2-column cell (which reads like a missing field). */
+.pin__grid--single {
+  grid-template-columns: minmax(0, 360px);
+}
 .pin__field {
   display: flex;
   flex-direction: column;
