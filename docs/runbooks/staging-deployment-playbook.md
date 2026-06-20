@@ -3,7 +3,8 @@
 **Audience:** Dev/Ops, little or no prior AWS experience.
 **Environment:** Staging — every host is `<name>.staging.sportsmart.com`.
 **Outcome:** all 11 frontends + the API + the internal logistics-facade running on AWS ECS Fargate.
-**Time:** ~2–3 hours, most of it waiting on Terraform (~20 min) and the deploy workflow (~20–30 min).
+**Time:** ~2–3 hours, most of it waiting on Terraform (~20 min), a DNS-delegation propagation wait between
+the two Phase-5 applies (usually a few minutes, occasionally longer), and the deploy workflow (~20–30 min).
 
 This is verified against the real code: `infra/aws/terraform/*`, `.github/workflows/deploy.yml`,
 `infra/scripts/deploy.sh`. Steps that can only be confirmed by a live `terraform apply` are marked
@@ -12,15 +13,16 @@ This is verified against the real code: `infra/aws/terraform/*`, `.github/workfl
 > **How the pieces fit:** Terraform builds the *infrastructure* (network, DB, Redis, ALB, ECR repos,
 > empty ECS services, secrets, the OIDC deploy role). The **GitHub "Deploy to ECS" workflow** then
 > builds the container images, pushes them to ECR, runs DB migrations, and rolls the services. You run
-> Terraform **once** (and again only when infra/env changes); you run the workflow on **every code
-> deploy**.
+> Terraform for the first bring-up as a **two-step apply** (Phase 5 — create + delegate the DNS zone, then
+> the full apply); after that you re-run it only when infra/env changes. You run the workflow on **every
+> code deploy**.
 
 ---
 
 ## 0. What you will end up with (host reference)
 
-`terraform apply` + one `Deploy to ECS` run with `services=all` produces these (region **ap-south-1**,
-cluster **`sportsmart-staging`**):
+`terraform apply` (Phase 5 — a two-step apply: create + delegate the DNS zone, then apply the rest) + one
+`Deploy to ECS` run with `services=all` produces these (region **ap-south-1**, cluster **`sportsmart-staging`**):
 
 | Service (ECS name) | URL | Default tasks in staging |
 |---|---|---|
@@ -66,10 +68,20 @@ cd apps/api && npx prisma generate
 > the pipeline runs migrations on the RDS database automatically (Appendix A). If you're only deploying
 > from `main`, you can skip 0.2 entirely.
 
-**0.3 A Route 53 PUBLIC hosted zone for your domain must already exist** in the AWS account
-(`infra/aws/terraform/main.tf` does `data "aws_route53_zone" "primary" { name = "sportsmart.com"; private_zone = false }`).
-If you use a different registered domain, change `hosted_zone_name`/`env_domain`/`auth_cookie_domain` in
-`infra/aws/terraform/staging.tfvars` to match. **No zone ⇒ `terraform apply` fails at plan.**
+**0.3 You do NOT need a pre-existing Route 53 zone for staging — but you DO need the ability to add one
+DNS record in the parent `sportsmart.com` zone.** Staging runs under a **delegated subdomain**:
+`staging.tfvars` sets `create_hosted_zone = true`, so Terraform *creates* the `staging.sportsmart.com`
+public hosted zone for you (`infra/aws/terraform/main.tf` → `resource "aws_route53_zone" "primary"`). You
+then delegate it by adding **one `NS` record** for `staging` in whoever manages `sportsmart.com` DNS
+(GoDaddy / registrar / corporate DNS) — done in **Phase 5.3** using the nameservers Terraform outputs.
+> ⚠️ **Do NOT create a Route 53 hosted zone for the apex `sportsmart.com` in this account.** Repointing the
+> registrar's nameservers at it would hijack the company's real DNS (website + email/MX). Delegating only the
+> `staging` subdomain leaves the apex untouched.
+>
+> To use a different domain you fully control instead, set `hosted_zone_name`/`env_domain`/
+> `auth_cookie_domain` in `staging.tfvars` to it (keep `create_hosted_zone = true` to have Terraform create
+> the zone, or set it `false` if that exact zone already exists in this account). Production differs — it
+> looks up a pre-existing apex zone; see Appendix D.
 
 **0.4 The OIDC trust is pinned to the repo.** `staging.tfvars` has
 `github_repo = "Jobways03/SPORTSMART_OFFICIAL_MM"` — it MUST equal your real GitHub remote, or every
@@ -139,9 +151,9 @@ There are **two** Secrets Manager secrets. Know which is which:
 - **`staging/app/external`** — **you fill it.** Exactly these 7 keys (`lifecycle ignore_changes` so a later
   `apply` never reverts your edits):
   ```
-  RAZORPAY_KEY_ID          rzp_test_…       (Razorpay TEST key — not live)
-  RAZORPAY_KEY_SECRET      …                (TEST secret)
-  RAZORPAY_WEBHOOK_SECRET  …                (staging webhook secret)
+  RAZORPAY_KEY_ID          rzp_test_…       (Razorpay TEST key — from the dashboard, not live)
+  RAZORPAY_KEY_SECRET      …                (TEST secret — from the dashboard)
+  RAZORPAY_WEBHOOK_SECRET  …                (a string YOU invent — `openssl rand -hex 32`; see note below)
   R2_ACCOUNT_ID            …
   R2_BUCKET                …                (staging bucket)
   R2_ACCESS_KEY_ID         …
@@ -158,24 +170,77 @@ There are **two** Secrets Manager secrets. Know which is which:
 >   --secret-string '{"RAZORPAY_KEY_ID":"rzp_test_…","RAZORPAY_KEY_SECRET":"…","RAZORPAY_WEBHOOK_SECRET":"…","R2_ACCOUNT_ID":"…","R2_BUCKET":"…","R2_ACCESS_KEY_ID":"…","R2_SECRET_ACCESS_KEY":"…"}'
 > ```
 
+> **`RAZORPAY_WEBHOOK_SECRET` — you invent it; you do NOT need a webhook to exist first.** It's a shared
+> secret between Razorpay and your API: Razorpay signs each webhook payload with it (HMAC-SHA256) and the
+> API verifies the signature with the *same* string — it is **not** something Razorpay generates for you.
+> Generate one now and store it as the value above:
+> ```bash
+> openssl rand -hex 32
+> ```
+> You **register** that same secret in the Razorpay dashboard later, in **Phase 8**, once the API URL is
+> live. The webhook is **not** required for the Phase 9.2 payment test — the order confirms via the
+> synchronous payment verify; the webhook is the async backstop (paid-but-browser-closed) + the dispute /
+> chargeback channel. (`RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` *do* come from Razorpay: Dashboard →
+> Settings → API Keys → generate **Test Mode** keys.)
+
 ---
 
 ## Phase 5 — Provision the infrastructure
 
+The apply is **deliberately split in two**: Terraform creates the DNS zone, you delegate it, and only then
+can the full apply finish — because the ALB's ACM certificate is **DNS-validated**, and the apply **blocks
+at `aws_acm_certificate_validation` until the subdomain resolves publicly**. Do these in order.
+
+**5.1 Initialize the backend**
 ```bash
 cd infra/aws/terraform
 terraform init -backend-config=staging.s3.tfbackend -reconfigure   # wait for "successfully initialized"
-terraform apply -var-file=staging.tfvars                            # review plan, type: yes; ~15–20 min
 ```
 
+**5.2 Create the DNS zone first (targeted), then read its nameservers**
+```bash
+terraform apply -target=aws_route53_zone.primary -var-file=staging.tfvars   # type: yes — creates 1 resource
+terraform output route53_name_servers                                       # 4 AWS nameservers
+```
+You'll get four like `ns-123.awsdns-45.org`, `ns-678.awsdns-90.co.uk`, …. (The `-target` warning Terraform
+prints is expected — this is the one legitimate use of it.) Only `route53_name_servers` is populated at this
+stage; the Phase 5.5 outputs (`deploy_role_arn`, etc.) don't exist until the full 5.4 apply creates their
+resources.
+
+**5.3 Delegate `staging` in the parent `sportsmart.com` DNS — this gates 5.4.**
+In whoever manages `sportsmart.com` DNS (GoDaddy / registrar / corporate DNS console), add **one** record —
+**do not touch the existing apex records or nameservers**:
+```
+Type: NS    Host/Name: staging    Value: <the 4 nameservers from 5.2, one per line>    TTL: 300
+```
+**Host/Name** is the subdomain label *relative to the zone you're editing* — usually just `staging`, though
+some panels (and the Route 53 console) want the full `staging.sportsmart.com`. That delegates only
+`staging.sportsmart.com` to Terraform's zone; the live site + email are untouched. Wait for it to go live,
+then verify (do **NOT** start 5.4 until this returns the 4 AWS nameservers):
+```bash
+dig +short NS staging.sportsmart.com @8.8.8.8
+```
+> If you skip ahead, 5.4 just sits at `aws_acm_certificate_validation.wildcard: Still creating…` until the
+> delegation propagates (it then completes on its own); it times out after ~75 min if you never delegate.
+> Add the `NS` record **before** anything first resolves `staging.sportsmart.com`: a premature query (or an
+> early 5.4) makes the parent zone answer `NXDOMAIN`, which ACM's resolvers cache for the parent zone's
+> SOA-minimum TTL — so validation can stay stuck *past* the 300s `NS` TTL even after `dig` already shows the
+> nameservers. If that happens, wait out the parent SOA TTL; don't cancel and re-apply — ACM recovers on its own.
+
+**5.4 Full apply — everything else (incl. the ALB + ACM cert)**
+```bash
+terraform apply -var-file=staging.tfvars                            # review plan, type: yes; ~15–20 min
+```
 This builds (all prefixed `sportsmart-staging`): VPC + public/private subnets + NAT, RDS Postgres 16
 (`db.t4g.micro`), ElastiCache Redis (`cache.t4g.micro`), an internet-facing ALB with the
-`*.staging.sportsmart.com` ACM cert, the ECS cluster, **one ECS service per app + the internal
-logistics-facade** (its own ECR repo, a Cloud Map namespace `staging.internal`, an ECS service + migrate
-task), the two Secrets Manager secrets, and the GitHub-OIDC deploy role. **ECR repos are empty now — the
-ECS services stay PENDING until Phase 7 pushes images. That's expected.**
+`*.staging.sportsmart.com` ACM cert (now validating against your delegated zone), the ECS cluster, **one ECS
+service per app + the internal logistics-facade** (its own ECR repo, a Cloud Map namespace `staging.internal`,
+an ECS service + migrate task), the two Secrets Manager secrets, and the GitHub-OIDC deploy role. It also
+creates the per-host alias records (`api.staging.sportsmart.com` → ALB, etc.) **inside the delegated zone —
+so there is NO separate "add a CNAME" step later.** **ECR repos are empty now — the ECS services stay
+PENDING until Phase 7 pushes images. That's expected.**
 
-After it finishes, grab the outputs you need next:
+**5.5 Grab the outputs you need next**
 ```bash
 terraform output deploy_role_arn               # → GitHub variable (Phase 6)
 terraform output app_secret_external_arn       # the Razorpay/R2 secret to populate (Phase 4)
@@ -244,15 +309,25 @@ the **`logistics-facade-migrate` task exiting 0**. Both are in CloudWatch under 
 
 ---
 
-## Phase 8 — DNS (GoDaddy)
+## Phase 8 — Register the Razorpay webhook (now that the API URL is live)
 
-In GoDaddy DNS for `sportsmart.com`, **without touching the Name Servers**, add:
-```
-Type: CNAME    Host: *.staging    Value: <ALB DNS name>    TTL: 1 hour
-```
-Get the ALB DNS name from **EC2 → Load Balancers → `sportsmart-staging` → DNS name** (or
-`terraform output alb_dns_name`). This routes every `*.staging.sportsmart.com` host to the staging ALB; your
-live site is untouched. Wait 15–30 min for propagation.
+The webhook is the **async backstop** (a payment captured even if the customer closed the browser) and the
+**dispute / chargeback** channel. Register it once the API is reachable (DNS was delegated back in Phase 5.3;
+the API itself comes up after the Phase 7 deploy):
+
+1. Razorpay Dashboard → **Settings → Webhooks → Add New Webhook**.
+2. **Webhook URL:** `https://api.staging.sportsmart.com/api/v1/payments/webhooks/razorpay`
+3. **Secret:** paste the **exact same** value you stored as `RAZORPAY_WEBHOOK_SECRET` in Phase 4 (this is why
+   you generated it yourself — Razorpay doesn't create it).
+4. **Active events:** `payment.captured`, `payment.failed`, `payment.authorized`, and the dispute events
+   `payment.dispute.created`, `payment.dispute.won`, `payment.dispute.lost`, `payment.dispute.closed`.
+5. Save → Razorpay's webhook page (or your first test payment) shows the delivery returning **HTTP 200**.
+
+> Mismatched secret ⇒ endpoint returns **401 "Invalid webhook signature"** and the event is dropped. Secret
+> unset on the server ⇒ **401 "Webhook secret not configured on server"** (the API still boots — the secret
+> is optional at boot — but the webhook won't function until set on **both** sides). The webhook is **not**
+> required to pass Phase 9.2 (the order confirms via the synchronous verify); set it up for production-like
+> reconciliation + disputes.
 
 ---
 
@@ -272,8 +347,11 @@ Expect **HTTP 200** and a body like `{"success":true,"status":"healthy","checks"
 must show **Test Mode**; pay with Visa test card **`4111 1111 1111 1111`** → order-success page.
 *(Needs the Razorpay TEST keys in `staging/app/external` from Phase 4.)*
 
-**9.3 Admin & webhook** — log in at `https://admin.staging.sportsmart.com` (seed admin) → **Orders** → your
-test order shows **CONFIRMED** (proves the Razorpay webhook reached the private subnet).
+**9.3 Admin & payment confirmation** — log in at `https://admin.staging.sportsmart.com` (seed admin) →
+**Orders** → your test order shows **CONFIRMED**. This is driven by the **synchronous** payment-verify call
+on the success page — **not** the webhook. To separately confirm the **webhook** (Phase 8) works, check
+Razorpay Dashboard → Webhooks → your webhook → recent deliveries: a `payment.captured` delivery should show
+**200** (proving Razorpay reached the API in the private subnet).
 
 **9.4 Logistics-facade (internal — validated through the admin, not a URL)** — in the admin, open
 **Logistics Partners** (Sellers → Logistics, or a seller-admin portal's Logistics panel). The partner list
@@ -319,7 +397,8 @@ When all boxes pass, staging is validated → proceed to the Production playbook
 | Symptom | Cause / fix |
 |---|---|
 | `terraform apply` → "partial credentials found" | `~/.aws/credentials` missing a key — re-run `aws configure` (Phase 2.1). |
-| `apply` fails at the Route 53 data lookup | No public hosted zone for the domain (Phase 0.3). |
+| Full `apply` stuck at `aws_acm_certificate_validation … Still creating…` | The `staging` subdomain isn't delegated yet, so ACM can't validate the cert. Add the `NS` record (Phase 5.3) and confirm `dig +short NS staging.sportsmart.com @8.8.8.8` returns the 4 AWS nameservers — the apply then finishes on its own. **Still stuck after `dig` passes?** A premature lookup cached a parent-zone `NXDOMAIN`; wait out the parent zone's SOA-minimum TTL — don't cancel/re-apply, ACM recovers on its own. |
+| `apply` fails at the Route 53 **data** lookup ("no matching hosted zone") | `create_hosted_zone=false` (e.g. production) but the zone doesn't exist. Staging sets it `true`, so Terraform creates the zone — see Phase 0.3 / 5.2. |
 | Deploy fails in `prep` at AssumeRole / empty role | Role var set as an *environment* var, not *repository* (Phase 6.1), or `github_repo` mismatch (Phase 0.4). |
 | `tsc`/build: `'<field>' does not exist on type` | Stale generated Prisma client — `cd apps/api && npx prisma generate` (Phase 0.2). |
 | Deploy fails at DB/facade migrate | Check CloudWatch `/ecs/sportsmart-staging/migrate` or `…/logistics-facade-migrate`. |
@@ -346,4 +425,12 @@ When all boxes pass, staging is validated → proceed to the Production playbook
   equivalents + the `requiredOnInProd` flags, and the **facade requires real `SHADOWFAX_*`/`DELHIVERY_*`
   partner creds** (its strict prod schema rejects placeholders) — provision those first or it crash-loops.
 - Production uses `production-latest` image tags and the `production` environment's required-reviewer gate.
-- Production DNS is a Name-Server cutover (not a CNAME) — covered in the Production playbook.
+- Production leaves `create_hosted_zone` unset (so it defaults to `false`) and **looks up a pre-existing apex
+  `sportsmart.com` Route 53 zone** (`production.tfvars`: `hosted_zone_name = env_domain = "sportsmart.com"`).
+  That means a full registrar Name-Server cutover for the whole domain to Route 53 — not a single
+  delegated-subdomain `NS` record like staging. Create that apex zone and point the registrar's nameservers at
+  it **before** applying production, or the apply fails at the Route 53 data lookup. Because that cutover is
+  done out-of-band first, production needs **no** targeted-zone step (`create_hosted_zone=false` means the
+  `aws_route53_zone.primary` resource doesn't exist to `-target`): a single
+  `terraform apply -var-file=production.tfvars` works, since the zone is already public and ACM can validate
+  immediately — covered in the Production playbook.
