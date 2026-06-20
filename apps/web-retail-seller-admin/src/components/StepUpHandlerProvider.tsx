@@ -89,7 +89,7 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
             visible: true,
             message:
               meta.message ??
-              'This action requires a fresh MFA step-up. Enter your authenticator code to continue.',
+              'This action requires a fresh security check. Enter the 6-digit code we email you to continue.',
             maxAgeMs: meta.maxAgeMs,
             queue: [{ resolve }],
           };
@@ -161,6 +161,16 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
   const onCancel = useCallback(() => {
     resolveAll(false);
   }, [resolveAll]);
+
+  // Email-first MFA: auto-email a step-up code as soon as the modal opens so no
+  // authenticator app is needed. The authenticator/backup paths still work in
+  // the backend; they're just no longer the prompted method.
+  useEffect(() => {
+    if (state.visible && !emailSentTo && !emailSending) {
+      void onEmailMe();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.visible]);
 
   // Close on Esc only when not mid-submit so an in-flight network call
   // can't be orphaned by an accidental keypress.
@@ -250,7 +260,7 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
                   marginBottom: 6,
                 }}
               >
-                Authenticator code, backup code, or emailed code
+                Emailed 6-digit code
               </label>
               <input
                 id="sm-stepup-code"
@@ -266,7 +276,7 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
                       .slice(0, 16),
                   )
                 }
-                placeholder="123456 or xxxxx-xxxxx"
+                placeholder="123456"
                 autoFocus
                 disabled={submitting}
                 style={{
@@ -310,7 +320,7 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
                     opacity: submitting || emailSending ? 0.6 : 1,
                   }}
                 >
-                  {emailSending ? 'Sending…' : 'No authenticator? Email me a code'}
+                  {emailSending ? 'Sending…' : 'Resend code'}
                 </button>
                 {emailSentTo && (
                   <p style={{ margin: '6px 0 0', color: '#0b8457', fontSize: 12, lineHeight: 1.4 }}>

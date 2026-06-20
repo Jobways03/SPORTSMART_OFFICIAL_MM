@@ -17,7 +17,7 @@ import { buildOtpAuthUri } from '../../domain/totp-uri';
 import { verifyTotpCode } from '../../domain/totp-verify';
 import { BackupCodesService } from './backup-codes.service';
 import { MfaSecretCipher } from './mfa-secret-cipher.service';
-import { randomInt, createHash } from 'crypto';
+import { randomInt, createHash, randomBytes } from 'crypto';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import { EmailOtpAdapter } from '../../../../integrations/email/adapters/email-otp.adapter';
 
@@ -68,6 +68,67 @@ const stepUpEmailOtpKey = (sessionId: string) =>
   `admin:mfa:stepup:emailotp:${sessionId}`;
 const stepUpEmailOtpCooldownKey = (sessionId: string) =>
   `admin:mfa:stepup:emailotp:cooldown:${sessionId}`;
+
+// Admin-issued MFA enrolment invite. A SUPER_ADMIN mints a single-use,
+// time-limited token for a target admin (typically a freshly-created
+// SUPER_ADMIN who is hard-blocked at login until MFA is enrolled). The token
+// lets the invitee run the standard begin/complete enrolment WITHOUT a session
+// — closing the chicken-and-egg without exposing the secret to the issuer.
+// Only the SHA-256 hash of the token is stored, keyed in Redis, so a Redis
+// read can't recover a usable link.
+const MFA_INVITE_TTL_SECONDS = 60 * 60; // 1 hour
+const mfaInviteKey = (tokenHash: string) => `admin:mfa:invite:${tokenHash}`;
+const hashInviteToken = (token: string) =>
+  createHash('sha256').update(token).digest('hex');
+
+// Portal-specific admin roles each sign in at their OWN admin portal (mirrors
+// ROLE_HOME_PORTAL in admin-login.use-case). A role not listed here is a
+// SUPER/ops admin and uses the platform portal. The enrolment link must point
+// at the invitee's home portal — otherwise they land on a portal whose /login
+// rejects their role ("belongs to the X admin portal"). Base URLs are env-
+// overridable for prod (different domains); dev defaults match the local ports.
+const ROLE_PORTAL: Record<string, string> = {
+  D2C_ADMIN: 'D2C',
+  RETAILER_ADMIN: 'RETAIL',
+  FRANCHISE_ADMIN: 'FRANCHISE',
+  AFFILIATE_ADMIN: 'AFFILIATE',
+};
+const PORTAL_LABEL: Record<string, string> = {
+  SUPER: 'Platform (Super Admin)',
+  D2C: 'D2C Seller Admin',
+  RETAIL: 'Retail Seller Admin',
+  FRANCHISE: 'Franchise Admin',
+  AFFILIATE: 'Affiliate Admin',
+};
+const PORTAL_URL_DEFAULT: Record<string, string> = {
+  SUPER: 'http://localhost:4000',
+  D2C: 'http://localhost:4001',
+  RETAIL: 'http://localhost:4008',
+  FRANCHISE: 'http://localhost:4002',
+  AFFILIATE: 'http://localhost:4006',
+};
+function portalForRole(role: string): string {
+  return ROLE_PORTAL[role] ?? 'SUPER';
+}
+function portalBaseUrl(portal: string): string {
+  const env = process.env[`ADMIN_PORTAL_URL_${portal}`];
+  const base =
+    (env && env.trim()) || PORTAL_URL_DEFAULT[portal] || 'http://localhost:4000';
+  return base.replace(/\/$/, '');
+}
+
+// Email-OTP alternative for invite enrolment — for admins without an
+// authenticator app. A 6-digit code is emailed to the invitee, its hash held
+// in Redis keyed by the invite token; verifying it enrols MFA the same way as
+// the TOTP path (a TOTP secret is still minted server-side so the authenticator
+// channel stays available, but the invitee never has to touch it).
+const INVITE_EMAIL_OTP_TTL_SECONDS = 10 * 60;
+const INVITE_EMAIL_OTP_COOLDOWN_SECONDS = 60;
+const INVITE_EMAIL_OTP_MAX_ATTEMPTS = 5;
+const mfaInviteEmailOtpKey = (tokenHash: string) =>
+  `admin:mfa:invite:emailotp:${tokenHash}`;
+const mfaInviteEmailOtpCooldownKey = (tokenHash: string) =>
+  `admin:mfa:invite:emailotp:cooldown:${tokenHash}`;
 function maskEmail(email: string): string {
   const [user, domain] = email.split('@');
   if (!user || !domain) return email;
@@ -249,6 +310,261 @@ export class AdminMfaService {
     });
 
     return { backupCodes };
+  }
+
+  /**
+   * Admin-issued enrolment invite (SUPER_ADMIN only — guarded at the
+   * controller). Mints a single-use token for `targetAdminId`, stores only its
+   * SHA-256 hash in Redis with a short TTL, and returns the raw token to the
+   * issuer so the admin frontend can build an enrolment link. The issuer never
+   * sees the TOTP secret — it's generated only when the invitee redeems the
+   * token via beginEnrollmentByInvite. This closes the first-login
+   * chicken-and-egg (a new SUPER_ADMIN can't log in to self-enroll) without a
+   * DB script and without an "Admin A reads Admin B's secret" path.
+   */
+  async createEnrollmentInvite(
+    targetAdminId: string,
+    ctx: RequestContext = { ipAddress: null, userAgent: null },
+  ): Promise<{
+    token: string;
+    expiresInSeconds: number;
+    email: string;
+    portal: string;
+    portalLabel: string;
+    enrollUrl: string;
+  }> {
+    const admin = await this.adminRepo.findAdminById(targetAdminId, {
+      email: true,
+      role: true,
+    });
+    if (!admin) {
+      throw new NotFoundAppException('Admin not found');
+    }
+    if (!admin.email) {
+      throw new BadRequestAppException(
+        'Admin has no email on record; cannot issue an enrolment invite',
+      );
+    }
+
+    const token = randomBytes(32).toString('base64url');
+    await this.redis.set(
+      mfaInviteKey(hashInviteToken(token)),
+      { adminId: targetAdminId },
+      MFA_INVITE_TTL_SECONDS,
+    );
+
+    await this.writeAudit({
+      adminId: targetAdminId,
+      action: 'admin.mfa.invite_issued',
+      newValue: { ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    });
+    this.emit('admin.mfa.invite_issued', targetAdminId, {
+      adminId: targetAdminId,
+      email: admin.email,
+      ...ctx,
+    });
+
+    // Point the link at the invitee's HOME portal so the post-enrol sign-in
+    // lands where their role is actually accepted.
+    const portal = portalForRole((admin as { role: string }).role);
+    const enrollUrl = `${portalBaseUrl(portal)}/mfa-enroll/${token}`;
+
+    return {
+      token,
+      expiresInSeconds: MFA_INVITE_TTL_SECONDS,
+      email: admin.email,
+      portal,
+      portalLabel: PORTAL_LABEL[portal] ?? portal,
+      enrollUrl,
+    };
+  }
+
+  /** Resolve an invite token to its target admin id, or throw if invalid/expired. */
+  private async resolveInviteToken(token: string): Promise<string> {
+    const record = await this.redis.get<{ adminId: string }>(
+      mfaInviteKey(hashInviteToken(token)),
+    );
+    if (!record?.adminId) {
+      throw new NotFoundAppException(
+        'This enrolment link is invalid or has expired. Ask an administrator to issue a new one.',
+      );
+    }
+    return record.adminId;
+  }
+
+  /**
+   * Token-authenticated counterpart to beginEnrollment — used by the public
+   * invite page. Resolves the token to the target admin and starts enrolment.
+   * If the target already has MFA (an issued "reset" for a lost device), the
+   * live secret is cleared first so a fresh enrolment can proceed.
+   */
+  async beginEnrollmentByInvite(
+    token: string,
+    ctx: RequestContext = { ipAddress: null, userAgent: null },
+  ): Promise<{ otpAuthUrl: string; secret: string }> {
+    const adminId = await this.resolveInviteToken(token);
+    const admin = await this.adminRepo.findAdminById(adminId, {
+      mfaEnabledAt: true,
+    });
+    if (admin?.mfaEnabledAt) {
+      // Reset path: wipe the existing MFA so beginEnrollment (which refuses an
+      // already-enrolled admin) can issue a fresh secret. Mirrors disable().
+      await this.adminRepo.updateAdmin(adminId, {
+        mfaSecretCiphertext: null,
+        mfaPendingSecretCiphertext: null,
+        mfaPendingExpiresAt: null,
+        mfaEnabledAt: null,
+        mfaBackupCodesHashes: null,
+        mfaLastUsedStep: null,
+      });
+    }
+    return this.beginEnrollment(adminId, ctx);
+  }
+
+  /**
+   * Token-authenticated counterpart to completeEnrollment. Verifies the code,
+   * commits the secret, then burns the invite so the link can't be reused.
+   */
+  async completeEnrollmentByInvite(
+    token: string,
+    code: string,
+    ctx: RequestContext = { ipAddress: null, userAgent: null },
+  ): Promise<{ backupCodes: string[] }> {
+    const adminId = await this.resolveInviteToken(token);
+    const result = await this.completeEnrollment(adminId, code, ctx);
+    await this.redis.del(mfaInviteKey(hashInviteToken(token)));
+    return result;
+  }
+
+  /**
+   * Email-OTP invite enrolment — step A. Emails a 6-digit code to the invitee
+   * so an admin WITHOUT an authenticator app can still enrol. The code's hash
+   * is stored in Redis keyed by the invite token (per-token cooldown).
+   */
+  async requestInviteEmailOtp(
+    token: string,
+    ctx: RequestContext = { ipAddress: null, userAgent: null },
+  ): Promise<{ otpExpiresIn: number; maskedEmail: string }> {
+    const adminId = await this.resolveInviteToken(token);
+    const admin = await this.adminRepo.findAdminById(adminId, { email: true });
+    if (!admin?.email) {
+      throw new BadRequestAppException('Admin has no email on record.');
+    }
+    const tokenHash = hashInviteToken(token);
+    const cooled = await this.redis.acquireLock(
+      mfaInviteEmailOtpCooldownKey(tokenHash),
+      INVITE_EMAIL_OTP_COOLDOWN_SECONDS,
+    );
+    if (!cooled) {
+      throw new BadRequestAppException(
+        'A code was just sent. Please wait a moment before requesting another.',
+      );
+    }
+    const otp = String(randomInt(100000, 1000000));
+    const otpHash = createHash('sha256').update(otp).digest('hex');
+    await this.redis.set(
+      mfaInviteEmailOtpKey(tokenHash),
+      { otpHash, attempts: 0 },
+      INVITE_EMAIL_OTP_TTL_SECONDS,
+    );
+    const sent = await this.emailOtp.sendOtp(admin.email, otp).catch((err) => {
+      this.logger.error(
+        `Failed to send invite email OTP: ${(err as Error)?.message}`,
+      );
+      return false;
+    });
+    if (!sent) {
+      await this.redis.del(mfaInviteEmailOtpKey(tokenHash));
+      throw new BadRequestAppException(
+        'Could not send the email code. Please try again.',
+      );
+    }
+    await this.writeAudit({
+      adminId,
+      action: 'admin.mfa.invite_email_otp_requested',
+      newValue: { ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    });
+    return {
+      otpExpiresIn: INVITE_EMAIL_OTP_TTL_SECONDS,
+      maskedEmail: maskEmail(admin.email),
+    };
+  }
+
+  /**
+   * Email-OTP invite enrolment — step B. Verifies the emailed code and, on
+   * success, enrols MFA (mints a TOTP secret + backup codes, sets mfaEnabledAt)
+   * and burns both the OTP record and the invite token.
+   */
+  async completeInviteEmailOtp(
+    token: string,
+    code: string,
+    ctx: RequestContext = { ipAddress: null, userAgent: null },
+  ): Promise<{ backupCodes: string[] }> {
+    const adminId = await this.resolveInviteToken(token);
+    const tokenHash = hashInviteToken(token);
+    const rec = await this.redis.get<{ otpHash: string; attempts: number }>(
+      mfaInviteEmailOtpKey(tokenHash),
+    );
+    if (!rec) {
+      throw new BadRequestAppException(
+        'No email code in progress, or it expired. Request a new code.',
+      );
+    }
+    if (rec.attempts >= INVITE_EMAIL_OTP_MAX_ATTEMPTS) {
+      await this.redis.del(mfaInviteEmailOtpKey(tokenHash));
+      throw new BadRequestAppException(
+        'Too many incorrect attempts. Request a new code.',
+      );
+    }
+    const codeHash = createHash('sha256').update(code.trim()).digest('hex');
+    if (codeHash !== rec.otpHash) {
+      await this.redis.set(
+        mfaInviteEmailOtpKey(tokenHash),
+        { otpHash: rec.otpHash, attempts: rec.attempts + 1 },
+        INVITE_EMAIL_OTP_TTL_SECONDS,
+      );
+      throw new BadRequestAppException(
+        'Invalid code. Check the email and try again.',
+      );
+    }
+    const backupCodes = await this.enrollWithFreshSecret(adminId, ctx);
+    await this.redis.del(mfaInviteEmailOtpKey(tokenHash));
+    await this.redis.del(mfaInviteKey(tokenHash));
+    return { backupCodes };
+  }
+
+  /**
+   * Commit MFA enrolment directly with a freshly-minted TOTP secret (no
+   * pending/verify dance). Used by the email-OTP enrolment path, which proves
+   * identity via the emailed code rather than a TOTP code. The secret keeps the
+   * authenticator channel available even though the admin enrolled by email.
+   */
+  private async enrollWithFreshSecret(
+    adminId: string,
+    ctx: RequestContext,
+  ): Promise<string[]> {
+    const admin = await this.adminRepo.findAdminById(adminId, { email: true });
+    if (!admin) throw new NotFoundAppException('Admin not found');
+    const secret = generateTotpSecret();
+    await this.adminRepo.updateAdmin(adminId, {
+      mfaSecretCiphertext: this.cipher.encrypt(secret),
+      mfaEnabledAt: new Date(),
+      mfaPendingSecretCiphertext: null,
+      mfaPendingExpiresAt: null,
+      mfaLastUsedStep: null,
+    });
+    const backupCodes = await this.backupCodes.generateAndHashForAdmin(adminId);
+    await this.writeAudit({
+      adminId,
+      action: 'admin.mfa.enrolment_completed',
+      newValue: { via: 'email-invite', ipAddress: ctx.ipAddress, userAgent: ctx.userAgent },
+    });
+    this.emit('admin.mfa.enrolled', adminId, {
+      adminId,
+      email: admin.email,
+      ...ctx,
+    });
+    return backupCodes;
   }
 
   /**

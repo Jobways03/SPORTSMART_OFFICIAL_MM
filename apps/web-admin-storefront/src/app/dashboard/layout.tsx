@@ -180,7 +180,19 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
   // admins, etc. SUPER_ADMIN sees everything because hasAnyPermission
   // short-circuits on isSuperAdmin. Filtering only runs once `me` is loaded
   // so we don't briefly flash items the admin doesn't actually have access to.
-  const { loading: permsLoading, hasAnyPermission } = usePermissions();
+  const { loading: permsLoading, hasAnyPermission, me } = usePermissions();
+  const ROLE_LABELS: Record<string, string> = {
+    SUPER_ADMIN: 'Super Admin',
+    SELLER_ADMIN: 'Seller Admin',
+    SELLER_OPERATIONS: 'Seller Operations',
+    SELLER_OPS: 'Seller Ops',
+    SELLER_SUPPORT: 'Seller Support',
+    AFFILIATE_ADMIN: 'Affiliate Admin',
+    D2C_ADMIN: 'D2C Admin',
+    RETAILER_ADMIN: 'Retailer Admin',
+    FRANCHISE_ADMIN: 'Franchise Admin',
+  };
+  const roleLabel = me?.role ? ROLE_LABELS[me.role] ?? me.role : 'Admin';
   const visibleNavItems = useMemo(() => {
     if (permsLoading) return null;
     return navItems.filter((item) => !item.anyOf || hasAnyPermission(item.anyOf));
@@ -298,8 +310,8 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
               aria-haspopup="true"
             >
               <div className="navbar-user-info">
-                <div className="navbar-user-name">{adminName || 'Super Admin'}</div>
-                <div className="navbar-user-role">Super Admin</div>
+                <div className="navbar-user-name">{adminName || 'Admin'}</div>
+                <div className="navbar-user-role">{roleLabel}</div>
               </div>
               <div className="navbar-avatar">{initials}</div>
               <span className={`navbar-dropdown-arrow${dropdownOpen ? ' open' : ''}`} aria-hidden>
@@ -314,13 +326,13 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
               <div className="navbar-dropdown">
                 <div style={{ padding: '10px 12px', borderBottom: '1px solid #e5e7eb', marginBottom: 4 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>
-                    {adminName || 'Super Admin'}
+                    {adminName || 'Admin'}
                   </div>
                   {adminEmail && (
                     <div style={{ fontSize: 12, color: '#6b7280' }}>{adminEmail}</div>
                   )}
                   <div style={{ fontSize: 11, color: '#6b7280', marginTop: 2 }}>
-                    Super Admin
+                    {roleLabel}
                   </div>
                 </div>
                 <div className="navbar-dropdown-divider" />

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { AdminAuthGuard } from '../../core/guards';
+import { RolesGuard } from '../../core/guards/roles.guard';
 import { StepUpGuard } from '../../core/step-up/step-up.guard';
 import { AdminModule } from '../admin/module';
 import { NotificationsModule } from '../notifications/module';
@@ -11,6 +12,8 @@ import { MfaSecretCipher } from './application/services/mfa-secret-cipher.servic
 import { AdminMfaVerifyChallengeUseCase } from './application/use-cases/admin-mfa-verify-challenge.use-case';
 import { AdminMfaAuthController } from './presentation/controllers/admin-mfa-auth.controller';
 import { AdminMfaController } from './presentation/controllers/admin-mfa.controller';
+import { AdminMfaInviteController } from './presentation/controllers/admin-mfa-invite.controller';
+import { AdminMfaInviteRedeemController } from './presentation/controllers/admin-mfa-invite-redeem.controller';
 import { AdminMfaNotificationHandler } from './application/event-handlers/admin-mfa-notification.handler';
 import { MfaPendingSecretSweepCron } from './application/jobs/mfa-pending-secret-sweep.cron';
 
@@ -41,7 +44,12 @@ import { MfaPendingSecretSweepCron } from './application/jobs/mfa-pending-secret
  */
 @Module({
   imports: [AdminModule, NotificationsModule, EmailModule],
-  controllers: [AdminMfaController, AdminMfaAuthController],
+  controllers: [
+    AdminMfaController,
+    AdminMfaAuthController,
+    AdminMfaInviteController,
+    AdminMfaInviteRedeemController,
+  ],
   providers: [
     MfaSecretCipher,
     BackupCodesService,
@@ -50,6 +58,7 @@ import { MfaPendingSecretSweepCron } from './application/jobs/mfa-pending-secret
     // Email-OTP MFA alternative — sends the 6-digit login code by email.
     EmailOtpAdapter,
     AdminAuthGuard,
+    RolesGuard,
     StepUpGuard,
     AdminMfaNotificationHandler,
     MfaPendingSecretSweepCron,

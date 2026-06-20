@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import { Suspense, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
 import { DeliveryMethodBadge } from '@/components/DeliveryMethodBadge';
 
@@ -91,6 +91,21 @@ const ORDER_STATUS_OPTIONS = [
   { value: 'CANCELLED', label: 'Cancelled' },
   { value: 'EXCEPTION_QUEUE', label: 'Exception queue' },
 ];
+
+// Normalise an incoming ?orderStatus= / ?status= URL value to a canonical
+// OrderStatus enum used by the dropdown. Accepts the enum value directly
+// (e.g. PENDING_VERIFICATION) and the friendly aliases the dashboard KPIs
+// deep-link with (e.g. ?status=pending). Returns '' for anything unknown so
+// a stray param can never wedge the list into an empty/invalid filter.
+const ORDER_STATUS_ALIASES: Record<string, string> = {
+  PENDING: 'PENDING_VERIFICATION',
+};
+function normaliseOrderStatus(raw: string | null | undefined): string {
+  if (!raw) return '';
+  const v = raw.toUpperCase();
+  const mapped = ORDER_STATUS_ALIASES[v] ?? v;
+  return ORDER_STATUS_OPTIONS.some((o) => o.value === mapped) ? mapped : '';
+}
 
 function orderStatusPill(status: string): { label: string; tone: PillTone } {
   switch (status) {
@@ -192,17 +207,44 @@ const returnToOrderStatus = (returnStatus: string): string => {
 
 /* ── Page ───────────────────────────────────────────────────── */
 
+// useSearchParams() must sit under a Suspense boundary so a prerender pass
+// doesn't bail the whole page out of static optimisation.
 export default function AdminOrdersPage() {
+  return (
+    <Suspense fallback={<div style={{ padding: 32 }}>Loading…</div>}>
+      <AdminOrdersInner />
+    </Suspense>
+  );
+}
+
+function AdminOrdersInner() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [data, setData] = useState<OrdersResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
 
-  const [orderStatusFilter, setOrderStatusFilter] = useState('');
-  const [paymentFilter, setPaymentFilter] = useState('');
-  const [fulfillmentFilter, setFulfillmentFilter] = useState('');
-  const [acceptFilter, setAcceptFilter] = useState('');
-  const [searchQuery, setSearchQuery] = useState('');
+  // Seed filters from the URL so deep-links (e.g. the dashboard's
+  // ?status=pending KPI) land pre-filtered and a refresh preserves the
+  // current view instead of snapping back to "All". The URL is kept in sync
+  // on every change by the effect below.
+  const [orderStatusFilter, setOrderStatusFilter] = useState(() =>
+    normaliseOrderStatus(
+      searchParams?.get('orderStatus') ?? searchParams?.get('status'),
+    ),
+  );
+  const [paymentFilter, setPaymentFilter] = useState(
+    () => searchParams?.get('paymentStatus') ?? '',
+  );
+  const [fulfillmentFilter, setFulfillmentFilter] = useState(
+    () => searchParams?.get('fulfillmentStatus') ?? '',
+  );
+  const [acceptFilter, setAcceptFilter] = useState(
+    () => searchParams?.get('acceptStatus') ?? '',
+  );
+  const [searchQuery, setSearchQuery] = useState(
+    () => searchParams?.get('search') ?? '',
+  );
 
   const hasFilters = !!(
     orderStatusFilter ||
@@ -233,6 +275,24 @@ export default function AdminOrdersPage() {
     fetchOrders(page);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, orderStatusFilter, paymentFilter, fulfillmentFilter, acceptFilter]);
+
+  // Mirror the active filters into the URL (replace, not push — filtering
+  // shouldn't pollute the back button) so the view survives a refresh and is
+  // shareable/deep-linkable. Reads happen only at mount (state initialisers
+  // above), so this write-back never loops.
+  useEffect(() => {
+    const params = new URLSearchParams();
+    if (orderStatusFilter) params.set('orderStatus', orderStatusFilter);
+    if (paymentFilter) params.set('paymentStatus', paymentFilter);
+    if (fulfillmentFilter) params.set('fulfillmentStatus', fulfillmentFilter);
+    if (acceptFilter) params.set('acceptStatus', acceptFilter);
+    if (searchQuery) params.set('search', searchQuery);
+    const qs = params.toString();
+    router.replace(qs ? `/dashboard/orders?${qs}` : '/dashboard/orders', {
+      scroll: false,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderStatusFilter, paymentFilter, fulfillmentFilter, acceptFilter, searchQuery]);
 
   const handleSearch = () => {
     setPage(1);

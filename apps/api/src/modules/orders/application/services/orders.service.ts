@@ -2630,6 +2630,11 @@ export class OrdersService {
     // they can fulfill every line.
     type NodeCandidate = {
       nodeType: 'SELLER' | 'FRANCHISE';
+      // Specific seller sub-type for SELLER nodes (RETAIL vs D2C); undefined
+      // for FRANCHISE. Lets the admin reassign UI label a node "RETAIL SELLER"
+      // / "D2C SELLER" instead of a generic "SELLER". Derived from the
+      // allocation candidate's `tier`.
+      sellerType?: 'RETAIL' | 'D2C';
       nodeId: string;
       name: string;
       // Phase 64 — nullable (audit Gap #9).
@@ -2673,6 +2678,11 @@ export class OrdersService {
             if (!existing || node.score > existing.score) {
               scoreMap.set(key, {
                 nodeType: node.nodeType,
+                sellerType: isFranchise
+                  ? undefined
+                  : node.tier === 'RETAIL'
+                    ? 'RETAIL'
+                    : 'D2C',
                 nodeId,
                 name: node.sellerName,
                 distanceKm: node.distanceKm,
@@ -2688,7 +2698,15 @@ export class OrdersService {
       }
     }
 
-    return Array.from(scoreMap.values()).sort((a, b) => b.score - a.score);
+    // Sort by allocation score (desc) — the routing cascade's real preference.
+    // Break ties by ascending distance (nearest first); nodes with an unknown
+    // distance sort last within their score band.
+    return Array.from(scoreMap.values()).sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      const da = a.distanceKm ?? Number.POSITIVE_INFINITY;
+      const db = b.distanceKm ?? Number.POSITIVE_INFINITY;
+      return da - db;
+    });
   }
 
   /**

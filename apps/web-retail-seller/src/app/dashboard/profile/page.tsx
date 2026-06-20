@@ -547,6 +547,23 @@ export default function SellerProfilePage() {
           return next;
         });
       }
+      // Live-validate the contact number as the user types (not only on blur /
+      // Save) so an invalid number surfaces an error immediately. +91 → strict
+      // 10-digit 6-9 mobile; other country codes use the looser 7-15 check.
+      const code =
+        field === 'sellerContactCountryCode' ? value : formData.sellerContactCountryCode;
+      const num = field === 'sellerContactNumber' ? value : formData.sellerContactNumber;
+      const liveErr = num.trim()
+        ? code.trim() === '+91'
+          ? validateIndianMobile(num)
+          : validateContactNumber(num)
+        : null;
+      setErrors(prev => {
+        const next = { ...prev };
+        if (liveErr) next.sellerContactNumber = liveErr;
+        else delete next.sellerContactNumber;
+        return next;
+      });
     }
   };
 
@@ -1330,7 +1347,15 @@ export default function SellerProfilePage() {
                 type="tel"
                 inputMode="numeric"
                 value={formData.sellerContactNumber}
-                onChange={e => updateField('sellerContactNumber', e.target.value.replace(/\D/g, ''))}
+                onChange={e => {
+                  // Indian mobile only: digits, must start 6-9, exactly 10 digits.
+                  // Drop any leading 0-5 and hard-cap at 10 at the input level.
+                  const next = e.target.value
+                    .replace(/\D/g, '')
+                    .replace(/^[0-5]+/, '')
+                    .slice(0, 10);
+                  updateField('sellerContactNumber', next);
+                }}
                 onBlur={() => handleBlur('sellerContactNumber')}
                 aria-invalid={!!errors.sellerContactNumber}
                 aria-describedby={
@@ -1338,7 +1363,7 @@ export default function SellerProfilePage() {
                   errors.phone ? 'phone-error' : undefined
                 }
                 disabled={readonly || isSaving}
-                placeholder="Phone number"
+                placeholder="10-digit mobile"
                 autoComplete="tel"
               />
             </div>

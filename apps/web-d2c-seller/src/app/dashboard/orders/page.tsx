@@ -102,6 +102,10 @@ export default function SellerOrdersPage() {
   const [page, setPage] = useState(1);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
+  // KPI counts — fetched independently of the paginated list so the numbers
+  // reflect the whole store, not just the 20 rows on the current page.
+  const [kpis, setKpis] = useState({ pendingAcceptance: 0, inProgress: 0, delivered: 0 });
+
   // Filters
   const [fulfillmentFilter, setFulfillmentFilter] = useState('');
   const [acceptFilter, setAcceptFilter] = useState('');
@@ -125,7 +129,30 @@ export default function SellerOrdersPage() {
       .finally(() => setLoading(false));
   };
 
+  const fetchKpis = () => {
+    const count = (extra: Record<string, string>) => {
+      const sp = new URLSearchParams({ page: '1', limit: '1', ...extra });
+      return apiClient<any>(`/seller/orders?${sp.toString()}`)
+        .then((res) => Number(res.data?.pagination?.total) || 0)
+        .catch(() => 0);
+    };
+    Promise.all([
+      count({ acceptStatus: 'OPEN' }),
+      count({ fulfillmentStatus: 'PACKED' }),
+      count({ fulfillmentStatus: 'SHIPPED' }),
+      count({ fulfillmentStatus: 'UNFULFILLED', acceptStatus: 'ACCEPTED' }),
+      count({ fulfillmentStatus: 'DELIVERED' }),
+    ]).then(([open, packed, shipped, unfulfilled, delivered]) => {
+      setKpis({
+        pendingAcceptance: open,
+        inProgress: packed + shipped + unfulfilled,
+        delivered,
+      });
+    });
+  };
+
   useEffect(() => { fetchOrders(page); }, [page, fulfillmentFilter, acceptFilter]);
+  useEffect(() => { fetchKpis(); }, []);
 
   const handleSearch = () => {
     setPage(1);
@@ -188,6 +215,7 @@ export default function SellerOrdersPage() {
       // Re-fetch to absorb any server-side side effects (deadline
       // updates, fulfillment status changes from auto-reallocation).
       fetchOrders(page);
+      fetchKpis();
     } catch {
       // Revert to snapshot — the optimistic flip turned out to be wrong.
       if (snapshot) setData(snapshot);
@@ -213,6 +241,7 @@ export default function SellerOrdersPage() {
         }),
       });
       fetchOrders(page);
+      fetchKpis();
     } catch {
       if (snapshot) setData(snapshot);
     } finally {
@@ -223,14 +252,16 @@ export default function SellerOrdersPage() {
     }
   };
 
-  const formatPrice = (price: number) => `\u20B9${Number(price).toLocaleString('en-IN')}`;
+  const formatPrice = (price: number) =>
+    `₹${Number(price).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const formatDate = (d: string) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 
   const badge = (text: string, color: string) => (
     <span style={{
+      display: 'inline-block',
       fontSize: 11,
-      fontWeight: 600,
-      padding: '2px 8px',
+      fontWeight: 700,
+      padding: '3px 10px',
       borderRadius: 4,
       background: color + '18',
       color,
@@ -260,9 +291,47 @@ export default function SellerOrdersPage() {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 700 }}>Orders</h1>
-        {data && <span style={{ fontSize: 13, color: '#6b7280' }}>{data.pagination.total} total</span>}
+      {/* Page header */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+        <div>
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0, color: '#111827' }}>Orders</h1>
+          <p style={{ fontSize: 14, color: '#6b7280', margin: '4px 0 0' }}>
+            Manage and fulfill customer orders for your store
+          </p>
+        </div>
+        {data && (
+          <span style={{ fontSize: 13, color: '#6b7280', whiteSpace: 'nowrap', paddingTop: 6 }}>
+            {data.pagination.total} total
+          </span>
+        )}
+      </div>
+
+      {/* KPI Cards */}
+      <div className="dashboard-stats">
+        <div className="stat-card">
+          <div className="stat-icon amber">&#128276;</div>
+          <div className="stat-content">
+            <h3>Pending Acceptance</h3>
+            <div className="stat-value">{kpis.pendingAcceptance}</div>
+            <div className="stat-sub">Orders awaiting response</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon blue">&#128230;</div>
+          <div className="stat-content">
+            <h3>In Progress</h3>
+            <div className="stat-value">{kpis.inProgress}</div>
+            <div className="stat-sub">Being packed or shipped</div>
+          </div>
+        </div>
+        <div className="stat-card">
+          <div className="stat-icon green">&#10004;</div>
+          <div className="stat-content">
+            <h3>Delivered</h3>
+            <div className="stat-value">{kpis.delivered}</div>
+            <div className="stat-sub">Successfully fulfilled</div>
+          </div>
+        </div>
       </div>
 
       {/* Filters */}
@@ -296,38 +365,38 @@ export default function SellerOrdersPage() {
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-            style={{ padding: '6px 12px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, width: 180 }}
+            style={{ padding: '8px 12px', border: '1px solid #d1d5db', borderRadius: 6, fontSize: 13, width: 200 }}
           />
-          <button onClick={handleSearch} style={{ padding: '6px 12px', border: '1px solid #d1d5db', borderRadius: 6, background: '#f9fafb', fontSize: 13, cursor: 'pointer' }}>
+          <button onClick={handleSearch} style={{ padding: '8px 14px', border: '1px solid #d1d5db', borderRadius: 6, background: '#f9fafb', fontSize: 13, fontWeight: 600, cursor: 'pointer' }}>
             Search
           </button>
         </div>
       </div>
 
       {loading && !data ? (
-        <div style={{ textAlign: 'center', padding: 40, color: '#6b7280' }}>Loading orders...</div>
+        <div style={cardStyle}>Loading orders...</div>
       ) : !data || data.subOrders.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: 60 }}>
+        <div style={{ ...cardStyle, textAlign: 'center', padding: 60 }}>
           <div style={{ fontSize: 48, marginBottom: 16 }}>&#128203;</div>
           <h3 style={{ fontWeight: 600, marginBottom: 8 }}>No orders yet</h3>
           <p style={{ color: '#6b7280' }}>When customers order your products, orders will appear here.</p>
         </div>
       ) : (
-        <>
+        <div style={{ ...cardStyle, padding: 0, overflow: 'hidden' }}>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <thead>
-                <tr style={{ borderBottom: '2px solid #e5e7eb' }}>
-                  <th style={thStyle}>ORDER ID</th>
-                  <th style={thStyle}>STORE ORDER ID</th>
-                  <th style={thStyle}>DATE</th>
-                  <th style={thStyle}>PAYMENT MODE</th>
-                  <th style={thStyle}>PAYMENT STATUS</th>
-                  <th style={thStyle}>FULFILLMENT</th>
-                  <th style={thStyle}>DELIVERY</th>
-                  <th style={thStyle}>ORDER ACCEPT</th>
-                  <th style={thStyle}>ORDER AMOUNT</th>
-                  <th style={thStyle}>ACTION</th>
+                <tr style={{ background: '#f9fafb', borderBottom: '2px solid #e5e7eb' }}>
+                  <th style={thStyle}>Order ID</th>
+                  <th style={thStyle}>Store Order ID</th>
+                  <th style={thStyle}>Date</th>
+                  <th style={thStyle}>Payment Mode</th>
+                  <th style={thStyle}>Payment Status</th>
+                  <th style={thStyle}>Fulfillment</th>
+                  <th style={thStyle}>Delivery</th>
+                  <th style={thStyle}>Order Accept</th>
+                  <th style={thStyle}>Order Amount</th>
+                  <th style={thStyle}>Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -339,7 +408,7 @@ export default function SellerOrdersPage() {
                     onMouseEnter={(e) => (e.currentTarget.style.background = '#f9fafb')}
                     onMouseLeave={(e) => (e.currentTarget.style.background = '')}
                   >
-                    <td style={tdStyle}><span style={{ fontFamily: 'monospace', fontSize: 12 }}>{so.id.slice(0, 8)}...</span></td>
+                    <td style={tdStyle}><span style={{ fontFamily: 'monospace', fontSize: 12, color: '#6b7280' }}>{so.id.slice(0, 8)}...</span></td>
                     <td style={tdStyle}><strong style={{ color: '#2563eb' }}>{so.masterOrder.orderNumber}</strong></td>
                     <td style={tdStyle}>{formatDate(so.masterOrder.createdAt)}</td>
                     <td style={tdStyle}>{so.masterOrder.paymentMethod}</td>
@@ -383,7 +452,7 @@ export default function SellerOrdersPage() {
                         )}
                       </div>
                     </td>
-                    <td style={tdStyle}>{formatPrice(Number(so.subTotal))}</td>
+                    <td style={{ ...tdStyle, fontWeight: 600 }}>{formatPrice(Number(so.subTotal))}</td>
                     <td style={tdStyle}>
                       <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
                         {so.acceptStatus === 'OPEN' && (
@@ -450,13 +519,13 @@ export default function SellerOrdersPage() {
           </div>
 
           {data.pagination.totalPages > 1 && (
-            <div style={{ display: 'flex', justifyContent: 'center', gap: 8, marginTop: 20 }}>
+            <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 8, padding: 20, borderTop: '1px solid #f3f4f6' }}>
               <button disabled={page <= 1} onClick={() => setPage(page - 1)} style={pageBtnStyle}>Previous</button>
               <span style={{ padding: '8px 12px', fontSize: 14 }}>Page {page} of {data.pagination.totalPages}</span>
               <button disabled={page >= data.pagination.totalPages} onClick={() => setPage(page + 1)} style={pageBtnStyle}>Next</button>
             </div>
           )}
-        </>
+        </div>
       )}
 
       {/* Reject Modal */}
@@ -529,18 +598,26 @@ export default function SellerOrdersPage() {
   );
 }
 
+const cardStyle: React.CSSProperties = {
+  background: '#fff',
+  border: '1px solid #e5e7eb',
+  borderRadius: 10,
+  padding: 20,
+};
+
 const selectStyle: React.CSSProperties = {
-  padding: '6px 12px',
+  padding: '8px 12px',
   border: '1px solid #d1d5db',
   borderRadius: 6,
   fontSize: 13,
   background: '#fff',
   cursor: 'pointer',
+  minWidth: 160,
 };
 
 const thStyle: React.CSSProperties = {
   textAlign: 'left',
-  padding: '10px 8px',
+  padding: '10px 12px',
   fontWeight: 600,
   fontSize: 11,
   color: '#6b7280',
@@ -550,7 +627,7 @@ const thStyle: React.CSSProperties = {
 };
 
 const tdStyle: React.CSSProperties = {
-  padding: '10px 8px',
+  padding: '12px',
   verticalAlign: 'middle',
 };
 

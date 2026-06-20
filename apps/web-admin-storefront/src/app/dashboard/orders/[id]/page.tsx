@@ -100,6 +100,9 @@ interface ReassignmentLog {
 
 interface EligibleNode {
   nodeType: 'SELLER' | 'FRANCHISE';
+  // Specific seller sub-type for SELLER nodes (undefined for FRANCHISE) — lets
+  // the TYPE column show "Retail Seller" / "D2C Seller" instead of "Seller".
+  sellerType?: 'RETAIL' | 'D2C';
   nodeId: string;
   name: string;
   distanceKm: number;
@@ -2113,7 +2116,13 @@ export default function OrderDetailPage() {
                               background: isFranchise ? '#ecfeff' : '#eef2ff',
                               color: isFranchise ? '#0e7490' : '#4338ca',
                             }}>
-                              {isFranchise ? 'Franchise' : 'Seller'}
+                              {isFranchise
+                                ? 'Franchise'
+                                : node.sellerType === 'RETAIL'
+                                  ? 'Retail Seller'
+                                  : node.sellerType === 'D2C'
+                                    ? 'D2C Seller'
+                                    : 'Seller'}
                             </span>
                           </td>
                           <td style={{ padding: '10px' }}>

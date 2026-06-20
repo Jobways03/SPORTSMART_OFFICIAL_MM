@@ -59,6 +59,16 @@ export default function LoginPage() {
     if (mfa && mfaInputRef.current) mfaInputRef.current.focus();
   }, [mfa]);
 
+  useEffect(() => {
+    // Email-first MFA: auto-email the code as soon as the challenge appears so
+    // no authenticator app is needed. The authenticator path stays in the
+    // backend; this just stops surfacing it at login.
+    if (mfa && !emailMode && !emailInfo && !emailRequesting) {
+      void handleRequestEmailOtp();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mfa]);
+
   const completeLogin = (data: any) => {
     const token = extractToken(data);
     if (!token) {
@@ -403,18 +413,6 @@ export default function LoginPage() {
                     style={linkBtnStyle(emailRequesting || mfaExpired)}
                   >
                     {emailRequesting ? 'Sending…' : 'Resend code'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setEmailMode(false);
-                      setEmailInfo('');
-                      setMfaCode('');
-                      setError('');
-                    }}
-                    style={linkBtnStyle(false)}
-                  >
-                    Use authenticator instead
                   </button>
                 </>
               )}
