@@ -10,7 +10,13 @@ region   = "ap-south-1"
 env      = "staging"
 node_env = "staging"
 
-hosted_zone_name   = "sportsmart.com"
+# Staging runs under a DELEGATED SUBDOMAIN zone. Terraform CREATES the
+# staging.sportsmart.com hosted zone (create_hosted_zone=true); after the first
+# apply, add its nameservers (the `route53_name_servers` output) as an NS record
+# for `staging` in the corporate sportsmart.com DNS. The corporate apex zone
+# (website, email/MX) is never touched.
+hosted_zone_name   = "staging.sportsmart.com"
+create_hosted_zone = true
 env_domain         = "staging.sportsmart.com"
 auth_cookie_domain = ".staging.sportsmart.com"
 

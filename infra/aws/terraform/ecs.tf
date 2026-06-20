@@ -187,7 +187,7 @@ resource "aws_lb_listener_rule" "this" {
 resource "aws_route53_record" "service" {
   for_each = local.services
 
-  zone_id = data.aws_route53_zone.primary.zone_id
+  zone_id = local.hosted_zone_id
   name    = local.service_hosts[each.key]
   type    = "A"
 

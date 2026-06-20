@@ -32,8 +32,22 @@ variable "node_env" {
 }
 
 variable "hosted_zone_name" {
-  description = "Existing Route53 public hosted zone (e.g. sportsmart.com). Hostnames are created as <subdomain>.<env_domain>."
+  description = "Route53 public hosted zone the service hostnames live under (e.g. staging.sportsmart.com). Looked up when create_hosted_zone=false, or created by this module when true. Service records are <subdomain>.<env_domain> inside it."
   type        = string
+}
+
+variable "create_hosted_zone" {
+  description = <<-EOT
+    true  → Terraform creates the Route53 public zone named hosted_zone_name.
+            Use for a DELEGATED SUBDOMAIN (e.g. staging.sportsmart.com): after
+            the first apply, add its `route53_name_servers` output as an NS
+            record in the parent corporate zone to delegate it — the apex zone
+            (corporate website, email/MX) is never touched.
+    false → the zone already exists and is only looked up (data source);
+            registrar/parent delegation was done out-of-band (production apex).
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "env_domain" {
