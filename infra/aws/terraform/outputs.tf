@@ -57,3 +57,18 @@ output "migrate_task_family" {
   description = "ECS task-definition family for the prisma migrate runner (deploy.sh run-task target)."
   value       = aws_ecs_task_definition.migrate.family
 }
+
+output "logistics_facade_internal_url" {
+  description = "Internal Cloud Map URL apps/api uses for the logistics-facade (LOGISTICS_FACADE_URL). Not publicly reachable."
+  value       = local.logistics_facade_url
+}
+
+output "logistics_facade_ecr_repository_url" {
+  description = "ECR repo URL for the logistics-facade image (CI push target)."
+  value       = aws_ecr_repository.logistics_facade.repository_url
+}
+
+output "logistics_facade_migrate_task_family" {
+  description = "ECS task family for the facade's prisma migrate runner (deploy.sh run-task target)."
+  value       = aws_ecs_task_definition.logistics_facade_migrate.family
+}

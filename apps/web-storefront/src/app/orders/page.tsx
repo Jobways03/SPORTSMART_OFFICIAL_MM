@@ -63,8 +63,14 @@ interface OrdersResponse {
     // Phase 197 (My-Orders audit #7) — server-side filter + accurate
     // per-bucket counts (correct on any page, unlike the old
     // single-page client-side tally).
-    status?: 'all' | 'active' | 'delivered' | 'cancelled';
-    counts?: { all: number; active: number; delivered: number; cancelled: number };
+    status?: 'all' | 'active' | 'delivered' | 'cancelled' | 'awaiting_payment';
+    counts?: {
+      all: number;
+      active: number;
+      delivered: number;
+      cancelled: number;
+      awaiting_payment: number;
+    };
   };
 }
 
@@ -276,6 +282,11 @@ export default function OrdersPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState<Filter>('all');
+  // Online-payment audit — in-flight unpaid ONLINE orders are excluded from the
+  // real order list (they aren't placed yet); fetch them separately so the
+  // customer can still complete or cancel a pending payment from a dedicated
+  // strip instead of seeing a fake "Processing" order in the main list.
+  const [awaitingOrders, setAwaitingOrders] = useState<Order[]>([]);
 
   // Phase 197 (My-Orders audit #7/#14) — the bucket filter now drives a
   // server-side query (?status=...) so the visible list is correct
@@ -302,9 +313,20 @@ export default function OrdersPage() {
       .finally(() => setLoading(false));
   };
 
+  const fetchAwaiting = () => {
+    apiClient<OrdersResponse>(
+      '/customer/orders?page=1&limit=20&status=awaiting_payment',
+    )
+      .then((res) => setAwaitingOrders(res.data?.orders ?? []))
+      // Non-blocking: if this fails the strip just doesn't render; the main
+      // list and its own error handling are unaffected.
+      .catch(() => undefined);
+  };
+
   useEffect(() => {
     if (authStatus !== 'authed') return;
     fetchOrders(page, filter);
+    fetchAwaiting();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authStatus, page, filter]);
 
@@ -313,7 +335,10 @@ export default function OrdersPage() {
   // return badges + statuses update without a manual refresh.
   useSseStream('/portal/streams/my-cases', {
     enabled: authStatus === 'authed',
-    onMessage: () => fetchOrders(page, filter),
+    onMessage: () => {
+      fetchOrders(page, filter);
+      fetchAwaiting();
+    },
   });
 
   // Phase 197 (My-Orders audit #7) — tab badge counts from the server's
@@ -402,7 +427,56 @@ export default function OrdersPage() {
           </Link>
         </div>
 
+        {/* Online-payment audit — orders whose ONLINE payment hasn't completed
+            are NOT shown as real orders; surface them here so the customer can
+            finish or cancel the payment. Nothing is shipped until it succeeds. */}
+        {awaitingOrders.length > 0 && (
+          <div
+            className="mb-8 rounded-2xl p-4 sm:p-5"
+            style={{ border: '1px solid #fcd34d', background: '#fffbeb' }}
+          >
+            <h2 className="text-body font-semibold mb-1" style={{ color: '#92400e' }}>
+              Awaiting payment
+            </h2>
+            <p className="text-caption mb-4" style={{ color: '#92400e' }}>
+              These orders aren&apos;t placed yet — complete the payment to
+              confirm them. Nothing is shipped until payment succeeds.
+            </p>
+            <div className="flex flex-col gap-2">
+              {awaitingOrders.map((o) => (
+                <Link
+                  key={o.orderNumber}
+                  href={`/orders/${o.orderNumber}`}
+                  className="flex items-center justify-between gap-3 rounded-xl bg-white px-4 py-3 transition-colors"
+                  style={{ border: '1px solid #fde68a' }}
+                >
+                  <div>
+                    <div className="text-body font-semibold text-ink-900">
+                      {o.orderNumber}
+                    </div>
+                    <div className="text-caption text-ink-600">
+                      Placed on {formatDate(o.createdAt)}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-body font-semibold text-ink-900">
+                      {formatPrice(Number(o.totalAmount))}
+                    </span>
+                    <span
+                      className="text-caption font-semibold whitespace-nowrap"
+                      style={{ color: '#b45309' }}
+                    >
+                      Complete payment &rarr;
+                    </span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
+
         {!hasOrders ? (
+          awaitingOrders.length > 0 ? null : (
           <div className="bg-white border border-ink-200 py-20 px-6 text-center rounded-2xl">
             <div className="size-20 mx-auto rounded-full bg-accent-soft grid place-items-center mb-5">
               <Package className="size-9 text-accent-dark" strokeWidth={1.5} />
@@ -419,6 +493,7 @@ export default function OrdersPage() {
               <ArrowRight className="size-4 ml-2" />
             </Link>
           </div>
+          )
         ) : (
           <>
             {/* Filters */}

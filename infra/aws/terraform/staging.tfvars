@@ -18,7 +18,8 @@ auth_cookie_domain = ".staging.sportsmart.com"
 # Actions deploy fails at AssumeRole.
 github_repo = "Jobways03/SPORTSMART_OFFICIAL_MM"
 
-image_tag = "staging-latest"
+image_tag                  = "staging-latest"
+logistics_facade_image_tag = "staging-latest"
 
 # Minimal always-on staging sizing (~$150/mo). Smallest viable instances —
 # db.t4g.micro (~1 GB) and cache.t4g.micro (~0.5 GB) are enough for a low-

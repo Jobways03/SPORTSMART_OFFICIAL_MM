@@ -185,9 +185,13 @@ export function Footer() {
         <div className="grid grid-cols-2 md:grid-cols-12 gap-8 lg:gap-12">
           {/* Brand block */}
           <div className="col-span-2 md:col-span-4 lg:col-span-5">
-            <Link href="/" className="font-display text-4xl tracking-wide leading-none italic">
-              <span className="text-sale">SPORTSMART</span>
-              <span className="text-white">.com</span>
+            <Link href="/" aria-label="Sportsmart home" className="inline-block w-fit">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/SportsMart_Web_Banner_dark.png"
+                alt="SportsMart"
+                className="h-12 w-auto"
+              />
             </Link>
             <p className="mt-4 text-body text-white/75 max-w-sm leading-relaxed">
               India&apos;s sports marketplace. Premium gear from 200+ brands and 500+ sellers, one checkout.

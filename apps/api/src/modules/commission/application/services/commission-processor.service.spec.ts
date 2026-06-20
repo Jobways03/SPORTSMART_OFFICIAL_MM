@@ -16,6 +16,7 @@ type EnvOverrides = Record<string, boolean | number>;
 function makeService(opts?: {
   subOrders?: any[];
   codMasterIds?: string[];
+  unpaidOnlineMasterIds?: string[];
   env?: EnvOverrides;
 }) {
   const env: any = {
@@ -46,9 +47,17 @@ function makeService(opts?: {
 
   const prisma: any = {
     masterOrder: {
-      findMany: jest
-        .fn()
-        .mockResolvedValue((opts?.codMasterIds ?? []).map((id) => ({ id }))),
+      // Where-aware: the COD cash gate queries paymentMethod='COD'; the
+      // online-payment defense-in-depth guard queries paymentMethod='ONLINE'
+      // (paymentStatus != PAID). Return the configured ids for each query.
+      findMany: jest.fn().mockImplementation(({ where }: any) =>
+        Promise.resolve(
+          (where?.paymentMethod === 'COD'
+            ? opts?.codMasterIds ?? []
+            : opts?.unpaidOnlineMasterIds ?? []
+          ).map((id) => ({ id })),
+        ),
+      ),
     },
   };
 
@@ -127,8 +136,10 @@ describe('CommissionProcessorService COD cash-in-hand gate (#2b)', () => {
       // no COMMISSION_REQUIRE_COD_PAID override → default false
     });
     const res = await service.processCommissions();
-    // Gate disabled → no master lookup, the sub-order is processed.
-    expect(prisma.masterOrder.findMany).not.toHaveBeenCalled();
+    // COD gate disabled → no COD master lookup. The online defense-in-depth
+    // guard still runs its one lookup (and finds nothing unpaid-online), so the
+    // COD sub-order is processed.
+    expect(prisma.masterOrder.findMany).toHaveBeenCalledTimes(1);
     expect(commissionRepo.processSubOrderCommission).toHaveBeenCalledTimes(1);
     expect(res.processed).toBe(1);
   });
@@ -185,5 +196,19 @@ describe('CommissionProcessorService COD cash-in-hand gate (#2b)', () => {
     expect(commissionRepo.processSubOrderCommission).toHaveBeenCalledTimes(2);
     expect(res.processed).toBe(2);
     expect(res.skippedUnpaidCod).toBe(1);
+  });
+
+  it('online defense-in-depth — defers a delivered ONLINE sub-order whose order is not PAID', async () => {
+    const { service, commissionRepo } = makeService({
+      // An ONLINE order that somehow reached DELIVERED without its gateway
+      // payment captured must NOT lock commission (belt-and-suspenders; the
+      // normal flow can't produce this, but a future bug could). Independent of
+      // the COD flag.
+      subOrders: [sellerSubOrder('x', 'm9', 'PENDING')],
+      unpaidOnlineMasterIds: ['m9'],
+    });
+    const res = await service.processCommissions();
+    expect(commissionRepo.processSubOrderCommission).not.toHaveBeenCalled();
+    expect(res.processed).toBe(0);
   });
 });

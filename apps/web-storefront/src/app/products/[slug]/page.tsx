@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { PriceTag } from '@/components/ui/PriceTag';
+import { StickyActionBar } from '@/components/ui/StickyActionBar';
 import { Badge } from '@/components/ui/Badge';
 // Phase 202 (#1) — PDP heart, wired to the wishlist API via the shared
 // store that also powers the catalog card hearts + Navbar badge.
@@ -124,7 +125,10 @@ export default function ProductDetailPage() {
   const [error, setError] = useState('');
   const [selectedImage, setSelectedImage] = useState(0);
   const [selectedVariant, setSelectedVariant] = useState<Variant | null>(null);
-  const [addingToCart, setAddingToCart] = useState(false);
+  // Which CTA is mid-request, so only the clicked button shows its loading
+  // label (Buy now no longer lights up the Add-to-cart button). Both buttons
+  // disable while either action is in flight to prevent a double-submit.
+  const [pendingAction, setPendingAction] = useState<'cart' | 'buy' | null>(null);
   const [cartMessage, setCartMessage] = useState('');
   const [showFullDescription, setShowFullDescription] = useState(false);
 
@@ -191,7 +195,7 @@ export default function ProductDetailPage() {
     // httpOnly cookie. ('loading' falls through and lets the API decide.)
     if (authStatus === 'unauthed') return router.push('/login');
     if (!product) return;
-    setAddingToCart(true);
+    setPendingAction(buyNow ? 'buy' : 'cart');
     setCartMessage('');
     try {
       await apiClient('/customer/cart/items', {
@@ -216,7 +220,7 @@ export default function ProductDetailPage() {
     } catch (err: any) {
       setCartMessage(err?.message || 'Failed to add to cart');
     } finally {
-      setAddingToCart(false);
+      setPendingAction(null);
     }
   };
 
@@ -323,7 +327,7 @@ export default function ProductDetailPage() {
 
   return (
     <StorefrontShell>
-      <div className="container-x py-6 sm:py-10">
+      <div className="container-x pt-6 sm:pt-10 pb-24 lg:pb-10">
         <div className="text-caption uppercase tracking-wider text-ink-600 mb-6">
           <Link href="/" className="hover:text-ink-900">Home</Link>
           {' / '}
@@ -606,17 +610,17 @@ export default function ProductDetailPage() {
             <div className="mt-6 grid grid-cols-2 gap-3">
               <button
                 onClick={() => handleAddToCart(false)}
-                disabled={addingToCart || !isInStock}
+                disabled={pendingAction !== null || !isInStock}
                 className="h-12 border border-ink-900 text-ink-900 font-semibold hover:bg-ink-900 hover:text-white disabled:opacity-50 disabled:hover:bg-white disabled:hover:text-ink-900 transition-colors"
               >
-                {!isInStock ? 'Out of stock' : addingToCart ? 'Adding…' : 'Add to cart'}
+                {!isInStock ? 'Out of stock' : pendingAction === 'cart' ? 'Adding…' : 'Add to cart'}
               </button>
               <button
                 onClick={() => handleAddToCart(true)}
-                disabled={addingToCart || !isInStock}
+                disabled={pendingAction !== null || !isInStock}
                 className="h-12 bg-ink-900 text-white font-semibold hover:bg-ink-800 disabled:opacity-50 transition-colors"
               >
-                Buy now
+                {pendingAction === 'buy' ? 'Processing…' : 'Buy now'}
               </button>
             </div>
             {/* Phase 193 (#15) — out-of-stock conversion path. */}
@@ -637,7 +641,7 @@ export default function ProductDetailPage() {
             )}
 
             {/* Trust strip */}
-            <div className="mt-8 grid grid-cols-3 gap-3 border-y border-ink-200 py-4">
+            <div className="mt-8 grid grid-cols-1 sm:grid-cols-3 gap-3 border-y border-ink-200 py-4">
               <div className="flex items-start gap-2">
                 <Truck className="size-4 mt-0.5 text-ink-700 shrink-0" strokeWidth={1.75} />
                 <div className="text-caption text-ink-700 leading-tight">Free shipping over ₹999</div>
@@ -697,7 +701,7 @@ export default function ProductDetailPage() {
                     return (
                       <div
                         key={label}
-                        className="grid grid-cols-[160px_1fr] py-3 border-b border-ink-200 text-body"
+                        className="grid grid-cols-[100px_1fr] sm:grid-cols-[160px_1fr] py-3 border-b border-ink-200 text-body"
                       >
                         <dt className="text-ink-600">{label}</dt>
                         <dd className="text-ink-900">{value}</dd>
@@ -729,6 +733,30 @@ export default function ProductDetailPage() {
           <RelatedProducts slug={slug} />
         </div>
       </div>
+
+      {/* Mobile sticky add-to-cart — the inline buy box scrolls out of view on
+          the single-column mobile layout, so pin the primary actions. */}
+      {isInStock && (
+        <StickyActionBar className="flex items-center gap-3">
+          <div className="shrink-0">
+            <PriceTag price={currentPrice} compareAt={currentCompare} size="sm" />
+          </div>
+          <button
+            onClick={() => handleAddToCart(false)}
+            disabled={pendingAction !== null}
+            className="flex-1 h-11 border border-ink-900 text-ink-900 text-caption font-semibold hover:bg-ink-900 hover:text-white disabled:opacity-50 transition-colors"
+          >
+            {pendingAction === 'cart' ? 'Adding…' : 'Add to cart'}
+          </button>
+          <button
+            onClick={() => handleAddToCart(true)}
+            disabled={pendingAction !== null}
+            className="flex-1 h-11 bg-ink-900 text-white text-caption font-semibold hover:bg-ink-800 disabled:opacity-50 transition-colors"
+          >
+            {pendingAction === 'buy' ? 'Processing…' : 'Buy now'}
+          </button>
+        </StickyActionBar>
+      )}
     </StorefrontShell>
   );
 }

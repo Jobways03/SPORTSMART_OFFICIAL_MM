@@ -85,7 +85,7 @@ describe('PaymentsPublicFacade.markOrderPaid — Phase 0 amount-check', () => {
 
     expect(ordersFacade.flipPaymentStatusIfFrom).toHaveBeenCalledWith(
       baseOrder.id,
-      ['PENDING', 'FAILED'],
+      ['PENDING', 'CREATED'],
       'PAID',
     );
     expect(eventBus.publish).toHaveBeenCalledTimes(1);
@@ -211,7 +211,7 @@ describe('PaymentsPublicFacade.markOrderPaid — Phase 0 amount-check', () => {
 
     expect(ordersFacade.flipPaymentStatusIfFrom).toHaveBeenCalledWith(
       baseOrder.id,
-      ['PENDING', 'FAILED'],
+      ['PENDING', 'CREATED'],
       'PAID',
     );
     expect(paymentOpsFacade.flagMismatch).not.toHaveBeenCalled();

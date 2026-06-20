@@ -102,7 +102,11 @@ interface EligibleNode {
   nodeType: 'SELLER' | 'FRANCHISE';
   nodeId: string;
   name: string;
-  distanceKm: number;
+  distanceKm: number | null;
+  // True when distanceKm is an estimate from a postal-region centroid (the
+  // customer's or the node's pincode has no exact coordinates) — shown as
+  // "≈ N km (approx)" so the distance isn't read as a precise measurement.
+  distanceApproximate?: boolean;
   dispatchSla: number;
   availableStock: number;
   score: number;
@@ -2119,7 +2123,21 @@ export default function OrderDetailPage() {
                           <td style={{ padding: '10px' }}>
                             <div style={{ fontWeight: 600, color: '#111' }}>{node.name}</div>
                           </td>
-                          <td style={{ padding: '10px', textAlign: 'right', color: '#374151' }}>{node.distanceKm} km</td>
+                          <td style={{ padding: '10px', textAlign: 'right', color: '#374151' }}>
+                            {node.distanceKm == null ? (
+                              <span style={{ color: '#9ca3af' }}>—</span>
+                            ) : node.distanceApproximate ? (
+                              <span
+                                title="Estimated from the pincode's postal region — this pincode has no exact coordinates, so the distance is approximate."
+                                style={{ color: '#92400e' }}
+                              >
+                                ≈ {node.distanceKm} km{' '}
+                                <span style={{ fontSize: 10, fontWeight: 700 }}>(approx)</span>
+                              </span>
+                            ) : (
+                              `${node.distanceKm} km`
+                            )}
+                          </td>
                           <td style={{ padding: '10px', textAlign: 'right', color: '#374151' }}>{node.dispatchSla} day{node.dispatchSla !== 1 ? 's' : ''}</td>
                           <td style={{ padding: '10px', textAlign: 'right', color: '#374151' }}>{node.availableStock}</td>
                           <td style={{ padding: '10px', textAlign: 'right' }}>

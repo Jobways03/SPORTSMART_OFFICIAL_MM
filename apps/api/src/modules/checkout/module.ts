@@ -15,6 +15,11 @@ import { CustomerOrdersService } from './application/services/customer-orders.se
 
 // Application – jobs
 import { OrderFinalizationRecoveryCron } from './application/jobs/order-finalization-recovery.cron';
+import { DeferredCaptureRecoveryCron } from './application/jobs/deferred-capture-recovery.cron';
+import { CheckoutSessionReconciliationCron } from './application/jobs/checkout-session-reconciliation.cron';
+
+// Application – event handlers
+import { GatewayCaptureUnresolvedHandler } from './application/event-handlers/gateway-capture-unresolved.handler';
 
 // Application – facade
 import { CheckoutPublicFacade } from './application/facades/checkout-public.facade';
@@ -103,6 +108,18 @@ import { PaymentsModule } from '../payments/module';
     // never completed (finalizedAt IS NULL). Leader-elected so
     // a horizontally-scaled cluster only sweeps once per tick.
     OrderFinalizationRecoveryCron,
+
+    // Option B (Phase 4) — async deferred-order materialization. The handler
+    // consumes the payments webhook's `payments.gateway_capture_unresolved`
+    // event (cycle-safe: payments never imports checkout); the cron is the
+    // missed-webhook backstop. Both call CheckoutService.materializeFromGateway.
+    GatewayCaptureUnresolvedHandler,
+    DeferredCaptureRecoveryCron,
+
+    // Option B (Phase 5) — failure/refund reconciler: re-link or fail stuck
+    // PAID-no-order sessions, auto-refund FAILED sessions (idempotent gateway
+    // refund), expire abandoned sessions (with a final capture check).
+    CheckoutSessionReconciliationCron,
 
     // Facade
     CheckoutPublicFacade,

@@ -19,6 +19,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
+import { StickyActionBar } from '@/components/ui/StickyActionBar';
 import { usePincodeLookup } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
@@ -155,6 +156,11 @@ export default function CheckoutPage() {
   const [initiating, setInitiating] = useState(false);
   const [placing, setPlacing] = useState(false);
   const [placedOrderNumber, setPlacedOrderNumber] = useState<string | null>(null);
+  // Option B (deferred) — payment captured but the order is still being created
+  // asynchronously (verify kept returning 409). Show a reassuring interstitial
+  // (not an error, and not a blank list) so the customer doesn't assume failure
+  // and pay again.
+  const [paymentProcessing, setPaymentProcessing] = useState(false);
   // Phase 255 — payment method. Online is only offered when the public
   // Razorpay key is configured at build time (NEXT_PUBLIC_RAZORPAY_KEY_ID);
   // otherwise the modal can't open, so we hide the option and keep COD only.
@@ -611,7 +617,12 @@ export default function CheckoutPage() {
         ? Math.round(walletApplyAmount * 100)
         : 0;
       const res = await apiClient<{
-        orderNumber: string;
+        // Legacy creates the order up-front (orderNumber present). Option B
+        // (deferred) returns deferred:true + checkoutSessionId and NO orderNumber
+        // — the order is materialized only when the gateway payment is captured.
+        orderNumber?: string;
+        deferred?: boolean;
+        checkoutSessionId?: string;
         paymentMethod?: 'COD' | 'ONLINE';
         // ONLINE orders return gateway handoff details (or a
         // fullyCoveredByWallet flag when the wallet paid the whole amount).
@@ -641,8 +652,13 @@ export default function CheckoutPage() {
         signal: abort.signal,
       });
       window.dispatchEvent(new Event('cart-updated'));
-      const orderNumber = res?.data?.orderNumber;
-      if (!orderNumber) {
+      const data = res?.data;
+      const orderNumber = data?.orderNumber;
+      // Option B (deferred): the order isn't created until the gateway payment
+      // is captured, so orderNumber is legitimately absent here. Only the legacy
+      // create-first path must have one at this point.
+      const isDeferred = data?.deferred === true;
+      if (!isDeferred && !orderNumber) {
         setError('Order placed but confirmation was missing. Check My Orders.');
         setPlacing(false);
         return;
@@ -650,9 +666,9 @@ export default function CheckoutPage() {
 
       // ONLINE — hand off to the Razorpay modal, UNLESS the wallet covered
       // the full amount (then the order is already PLACED, no gateway needed).
-      const pay = res?.data?.payment;
+      const pay = data?.payment;
       if (
-        res?.data?.paymentMethod === 'ONLINE' &&
+        data?.paymentMethod === 'ONLINE' &&
         pay &&
         !pay.fullyCoveredByWallet &&
         pay.razorpayOrderId
@@ -662,34 +678,69 @@ export default function CheckoutPage() {
           razorpayOrderId: pay.razorpayOrderId,
           amountInPaise: Math.round((pay.amount ?? payable) * 100),
           currency: pay.currency || 'INR',
-          orderNumber,
+          orderNumber, // undefined for deferred — verify returns the real one
           customerName: selectedAddr?.fullName || form.fullName || null,
           customerPhone: selectedAddr?.phone || form.phone || null,
         });
+        // verify returns the materialized order number (legacy: the same one).
+        const finalOrderNumber = handoff.orderNumber ?? orderNumber;
         if (handoff.status === 'success') {
-          // Backend already verified the signature + captured inside the
-          // modal handler; the order is now PLACED/PAID.
-          setPlacedOrderNumber(orderNumber);
-          router.replace(`/orders/${orderNumber}`);
+          // Signature verified + captured inside the modal handler; the order is
+          // now PLACED/PAID.
+          if (finalOrderNumber) {
+            setPlacedOrderNumber(finalOrderNumber);
+            router.replace(`/orders/${finalOrderNumber}`);
+          } else {
+            router.replace('/orders');
+          }
+          return;
+        }
+        if (handoff.status === 'order_pending') {
+          // Deferred: payment captured but the order is still being created
+          // (async webhook). Show a reassuring "payment received" interstitial
+          // with a link to My Orders — do NOT show an error (the money is safe)
+          // and do NOT leave them on a blank list where they might re-pay.
+          window.dispatchEvent(new Event('cart-updated'));
+          setPaymentProcessing(true);
           return;
         }
         if (handoff.status === 'dismissed') {
-          // Customer closed the modal. The order shell exists in
-          // PENDING_PAYMENT — the order detail page has "Retry payment".
-          router.replace(`/orders/${orderNumber}`);
+          if (orderNumber) {
+            // Legacy: the PENDING_PAYMENT order shell exists — the order detail
+            // page has "Retry payment".
+            router.replace(`/orders/${orderNumber}`);
+          } else {
+            // Deferred: nothing was created (the point of Option B). Mint a fresh
+            // idempotency key so the next attempt is a brand-new session (not a
+            // replay of this abandoned one), then let them try again here.
+            setPlaceOrderIdemKey(
+              typeof crypto !== 'undefined' && 'randomUUID' in crypto
+                ? crypto.randomUUID()
+                : `idem-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+            );
+            setError('Payment was not completed, so your order has not been placed. You can try again.');
+            setPlacing(false);
+          }
           return;
         }
-        // Hard error (declined / verify failed). Keep them here with the
-        // reason; the order can still be retried from My Orders.
+        // Hard error (declined / verify failed / deferred refund). The backend
+        // message is customer-facing (e.g. "payment succeeded but the order
+        // could not be created — a refund will be issued automatically").
         setError(handoff.error || 'Payment failed. You can retry from My Orders.');
         setPlacing(false);
         return;
       }
 
       // COD (or wallet-fully-covered ONLINE): the order is already placed.
-      setPlacedOrderNumber(orderNumber);
-      router.prefetch(`/orders/${orderNumber}`);
-      router.replace(`/orders/${orderNumber}`);
+      if (orderNumber) {
+        setPlacedOrderNumber(orderNumber);
+        router.prefetch(`/orders/${orderNumber}`);
+        router.replace(`/orders/${orderNumber}`);
+      } else {
+        // Defensive: a deferred response with no gateway handoff shouldn't reach
+        // here, but never strand the customer on a blank state.
+        router.replace('/orders');
+      }
     } catch (err: any) {
       if (err?.name === 'AbortError') {
         setError('The server took too long to respond. Please check My Orders — your order may still have been placed.');
@@ -810,7 +861,16 @@ export default function CheckoutPage() {
     );
   }
 
-  if (!cart || cart.items.length === 0) return null;
+  // Don't bail on an empty cart while a post-payment confirmation screen is up
+  // (placing an order clears the cart, but the customer must still see the
+  // "order placed" / "payment received" screen).
+  if (
+    (!cart || cart.items.length === 0) &&
+    !placedOrderNumber &&
+    !paymentProcessing
+  ) {
+    return null;
+  }
 
   if (placedOrderNumber) {
     return (
@@ -842,6 +902,42 @@ export default function CheckoutPage() {
     );
   }
 
+  // Option B — payment captured, order still materializing (verify kept 409-ing).
+  if (paymentProcessing) {
+    return (
+      <StorefrontShell>
+        <div className="container-x min-h-[70vh] flex items-center justify-center py-16">
+          <div className="bg-white border border-ink-200 p-10 max-w-md w-full text-center rounded-2xl">
+            <div className="size-16 mx-auto rounded-full bg-green-50 grid place-items-center mb-5">
+              <CheckCircle2 className="size-8 text-success" strokeWidth={1.75} />
+            </div>
+            <h2 className="font-display text-h2 text-ink-900">Payment received</h2>
+            <p className="mt-2 text-body text-ink-600">
+              Your order is being created and will appear in My Orders in a
+              moment. There&apos;s no need to pay again.
+            </p>
+            <p className="mt-5 inline-flex items-center gap-2 text-caption text-ink-500">
+              <Loader2 className="size-3.5 animate-spin" />
+              Finalising your order…
+            </p>
+            <div className="mt-4">
+              <Link
+                href="/orders"
+                className="text-caption font-semibold text-accent-dark hover:text-ink-900 hover:underline underline-offset-2"
+              >
+                Go to My Orders
+              </Link>
+            </div>
+          </div>
+        </div>
+      </StorefrontShell>
+    );
+  }
+
+  // Past the confirmation screens (both returned above): the main checkout view
+  // needs a non-empty cart. This re-narrows `cart` to non-null for the render.
+  if (!cart || cart.items.length === 0) return null;
+
   const currentSubtotal = checkoutData ? checkoutData.serviceableAmount : cart.totalAmount;
   const currentItemCount = checkoutData ? checkoutData.itemCount : cart.itemCount;
   // Shipping fee for the selected option — advisory; server recomputes.
@@ -866,7 +962,7 @@ export default function CheckoutPage() {
 
   return (
     <StorefrontShell>
-      <div className="container-x py-8 sm:py-12">
+      <div className="container-x pt-8 sm:pt-12 pb-28 lg:pb-12">
         {/* Breadcrumb */}
         <div className="text-caption uppercase tracking-wider text-ink-600 mb-3">
           <Link href="/" className="hover:text-ink-900">Home</Link>
@@ -983,7 +1079,7 @@ export default function CheckoutPage() {
                     )}
                   </div>
 
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
                       <label className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-1.5">
                         Full name
@@ -1035,7 +1131,7 @@ export default function CheckoutPage() {
                         <p className="mt-1 text-caption text-danger">{fieldErrors.phone}</p>
                       )}
                     </div>
-                    <div className="col-span-2">
+                    <div className="sm:col-span-2">
                       <label className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-1.5">
                         Address line 1
                       </label>
@@ -1054,7 +1150,7 @@ export default function CheckoutPage() {
                         <p className="mt-1 text-caption text-danger">{fieldErrors.addressLine1}</p>
                       )}
                     </div>
-                    <div className="col-span-2">
+                    <div className="sm:col-span-2">
                       <label className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-1.5">
                         Address line 2 <span className="text-ink-400 normal-case">(optional)</span>
                       </label>
@@ -1102,7 +1198,7 @@ export default function CheckoutPage() {
                         </p>
                       ) : null}
                     </div>
-                    <div />
+                    <div className="hidden sm:block" />
                     <div>
                       <label className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-1.5">
                         City / district
@@ -1156,7 +1252,7 @@ export default function CheckoutPage() {
                       )}
                     </div>
                     {pincodeData && pincodeData.places && pincodeData.places.length > 0 && (
-                      <div className="col-span-2">
+                      <div className="sm:col-span-2">
                         <label className="block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-1.5">
                           Locality
                         </label>
@@ -1762,6 +1858,49 @@ export default function CheckoutPage() {
           </aside>
         </div>
       </div>
+
+      {/* Mobile sticky place-order bar — the summary aside reflows to the very
+          bottom on mobile (after address + the full item list), so pin the
+          payable total + the primary action. Mirrors the in-aside CTA logic. */}
+      <StickyActionBar className="flex items-center gap-4">
+        <div className="min-w-0">
+          <div className="text-caption text-ink-600 leading-none">
+            {walletApplied && walletApplyAmount > 0 ? 'You pay' : 'Total'}
+          </div>
+          <div className="font-display text-xl text-ink-900 tabular leading-tight">
+            {formatPrice(payable)}
+          </div>
+        </div>
+        {checkoutData ? (
+          <button
+            onClick={handlePlaceOrder}
+            disabled={placing || !checkoutData.allServiceable || checkoutData.items.length === 0}
+            aria-busy={placing}
+            className="flex-1 h-12 inline-flex items-center justify-center gap-2 bg-ink-900 text-white font-semibold hover:bg-ink-800 disabled:opacity-60 disabled:cursor-not-allowed transition-colors rounded-full"
+          >
+            {placing && <Loader2 className="size-4 animate-spin" />}
+            {placing
+              ? paymentMethod === 'ONLINE'
+                ? 'Starting…'
+                : 'Placing…'
+              : !checkoutData.allServiceable
+                ? 'Fix items'
+                : paymentMethod === 'ONLINE'
+                  ? 'Pay online'
+                  : 'Place order'}
+          </button>
+        ) : (
+          <button
+            onClick={handleInitiateCheckout}
+            disabled={initiating || !selectedAddressId}
+            aria-busy={initiating}
+            className="flex-1 h-12 inline-flex items-center justify-center gap-2 bg-ink-900 text-white font-semibold hover:bg-ink-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors rounded-full"
+          >
+            {initiating && <Loader2 className="size-4 animate-spin" />}
+            {initiating ? 'Checking…' : 'Continue'}
+          </button>
+        )}
+      </StickyActionBar>
     </StorefrontShell>
   );
 }

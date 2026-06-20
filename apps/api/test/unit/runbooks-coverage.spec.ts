@@ -124,6 +124,21 @@ const MANIFEST: RunbookEntry[] = [
       'postmortem',
     ],
   },
+  // Option B — deferred ONLINE order creation. The load-bearing operator
+  // details: the master flag, the session table, the materialize entry the
+  // webhook/cron call, the reconciler pause flag, the refund-stamp column, and
+  // the backstop cron name. If these drift the runbook stops matching the code.
+  {
+    path: 'deferred-order-creation.md',
+    requiredSubstrings: [
+      'CHECKOUT_DEFERRED_ORDER_CREATION',
+      'checkout_sessions',
+      'materializeFromGateway',
+      'CHECKOUT_SESSION_RECONCILIATION_ENABLED',
+      'refund_reference',
+      'deferred-capture-recovery',
+    ],
+  },
 ];
 
 const RUNBOOKS_DIR = join(__dirname, '..', '..', '..', '..', 'docs', 'runbooks');

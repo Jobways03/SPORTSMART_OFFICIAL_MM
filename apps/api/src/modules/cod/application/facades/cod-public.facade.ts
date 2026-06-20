@@ -78,7 +78,16 @@ export class CodPublicFacade {
       reasons.push('Seller is not active');
     }
 
-    // Rule 3: Check pincode serviceability for COD
+    // Rule 3: COD pincode serviceability — ONLY enforced when the seller has
+    // actually configured service areas. An empty match-set means "not
+    // configured" (SellerServiceArea is unpopulated), NOT "services nowhere":
+    // the previous unconditional findFirst rejected EVERY COD order with
+    // "Pincode not serviceable by this seller" because the table has zero rows.
+    // General deliverability is already validated upstream (checkout-init
+    // allocation + place-order re-check), and COD-specific pincode policy lives
+    // in the rule engine above — so a seller with no service-area rows is not
+    // COD-blocked here. When a seller HAS defined areas, this still enforces
+    // them (block a pincode they explicitly don't cover).
     const serviceability = await this.prisma.sellerServiceArea.findFirst({
       where: {
         sellerId: params.sellerId,
@@ -87,7 +96,12 @@ export class CodPublicFacade {
       },
     });
     if (!serviceability) {
-      reasons.push('Pincode not serviceable by this seller');
+      const configuredAreas = await this.prisma.sellerServiceArea.count({
+        where: { sellerId: params.sellerId, isActive: true },
+      });
+      if (configuredAreas > 0) {
+        reasons.push('Pincode not serviceable by this seller');
+      }
     }
 
     // Rule 4: Customer COD abuse counter — weighted by cancellation
@@ -111,7 +125,13 @@ export class CodPublicFacade {
       where: {
         customerId: params.customerId,
         paymentMethod: 'COD',
-        orderStatus: { in: ['CANCELLED', 'REFUSED_DELIVERY' as any] },
+        // 'REFUSED_DELIVERY' is NOT an OrderStatus enum member — including it
+        // here threw PrismaClientValidationError and 500'd EVERY COD checkout
+        // (the `as any` cast hid it from tsc; Prisma rejects it at runtime). A
+        // refused delivery lands as a CANCELLED order carrying a remark, so the
+        // weighting below still derives the refused-delivery signal from
+        // verificationRemarks (.includes('REFUSED_DELIVERY')).
+        orderStatus: 'CANCELLED',
         createdAt: { gte: new Date(Date.now() - this.abuseLookbackMs) },
       },
       select: {

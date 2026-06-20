@@ -18,6 +18,7 @@ import { authService } from '@/services/auth.service';
 import { ApiError } from '@/lib/api-client';
 import { validateLoginEmail, validateLoginPassword } from '@/lib/validators';
 import { CaptchaWidget } from '@/components/CaptchaWidget';
+import { AuthMobileHeader } from '@/components/auth/AuthMobileHeader';
 import { useSession, broadcastAuthChange } from '@/lib/auth-context';
 
 interface FormErrors {
@@ -148,7 +149,7 @@ function LoginPageContent() {
 
   return (
     <div className="min-h-screen bg-ink-50 flex justify-center">
-      <div className="w-full max-w-[1320px] min-h-screen grid lg:grid-cols-[1fr_540px]">
+      <div className="w-full max-w-[1320px] min-h-screen grid lg:grid-cols-2">
       <div
         className="hidden lg:block relative overflow-hidden bg-ink-100"
         style={{
@@ -237,22 +238,11 @@ function LoginPageContent() {
       </div>
 
       <div className="flex flex-col">
-        <header className="flex items-center justify-between px-6 lg:px-10 py-6">
-          <Link href="/" className="lg:hidden font-display text-2xl tracking-wide italic leading-none">
-            <span className="text-sale">SPORTSMART</span>
-            <span className="text-ink-900">.com</span>
-          </Link>
-          <span className="ml-auto text-caption text-ink-600">
-            New here?{' '}
-            <Link href="/register" className="text-accent-dark font-semibold hover:text-ink-900 hover:underline underline-offset-2">
-              Create an account
-            </Link>
-          </span>
-        </header>
+        <AuthMobileHeader switchPrompt="New here?" switchLabel="Create an account" switchHref="/register" />
 
-        <main className="flex-1 px-6 lg:px-10 pt-6 lg:pt-10 pb-10">
+        <main className="flex-1 px-6 lg:px-10 pt-2 lg:pt-10 pb-10 flex items-start sm:items-center">
           <div className="w-full max-w-md mx-auto">
-            <h1 className="font-display text-h1 text-ink-900 leading-none">Sign in</h1>
+            <h1 className="font-display text-2xl sm:text-3xl text-ink-900 leading-tight">Sign in</h1>
             <p className="mt-3 text-body-lg text-ink-600">
               Welcome back. Enter your credentials to continue.
             </p>

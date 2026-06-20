@@ -335,6 +335,17 @@ export const envSchema = z.object({
   // #13 — open an alert after this many consecutive gateway fetch failures
   // (e.g. revoked credentials would otherwise fail silently all window).
   PAYMENT_POLL_FETCH_FAILURE_ALERT_THRESHOLD: z.coerce.number().int().min(1).default(5),
+  // Option B (Phase 4) — deferred-capture recovery cron (the missed-webhook
+  // backstop that materializes a deferred order from a captured CheckoutSession).
+  DEFERRED_CAPTURE_BATCH: z.coerce.number().int().min(1).default(20),
+  DEFERRED_CAPTURE_BACKOFF_SECONDS: z.coerce.number().int().min(0).default(180),
+  // Option B (Phase 5) — CheckoutSession reconciler (expire abandoned, re-link
+  // or fail stuck-PAID, auto-refund FAILED). Pausable independently of the
+  // deferred flag for incident response; the cron also requires the deferred
+  // flag on (no sessions exist otherwise).
+  CHECKOUT_SESSION_RECONCILIATION_ENABLED: z.string().default('true'),
+  CHECKOUT_SESSION_RECONCILE_BATCH: z.coerce.number().int().min(1).default(50),
+  CHECKOUT_SESSION_STUCK_GRACE_MINUTES: z.coerce.number().int().min(1).default(5),
 
   // Number of reverse-proxy hops to trust for req.ip (used by the throttler
   // to rate-limit per client IP). 0 = don't trust X-Forwarded-For (dev).

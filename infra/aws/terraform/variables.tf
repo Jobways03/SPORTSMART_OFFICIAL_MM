@@ -220,6 +220,32 @@ variable "db_name" {
   default     = "sportsmart"
 }
 
+# ── Logistics facade (internal service) ─────────────────────────────────
+
+variable "logistics_facade_image_tag" {
+  description = "Container image tag for the logistics-facade service + its migrate task (e.g. staging-latest). Kept separate from var.image_tag so the facade rolls independently of the api/web set. The ECR repo is empty until CI pushes; the service stays pending until then."
+  type        = string
+  default     = "staging-latest"
+}
+
+variable "logistics_facade_desired_count" {
+  description = "Desired Fargate task count for the internal logistics-facade. Not autoscaled (the autoscaling set is hardcoded); set statically."
+  type        = number
+  default     = 1
+}
+
+variable "logistics_facade_cpu" {
+  description = "Fargate CPU units for the logistics-facade task."
+  type        = number
+  default     = 256
+}
+
+variable "logistics_facade_memory" {
+  description = "Fargate memory (MiB) for the logistics-facade task."
+  type        = number
+  default     = 512
+}
+
 # ── CI/CD (GitHub Actions OIDC) ─────────────────────────────────────────
 
 variable "github_repo" {

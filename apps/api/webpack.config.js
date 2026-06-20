@@ -8,7 +8,18 @@
 // / `require('bcrypt')` intact and they load from node_modules at runtime with
 // correct platform-binary resolution. Path aliases (@src/*, @core/* …) and all
 // other deps continue to be bundled exactly as before.
-const NATIVE_EXTERNALS = new Set(['sharp', 'bcrypt']);
+//
+//   - @prisma/client: loads its platform-specific query-engine binary
+//     (libquery_engine-*.node) via paths computed relative to the package at
+//     runtime; bundling inlines that logic and breaks the engine lookup in the
+//     linux container. Externalize so it resolves from node_modules.
+//   - puppeteer: resolves a Chromium executable + native bits at runtime
+//     (used by the tax HTML-to-PDF service); same bundling hazard.
+//
+// All four are declared production dependencies (enforced by
+// test/unit/native-externals-declared.spec.ts) so `pnpm deploy --prod` keeps
+// them in the runtime image.
+const NATIVE_EXTERNALS = new Set(['sharp', 'bcrypt', '@prisma/client', 'puppeteer']);
 
 module.exports = (options, webpack) => {
   const existing = options.externals

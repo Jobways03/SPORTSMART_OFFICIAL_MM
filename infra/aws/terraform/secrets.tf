@@ -49,8 +49,30 @@ resource "random_id" "aes" {
   byte_length = 32
 }
 
+# Shared inter-service key: the facade reads it as INTERNAL_API_KEY, apps/api
+# reads the SAME value as LOGISTICS_FACADE_API_KEY (Authorization: ApiKey
+# <token>, constant-time compared by the facade's guard). 64 hex chars — over
+# the facade's 32-char boot floor and not a 'replace-me-' prefix, so the
+# facade's production secret-safety check passes.
+resource "random_id" "internal_api_key" {
+  byte_length = 32
+}
+
 locals {
   database_url = "postgresql://${var.db_username}:${random_password.db.result}@${aws_db_instance.main.address}:5432/${var.db_name}?schema=public&sslmode=require&connection_limit=10&pool_timeout=20"
+
+  # The logistics-facade uses a dedicated `logistics` SCHEMA inside the main
+  # RDS database (var.db_name) — no separate database, no new IAM. The facade
+  # migrate task does `CREATE SCHEMA IF NOT EXISTS logistics` before applying
+  # its own prisma migrations, so there is NO manual DB/schema bootstrap step.
+  # (The facade's migration SQL is schema-agnostic — unqualified DDL that lands
+  # in whatever schema the `?schema=` search_path selects.)
+  logistics_database_url = "postgresql://${var.db_username}:${random_password.db.result}@${aws_db_instance.main.address}:5432/${var.db_name}?schema=logistics&sslmode=require&connection_limit=5&pool_timeout=20"
+
+  # Facade reuses the same ElastiCache, namespaced on logical DB index /2
+  # (cluster-mode is disabled — num_cache_clusters, not num_node_groups — so a
+  # logical index is valid). Matches the facade .env.example convention.
+  logistics_redis_url = "${var.redis_ha ? "rediss" : "redis"}://${aws_elasticache_replication_group.main.primary_endpoint_address}:6379/2"
 
   generated_secret_values = merge(
     {
@@ -60,6 +82,12 @@ locals {
 
       AFFILIATE_ENCRYPTION_KEY = random_id.aes["AFFILIATE_ENCRYPTION_KEY"].hex
       ADMIN_MFA_ENCRYPTION_KEY = random_id.aes["ADMIN_MFA_ENCRYPTION_KEY"].hex
+
+      # logistics-facade: its three boot-required secrets, plus the shared key
+      # the API consumes as LOGISTICS_FACADE_API_KEY (see ecs.tf api_secrets).
+      INTERNAL_API_KEY       = random_id.internal_api_key.hex
+      LOGISTICS_DATABASE_URL = local.logistics_database_url
+      LOGISTICS_REDIS_URL    = local.logistics_redis_url
     },
     { for k, v in random_password.jwt : k => v.result },
   )

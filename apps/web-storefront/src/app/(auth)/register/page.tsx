@@ -3,6 +3,7 @@
 import { useCallback, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { AuthMobileHeader } from '@/components/auth/AuthMobileHeader';
 import {
   Eye,
   EyeOff,
@@ -188,7 +189,7 @@ export default function RegisterPage() {
 
   return (
     <div className="min-h-screen bg-ink-50 flex justify-center">
-      <div className="w-full max-w-[1320px] min-h-screen grid lg:grid-cols-[1fr_540px]">
+      <div className="w-full max-w-[1320px] min-h-screen grid lg:grid-cols-2">
       {/* Brand panel */}
       <div
         className="hidden lg:block relative overflow-hidden bg-ink-100"
@@ -271,22 +272,11 @@ export default function RegisterPage() {
 
       {/* Form panel */}
       <div className="flex flex-col">
-        <header className="flex items-center justify-between px-6 lg:px-10 py-6">
-          <Link href="/" className="lg:hidden font-display text-2xl tracking-wide italic leading-none">
-            <span className="text-sale">SPORTSMART</span>
-            <span className="text-ink-900">.com</span>
-          </Link>
-          <span className="ml-auto text-caption text-ink-600">
-            Already have an account?{' '}
-            <Link href="/login" className="text-accent-dark font-semibold hover:text-ink-900 hover:underline underline-offset-2">
-              Sign in
-            </Link>
-          </span>
-        </header>
+        <AuthMobileHeader switchPrompt="Already have an account?" switchLabel="Sign in" switchHref="/login" />
 
         <main className="flex-1 px-6 lg:px-10 pt-6 lg:pt-8 pb-10">
           <div className="w-full max-w-md mx-auto">
-            <h1 className="font-display text-h1 text-ink-900 leading-none">Create account</h1>
+            <h1 className="font-display text-2xl sm:text-3xl text-ink-900 leading-tight">Create account</h1>
             <p className="mt-3 text-body-lg text-ink-600">
               We&apos;ll send a 6-digit code to verify your email.
             </p>

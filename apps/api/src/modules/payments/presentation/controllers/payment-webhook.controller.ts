@@ -23,6 +23,7 @@ import {
 import { EnvService } from '../../../../bootstrap/env/env.service';
 import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 // Phase 169 (Payment Ops audit #1/#2) — Razorpay dispute / chargeback ingestion.
 // PaymentOpsModule is @Global so this injects without a PaymentsModule import.
@@ -171,6 +172,11 @@ export class PaymentWebhookController {
     // Phase 169 (#2) — dispute ingestion. @Optional for the same spec-harness
     // reason; PaymentOpsModule is @Global so it resolves in production.
     @Optional() private readonly chargebacks?: ChargebackService,
+    // Option B (Phase 4) — emit `payments.gateway_capture_unresolved` so the
+    // checkout module can materialize a deferred order from its CheckoutSession.
+    // @Optional for the spec harness; EventsModule is @Global so it resolves in
+    // production.
+    @Optional() private readonly eventBus?: EventBusService,
   ) {}
 
   /**
@@ -476,6 +482,53 @@ export class PaymentWebhookController {
       // forgeable note, falling back to the note when order_id is absent.
       const masterOrderId = await this.resolveMasterOrderId(payment);
       if (!masterOrderId) {
+        // Option B (Phase 4) — a captured payment with NO MasterOrder is the
+        // NORMAL deferred case (the order is materialized only on capture). When
+        // the flag is on, announce it so the checkout module materializes the
+        // order from its CheckoutSession; if no session owns this gateway order
+        // the handler no-ops (a genuine legacy orphan). The checkout recovery
+        // cron is the backstop if this event's handler fails. The session CAS
+        // owns exactly-once, so the lightweight Redis claim here is enough to
+        // dedupe rapid duplicate deliveries.
+        if (
+          payment.order_id &&
+          this.envService.getBoolean('CHECKOUT_DEFERRED_ORDER_CREATION', false)
+        ) {
+          const eventKey = `payment.captured:${payment.id}`;
+          if (await this.claimEvent(eventKey)) {
+            await this.eventBus
+              ?.publish({
+                eventName: 'payments.gateway_capture_unresolved',
+                aggregate: 'CheckoutSession',
+                aggregateId: payment.order_id,
+                occurredAt: new Date(),
+                payload: {
+                  razorpayOrderId: payment.order_id,
+                  razorpayPaymentId: payment.id,
+                  capturedAmountInPaise: String(payment.amount),
+                },
+              })
+              .catch(async (e: unknown) => {
+                this.logger.error(
+                  `deferred capture-event publish failed for ${payment.id}: ${
+                    (e as Error)?.message ?? e
+                  }`,
+                );
+                // Release the claim so a webhook retry can re-emit. The recovery
+                // cron is still a backstop, but don't silently swallow the retry
+                // by leaving the 24h claim held on a failed publish.
+                await this.releaseClaim(eventKey).catch(() => undefined);
+              });
+          }
+          await this.auditWebhook('payments.webhook.deferred_capture', payment, {
+            event: payload.event,
+            order_id: payment.order_id,
+          });
+          return {
+            success: true,
+            message: 'Deferred capture routed for materialization',
+          };
+        }
         this.logger.warn(
           `Webhook received without resolvable masterOrderId: ${payment.id}`,
         );

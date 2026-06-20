@@ -54,7 +54,7 @@ fi
 # web-admin-storefront (included below); the bare apps/web-admin app is a
 # legacy stub and is intentionally NOT deployed.
 if [[ "$SERVICES_CSV" == "all" ]]; then
-  SERVICES_CSV="api,web-storefront,web-admin-storefront,web-d2c-seller,web-d2c-seller-admin,web-retail-seller,web-retail-seller-admin,web-franchise,web-franchise-admin,web-affiliate,web-affiliate-admin"
+  SERVICES_CSV="api,web-storefront,web-admin-storefront,web-d2c-seller,web-d2c-seller-admin,web-retail-seller,web-retail-seller-admin,web-franchise,web-franchise-admin,web-affiliate,web-affiliate-admin,logistics-facade"
 fi
 
 ssm() {
@@ -133,6 +133,57 @@ if [[ ",${SERVICES_CSV}," == *",api,"* ]]; then
   echo
 else
   echo "▶ Skipping migrations (api not in this deploy)."
+  echo
+fi
+
+# ── 1c. Logistics-facade migrations (own prisma schema, in a PG schema) ─
+# The facade owns LOGISTICS_DATABASE_URL (= the main DB with ?schema=logistics)
+# so the api-gated step above does NOT migrate it. This one-shot first creates
+# the `logistics` schema if absent, then applies the facade migrations into it
+# — no manual database/schema bootstrap step. Runs before the facade rolls.
+if [[ ",${SERVICES_CSV}," == *",logistics-facade,"* ]]; then
+  LF_MIGRATE_FAMILY="$(ssm logistics_facade_migrate_task_family)"
+  echo "▶ Running logistics-facade migrations (task family: $LF_MIGRATE_FAMILY)"
+  RUN_JSON="$(aws ecs run-task \
+    --cluster "$CLUSTER" \
+    --task-definition "$LF_MIGRATE_FAMILY" \
+    --launch-type FARGATE \
+    --network-configuration "awsvpcConfiguration={subnets=[$SUBNETS],securityGroups=[$SECURITY_GROUP],assignPublicIp=DISABLED}" \
+    --started-by "deploy.sh:lf-migrate:${IMAGE_TAG}" \
+    --output json)"
+  TASK_ARN="$(printf '%s' "$RUN_JSON" | jq -r '.tasks[0].taskArn // "None"')"
+  if [[ -z "$TASK_ARN" || "$TASK_ARN" == "None" ]]; then
+    echo "✗ failed to start the facade migration task." >&2
+    printf '%s' "$RUN_JSON" | jq -r '.failures[]? | "  - \(.reason) (\(.arn // "n/a"))"' >&2 || true
+    exit 1
+  fi
+  echo "  task: $TASK_ARN"
+  echo "  waiting for facade migrations (deadline ${MIGRATE_TIMEOUT_SECONDS}s)…"
+
+  deadline=$(( $(date +%s) + MIGRATE_TIMEOUT_SECONDS ))
+  while :; do
+    STATUS="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+      --query 'tasks[0].lastStatus' --output text 2>/dev/null || echo PENDING)"
+    [[ "$STATUS" == "STOPPED" ]] && break
+    if (( $(date +%s) >= deadline )); then
+      echo "✗ facade migration did not finish within ${MIGRATE_TIMEOUT_SECONDS}s (status=$STATUS); stopping task." >&2
+      aws ecs stop-task --cluster "$CLUSTER" --task "$TASK_ARN" \
+        --reason "deploy.sh lf-migrate timeout" >/dev/null 2>&1 || true
+      exit 1
+    fi
+    sleep 15
+  done
+
+  EXIT_CODE="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+    --query 'tasks[0].containers[0].exitCode' --output text)"
+  if [[ "$EXIT_CODE" != "0" ]]; then
+    REASON="$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" \
+      --query 'tasks[0].stoppedReason' --output text 2>/dev/null || true)"
+    echo "✗ facade migration task exited with code '${EXIT_CODE}' (reason: ${REASON:-n/a})." >&2
+    echo "  logs: CloudWatch /ecs/sportsmart-${TARGET}/logistics-facade-migrate" >&2
+    exit 1
+  fi
+  echo "  ✓ facade migrations applied."
   echo
 fi
 

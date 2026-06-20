@@ -3,7 +3,9 @@
 import { useState, useEffect, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { Eye, EyeOff, AlertCircle, CheckCircle2, ArrowRight, Loader2 } from 'lucide-react';
+import { AuthMobileHeader } from '@/components/auth/AuthMobileHeader';
+import { Eye, EyeOff, AlertCircle, CheckCircle2, ArrowRight, KeyRound, LifeBuoy, Loader2, Lock, ShieldCheck } from 'lucide-react';
+import { AuthBrandPanel } from '@/components/auth/AuthBrandPanel';
 import { authService } from '@/services/auth.service';
 import { ApiError } from '@/lib/api-client';
 import { validatePassword, validateConfirmPassword } from '@/lib/validators';
@@ -18,25 +20,48 @@ interface FormErrors {
  * Declared at MODULE scope, not inside the component — a component
  * defined inside another is a new type on every render, which would
  * remount this subtree (and drop input focus) on each keystroke.
+ * Split-screen layout mirrors the rest of the customer auth flow via
+ * the shared AuthBrandPanel.
  */
 function AuthShell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="min-h-screen bg-ink-50 flex flex-col">
-      <header className="flex items-center justify-between px-6 lg:px-10 py-6">
-        <Link
-          href="/"
-          className="font-display text-2xl tracking-wide italic leading-none"
-        >
-          <span className="text-sale">SPORTSMART</span>
-          <span className="text-ink-900">.com</span>
-        </Link>
-      </header>
-      <main className="flex-1 px-6 lg:px-10 py-8 flex items-start sm:items-center justify-center">
-        <div className="w-full max-w-md">{children}</div>
-      </main>
-      <footer className="px-6 py-5 border-t border-ink-200 text-caption text-ink-500 text-center">
-        &copy; {new Date().getFullYear()} Sportsmart. All rights reserved.
-      </footer>
+    <div className="min-h-screen bg-ink-50 flex justify-center">
+      <div className="w-full max-w-[1320px] min-h-screen grid lg:grid-cols-2">
+        {/* Branded panel */}
+        <AuthBrandPanel>
+          <h2 className="font-display text-[clamp(56px,6vw,96px)] leading-[0.92] tracking-tight text-ink-900">
+            Almost
+            <br />
+            <span className="font-brush text-sale text-[0.85em] tracking-normal">there.</span>
+          </h2>
+          <p className="mt-6 text-body-lg text-ink-700 max-w-md">
+            Choose a strong new password and you&apos;re back in the game.
+          </p>
+          <ul className="mt-10 grid sm:grid-cols-2 gap-3 max-w-lg">
+            {[
+              { icon: ShieldCheck, title: 'Strong & secure', desc: '8+ chars, mixed case' },
+              { icon: Lock, title: 'Encrypted', desc: 'Your data stays safe' },
+              { icon: KeyRound, title: 'Fresh start', desc: 'New password, new login' },
+              { icon: LifeBuoy, title: 'Need a hand?', desc: 'Support is one click away' },
+            ].map(({ icon: Icon, title, desc }) => (
+              <li key={title} className="bg-white border border-ink-900/10 p-3">
+                <Icon className="size-4 text-accent-dark" strokeWidth={1.75} />
+                <div className="mt-2 text-body font-semibold text-ink-900">{title}</div>
+                <div className="text-caption text-ink-600">{desc}</div>
+              </li>
+            ))}
+          </ul>
+        </AuthBrandPanel>
+
+        {/* Form panel */}
+        <div className="flex flex-col">
+          <AuthMobileHeader switchPrompt="Remember it?" switchLabel="Sign in" switchHref="/login" />
+
+          <main className="flex-1 px-6 lg:px-10 pt-6 lg:pt-10 pb-10 flex items-start sm:items-center">
+            <div className="w-full max-w-md mx-auto">{children}</div>
+          </main>
+        </div>
+      </div>
     </div>
   );
 }
@@ -139,7 +164,7 @@ export default function ResetPasswordPage() {
   if (success) {
     return (
       <AuthShell>
-        <h1 className="font-display text-h1 text-ink-900 leading-none">
+        <h1 className="font-display text-2xl sm:text-3xl text-ink-900 leading-tight">
           Password reset
         </h1>
         <div
@@ -164,7 +189,7 @@ export default function ResetPasswordPage() {
 
   return (
     <AuthShell>
-      <h1 className="font-display text-h1 text-ink-900 leading-none">
+      <h1 className="font-display text-2xl sm:text-3xl text-ink-900 leading-tight">
         Set a new password
       </h1>
       <p className="mt-3 text-body-lg text-ink-600">

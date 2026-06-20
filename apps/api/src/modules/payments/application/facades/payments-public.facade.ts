@@ -237,11 +237,13 @@ export class PaymentsPublicFacade {
       },
     );
     if (!flipped) {
-      // A concurrent caller already moved it out of PENDING/FAILED (e.g. a
-      // captured event won the race). Don't emit a duplicate failed event.
+      // Either this exact declined attempt was already recorded (idempotent
+      // redelivery) or the order is no longer in a pre-paid state (a captured
+      // event won the race, or it expired / was cancelled). Either way, don't
+      // emit a duplicate failed event.
       this.logger.warn(
-        `Order ${order.orderNumber}: payment.failed arrived but order is no longer ` +
-          `PENDING/FAILED (now ${order.paymentStatus}) — skipping.`,
+        `Order ${order.orderNumber}: payment.failed not recorded — already ` +
+          `recorded or order no longer pending (now ${order.paymentStatus}) — skipping.`,
       );
       return order;
     }

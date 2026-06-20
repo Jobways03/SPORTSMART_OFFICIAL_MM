@@ -529,11 +529,28 @@ export class OrdersPublicFacade {
   }
 
   /**
-   * Phase 165 (Razorpay audit #5/#6) — record gateway-side failure detail
-   * on a payment.failed webhook. Sets paymentStatus=CANCELLED + persists the
-   * gateway error_code / error_description + the failed payment id so support
-   * can answer "why did it fail" and correlate the payment id later (both were
-   * previously dropped). CAS-guarded so it never clobbers a PAID order.
+   * Phase 165 (Razorpay audit #5/#6) — record gateway-side failure detail on a
+   * payment.failed webhook: persist the error_code / error_description + the
+   * failed payment id so support can answer "why did it fail" and correlate the
+   * payment id later. Guarded so it never touches a PAID order.
+   *
+   * Online-payment audit (failed-order lifecycle) — this NO LONGER flips
+   * paymentStatus to CANCELLED. A single Razorpay `payment.failed` is one
+   * declined ATTEMPT, not a dead order: the Razorpay order stays open and the
+   * customer can retry (e.g. another card) until the payment window expires.
+   * Flipping to CANCELLED here was actively harmful — (1) it broke retry,
+   * because both verifyPayment's CAS and markOrderPaid require paymentStatus IN
+   * [PENDING, CREATED], so a customer who retried and PAID would never have
+   * their order confirmed; and (2) it shoved a still-retryable order into the
+   * customer's "cancelled" bucket. The order stays PENDING/CREATED here and
+   * surfaces in the storefront's "awaiting payment" strip with its failure
+   * reason. Termination (orderStatus=CANCELLED + stock release + wallet refund)
+   * is owned by the payment-expiry sweep/poller (window lapse) and the explicit
+   * customer Cancel — both of which already restore stock and refund the wallet.
+   *
+   * Idempotent on the failed payment id: a redelivered webhook for the SAME
+   * attempt does not match (so the caller won't double-notify), while a
+   * genuinely new declined attempt records + notifies once.
    */
   async recordPaymentFailure(
     masterOrderId: string,
@@ -544,16 +561,17 @@ export class OrdersPublicFacade {
     },
   ): Promise<{ flipped: boolean }> {
     const result = await this.prisma.masterOrder.updateMany({
-      // Only act on a not-yet-paid, not-already-cancelled order. A PAID order
-      // must never be flipped to CANCELLED by a late/duplicate failure event.
       where: {
         id: masterOrderId,
-        // Phase 257 — 'FAILED' is not an OrderPaymentStatus member; use the
-        // valid pre-paid states (PENDING + CREATED) or Prisma rejects the query.
+        // Only a not-yet-paid order; a PAID order must never record a late or
+        // duplicate failure. 'FAILED' is not an OrderPaymentStatus member.
         paymentStatus: { in: ['PENDING', 'CREATED'] as any },
+        // Idempotency: skip a redelivery of the same declined attempt.
+        ...(detail.failedPaymentId
+          ? { NOT: { lastFailedPaymentId: detail.failedPaymentId } }
+          : {}),
       },
       data: {
-        paymentStatus: 'CANCELLED' as any,
         lastFailedPaymentId: detail.failedPaymentId ?? undefined,
         lastPaymentFailureCode: detail.failureCode ?? undefined,
         lastPaymentFailureReason: detail.failureReason ?? undefined,

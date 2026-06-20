@@ -11,13 +11,17 @@ import { z } from 'zod';
  *                 `Authorization: ApiKey <key>` on every request,
  *                 matching the facade's `ApiKeyAuthGuard` expectation.
  *
- * Lazy parsing (called from the module factory) so apps/api boots
- * cleanly in environments where the facade integration is feature-
- * flagged off — see `LOGISTICS_PARTNER_REGISTRATION_ENABLED`.
+ * `apiUrl`/`apiKey` are OPTIONAL: the module factory parses this eagerly
+ * at DI bootstrap, so requiring them would crash-loop apps/api anywhere
+ * the facade isn't deployed (e.g. AWS staging, where it has no service) —
+ * the env-schema already treats both as optional. When unset the
+ * integration is simply disabled; the client throws a clear error if a
+ * caller actually makes a request (see LogisticsFacadeClient). When they
+ * ARE provided, the url()/min(8) checks still fail fast on a bad value.
  */
 const ConfigSchema = z.object({
-  apiUrl: z.string().url(),
-  apiKey: z.string().min(8),
+  apiUrl: z.string().url().optional(),
+  apiKey: z.string().min(8).optional(),
   /** Per-request timeout in milliseconds. */
   timeoutMs: z.number().int().positive().default(30_000),
 });
