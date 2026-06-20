@@ -749,14 +749,14 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
         {order.taxSummary && Number(order.taxSummary.totalTaxInPaise) > 0 && (
           <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: 16, marginBottom: 20 }}>
             <h3 style={{ fontSize: 14, fontWeight: 600, marginBottom: 8, color: '#111827' }}>
-              GST Breakdown
+              Price Breakdown
             </h3>
             <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 12px' }}>
               GST is included in the prices shown. The breakdown is
               snapshotted from the tax engine at order time.
             </p>
             <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 16, rowGap: 6, margin: 0, fontSize: 14 }}>
-              <dt style={{ color: '#6b7280' }}>Taxable value</dt>
+              <dt style={{ color: '#6b7280' }}>Product value</dt>
               <dd style={{ textAlign: 'right', margin: 0 }}>
                 ₹{(Number(order.taxSummary.taxableInPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </dd>
@@ -785,10 +785,10 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                 </>
               )}
               <dt style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', color: '#111827', fontWeight: 600 }}>
-                Total GST
+                Sub Total
               </dt>
               <dd style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', textAlign: 'right', margin: 0, fontWeight: 600 }}>
-                ₹{(Number(order.taxSummary.totalTaxInPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                ₹{((Number(order.taxSummary.taxableInPaise) + Number(order.taxSummary.totalTaxInPaise)) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </dd>
             </dl>
           </div>

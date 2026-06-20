@@ -2,10 +2,11 @@ import { apiClient, ApiResponse } from '@/lib/api-client';
 
 export type AdminPrimaryRole =
   | 'SUPER_ADMIN'
-  | 'SELLER_ADMIN'
   | 'SELLER_SUPPORT'
   | 'SELLER_OPERATIONS'
+  | 'SELLER_OPS'
   | 'AFFILIATE_ADMIN'
+  | 'D2C_ADMIN'
   | 'RETAILER_ADMIN'
   | 'FRANCHISE_ADMIN';
 
@@ -105,14 +106,37 @@ export const adminUsersService = {
       method: 'DELETE',
     });
   },
+
+  // Mint a single-use MFA enrolment invite for an admin. The returned token
+  // builds a link the admin opens (no login required) to set up their
+  // authenticator — the way to onboard a new SUPER_ADMIN, who is otherwise
+  // hard-blocked at login until MFA is enrolled. Requires a fresh step-up.
+  createMfaInvite(adminId: string): Promise<ApiResponse<MfaInviteResult>> {
+    return apiClient<MfaInviteResult>('/admin/mfa/invites', {
+      method: 'POST',
+      body: JSON.stringify({ adminId }),
+    });
+  },
 };
+
+export interface MfaInviteResult {
+  token: string;
+  expiresInSeconds: number;
+  email: string;
+  // The invitee's home portal — the link already points there, so a
+  // franchise/retail/D2C admin enrolls and signs in on the right portal.
+  portal: string;
+  portalLabel: string;
+  enrollUrl: string;
+}
 
 export const ADMIN_PRIMARY_ROLES: { value: AdminPrimaryRole; label: string }[] = [
   { value: 'SUPER_ADMIN', label: 'Super Admin' },
-  { value: 'SELLER_ADMIN', label: 'Seller Admin' },
-  { value: 'SELLER_OPERATIONS', label: 'Seller Operations' },
+  { value: 'SELLER_OPERATIONS', label: 'Seller Operations (Finance/Money-ops)' },
+  { value: 'SELLER_OPS', label: 'Seller Ops (Seller features only)' },
   { value: 'SELLER_SUPPORT', label: 'Seller Support' },
   { value: 'AFFILIATE_ADMIN', label: 'Affiliate Admin' },
+  { value: 'D2C_ADMIN', label: 'D2C Admin' },
   { value: 'RETAILER_ADMIN', label: 'Retailer Admin' },
   { value: 'FRANCHISE_ADMIN', label: 'Franchise Admin' },
 ];

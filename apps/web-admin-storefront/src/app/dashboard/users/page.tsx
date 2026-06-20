@@ -42,6 +42,7 @@ function UsersInner() {
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<AdminUser | null>(null);
   const [resettingPwd, setResettingPwd] = useState<AdminUser | null>(null);
+  const [invitingMfa, setInvitingMfa] = useState<AdminUser | null>(null);
   const [statusFilter, setStatusFilter] = useState<'ALL' | AdminAccountStatus>('ALL');
 
   const refresh = useCallback(async () => {
@@ -237,6 +238,7 @@ function UsersInner() {
                       isSelf={u.id === me?.adminId}
                       onEdit={() => setEditing(u)}
                       onResetPassword={() => setResettingPwd(u)}
+                      onMfaInvite={() => setInvitingMfa(u)}
                       onToggleStatus={() => toggleStatus(u)}
                       onDeactivate={() => remove(u)}
                     />
@@ -283,6 +285,12 @@ function UsersInner() {
           user={resettingPwd}
           onClose={() => setResettingPwd(null)}
           onSaved={() => setResettingPwd(null)}
+        />
+      )}
+      {invitingMfa && (
+        <MfaInviteModal
+          user={invitingMfa}
+          onClose={() => setInvitingMfa(null)}
         />
       )}
     </div>
@@ -358,6 +366,7 @@ function RowActions({
   isSelf,
   onEdit,
   onResetPassword,
+  onMfaInvite,
   onToggleStatus,
   onDeactivate,
 }: {
@@ -365,6 +374,7 @@ function RowActions({
   isSelf: boolean;
   onEdit: () => void;
   onResetPassword: () => void;
+  onMfaInvite: () => void;
   onToggleStatus: () => void;
   onDeactivate: () => void;
 }) {
@@ -419,6 +429,14 @@ function RowActions({
             style={menuItem}
           >
             <KeyIcon /> Reset password
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => { setOpen(false); onMfaInvite(); }}
+            style={menuItem}
+          >
+            <ShieldIcon /> Send MFA invite
           </button>
           <button
             type="button"
@@ -509,6 +527,14 @@ function KeyIcon() {
       <circle cx="7.5" cy="15.5" r="3.5" />
       <path d="m10 13 9-9 3 3" />
       <path d="m18 6 3 3" />
+    </svg>
+  );
+}
+function ShieldIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10Z" />
+      <path d="m9 12 2 2 4-4" />
     </svg>
   );
 }
@@ -823,6 +849,120 @@ function ResetPasswordModal({
           <button onClick={submit} disabled={submitting} style={btnPrimary}>
             {submitting ? 'Saving…' : 'Update password'}
           </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MfaInviteModal({
+  user,
+  onClose,
+}: {
+  user: AdminUser;
+  onClose: () => void;
+}) {
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState('');
+  const [link, setLink] = useState('');
+  const [portalLabel, setPortalLabel] = useState('');
+  const [expiresMins, setExpiresMins] = useState(0);
+  const [copied, setCopied] = useState(false);
+
+  const generate = useCallback(async () => {
+    setLoading(true);
+    setErr('');
+    try {
+      const res = await adminUsersService.createMfaInvite(user.id);
+      // The backend builds the link against the invitee's HOME portal
+      // (D2C / Retail / Franchise / Affiliate / Super) so they enroll and
+      // sign in where their role is accepted — not always localhost:4000.
+      if (!res.data?.enrollUrl) throw new Error('No invite link returned');
+      setLink(res.data.enrollUrl);
+      setPortalLabel(res.data.portalLabel ?? '');
+      setExpiresMins(Math.round((res.data?.expiresInSeconds ?? 0) / 60));
+    } catch (e: any) {
+      setErr(e?.message ?? 'Failed to create invite');
+    } finally {
+      setLoading(false);
+    }
+  }, [user.id]);
+
+  useEffect(() => {
+    generate();
+  }, [generate]);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Clipboard can be blocked; the input is selectable as a fallback.
+    }
+  };
+
+  return (
+    <div style={modalBackdrop} onClick={onClose}>
+      <div style={modalBody} onClick={(e) => e.stopPropagation()}>
+        <div style={modalHeader}>
+          <h2 style={{ fontSize: 17, fontWeight: 700, margin: 0 }}>MFA enrollment invite</h2>
+          <button onClick={onClose} style={btnClose}>×</button>
+        </div>
+        <div style={{ padding: '16px 20px' }}>
+          <p style={{ fontSize: 13, color: '#475569', marginTop: 0 }}>
+            Send this single-use link to <strong>{user.email}</strong>. They open it
+            (no login needed), scan the QR / setup key into their authenticator app,
+            and confirm a 6-digit code — after which they can sign in.
+          </p>
+
+          {loading && (
+            <div style={{ fontSize: 13, color: '#64748b', padding: '8px 0' }}>
+              Generating secure link…
+            </div>
+          )}
+
+          {err && (
+            <>
+              <div style={errorBox}>{err}</div>
+              <button onClick={generate} style={{ ...btnGhost, marginTop: 10 }}>
+                Try again
+              </button>
+            </>
+          )}
+
+          {!loading && !err && link && (
+            <>
+              {portalLabel && (
+                <p style={{ fontSize: 12.5, color: '#334155', margin: '0 0 10px' }}>
+                  Signs in at: <strong>{portalLabel}</strong> portal — this link points there.
+                </p>
+              )}
+              <Field label="Enrollment link">
+                <input
+                  type="text"
+                  value={link}
+                  readOnly
+                  onFocus={(e) => e.currentTarget.select()}
+                  style={{ ...inputStyle, fontFamily: 'monospace', fontSize: 12 }}
+                />
+              </Field>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 4 }}>
+                <button onClick={copy} style={btnPrimary}>
+                  {copied ? 'Copied ✓' : 'Copy link'}
+                </button>
+                <span style={{ fontSize: 12, color: '#94a3b8' }}>
+                  Single-use · expires in {expiresMins} min
+                </span>
+              </div>
+              <p style={{ fontSize: 12, color: '#94a3b8', marginBottom: 0 }}>
+                Share it over a secure channel. It stops working once used or after it expires.
+              </p>
+            </>
+          )}
+        </div>
+        <div style={modalFooter}>
+          <button onClick={onClose} style={btnGhost}>Done</button>
         </div>
       </div>
     </div>

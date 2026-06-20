@@ -874,6 +874,23 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
  */
 export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> = {
   SUPER_ADMIN: ALL_PERMISSION_KEYS,
+  // Seller-scoped ops tier — ONLY seller-facing features (orders, catalog/
+  // products, inventory, returns). Deliberately excludes all money/finance ops
+  // (settlements, wallets, payouts, recon, accounts, refunds, disputes) that
+  // the broad SELLER_OPERATIONS tier below carries.
+  SELLER_OPS: [
+    'orders.read',
+    'products.read',
+    'catalog.read',
+    'inventory.alerts.read',
+    'inventory.adjust',
+    'returns.read',
+    'returns.approve',
+    'returns.reject',
+    'returns.schedulePickup',
+    'returns.receive',
+    'returns.qcDecide',
+  ],
   SELLER_OPERATIONS: [
     'wallets.read', 'wallets.adjust', 'wallets.block',
     'disputes.read', 'disputes.reply', 'disputes.internalNote', 'disputes.assign', 'disputes.statusUpdate', 'disputes.decide',

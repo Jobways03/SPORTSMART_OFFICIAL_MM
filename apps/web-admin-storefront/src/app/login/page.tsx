@@ -52,6 +52,16 @@ function LoginInner() {
     if (mfa && mfaInputRef.current) mfaInputRef.current.focus();
   }, [mfa]);
 
+  useEffect(() => {
+    // Email-first MFA: auto-email the code as soon as the challenge appears so
+    // no authenticator app is needed. The authenticator path stays in the
+    // backend; this just stops surfacing it at login.
+    if (mfa && !emailMode && !emailInfo && !emailRequesting) {
+      void handleRequestEmailOtp();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mfa]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -428,25 +438,6 @@ function LoginInner() {
                   }}
                 >
                   {emailRequesting ? 'Sending…' : 'Resend code'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEmailMode(false);
-                    setEmailInfo('');
-                    setMfaCode('');
-                    setError('');
-                  }}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    fontSize: 13,
-                    color: '#2563eb',
-                    cursor: 'pointer',
-                    textDecoration: 'underline',
-                  }}
-                >
-                  Use authenticator instead
                 </button>
               </div>
             )}

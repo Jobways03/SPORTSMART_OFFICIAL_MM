@@ -7,6 +7,9 @@ enum AdminRole {
   SELLER_ADMIN
   SELLER_SUPPORT
   SELLER_OPERATIONS
+  // Seller-scoped operations tier — orders/products/inventory/returns only.
+  // Distinct from SELLER_OPERATIONS, which is the broad money/finance-ops tier.
+  SELLER_OPS
   AFFILIATE_ADMIN
   D2C_ADMIN
   RETAILER_ADMIN

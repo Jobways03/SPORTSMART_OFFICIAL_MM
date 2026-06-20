@@ -34,6 +34,9 @@ function VerifyOtpForm() {
   const [otpError, setOtpError] = useState('');
   const [serverError, setServerError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resendCooldown, setResendCooldown] = useState(0);
+  const [resendMsg, setResendMsg] = useState('');
 
   const inputRefs = useRef<(HTMLInputElement | null)[]>([]);
 
@@ -42,6 +45,34 @@ function VerifyOtpForm() {
       router.replace('/forgot-password');
     }
   }, [email, router]);
+
+  // Resend cooldown countdown.
+  useEffect(() => {
+    if (resendCooldown <= 0) return;
+    const t = setInterval(
+      () => setResendCooldown((s) => (s <= 1 ? 0 : s - 1)),
+      1000,
+    );
+    return () => clearInterval(t);
+  }, [resendCooldown]);
+
+  const handleResend = async () => {
+    if (resendCooldown > 0 || resending || !email) return;
+    setResending(true);
+    setServerError('');
+    setResendMsg('');
+    try {
+      await franchiseAuthService.forgotPassword(email);
+      setResendMsg('A new code has been sent to your email.');
+      setDigits(Array(OTP_LENGTH).fill(''));
+      inputRefs.current[0]?.focus();
+      setResendCooldown(30);
+    } catch {
+      setServerError('Could not resend the code. Please try again.');
+    } finally {
+      setResending(false);
+    }
+  };
 
   const handleChange = (index: number, value: string) => {
     const digit = value.replace(/\D/g, '').slice(-1);
@@ -194,7 +225,33 @@ function VerifyOtpForm() {
           </button>
         </form>
 
-        <p className="auth-footer">
+        {resendMsg && (
+          <p style={{ textAlign: 'center', color: '#16a34a', fontSize: 13, marginTop: 12 }}>
+            {resendMsg}
+          </p>
+        )}
+
+        <p className="auth-footer" style={{ textAlign: 'center' }}>
+          <button
+            type="button"
+            onClick={handleResend}
+            disabled={resending || resendCooldown > 0}
+            style={{
+              background: 'none',
+              border: 'none',
+              font: 'inherit',
+              padding: 0,
+              cursor: resending || resendCooldown > 0 ? 'default' : 'pointer',
+              color: resending || resendCooldown > 0 ? '#9ca3af' : '#2563eb',
+            }}
+          >
+            {resending
+              ? 'Sending…'
+              : resendCooldown > 0
+                ? `Resend code in ${resendCooldown}s`
+                : 'Resend code'}
+          </button>
+          <span style={{ margin: '0 8px', color: '#d1d5db' }}>·</span>
           <Link href="/forgot-password">Use a different email</Link>
         </p>
       </div>

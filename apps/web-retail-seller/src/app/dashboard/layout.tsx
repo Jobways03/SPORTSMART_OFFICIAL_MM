@@ -87,6 +87,17 @@ export default function DashboardLayout({
         return;
       }
       const me = res.data;
+      // Portal-type guard. Seller-session cookies are scoped to the host
+      // (`localhost`), NOT the port — so a session created in the D2C portal
+      // (:4003) leaks into this Retail portal (:4009) in the same browser.
+      // Without this check the Retail portal would render a D2C seller's
+      // account. If the validated session isn't a RETAIL seller, bounce to login
+      // (don't clear the cookie — that would also kill the other portal's
+      // session).
+      if (me.sellerType && me.sellerType !== 'RETAIL') {
+        router.replace('/login?wrongPortal=' + encodeURIComponent(me.sellerType));
+        return;
+      }
       setSeller({
         sellerId: me.sellerId,
         sellerName: me.sellerName,
