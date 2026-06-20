@@ -141,42 +141,36 @@ export class FranchiseSettlementService {
         });
       }
 
-      // 2. Atomically CLAIM the PENDING ledger entries in the period.
+      // 2. READ the candidate PENDING ledger entries for the period. Each
+      // franchise's rows are CLAIMED (PENDING → ACCRUED) further down, once
+      // its settlement row exists, stamped with the real settlement id.
       //
-      // This used to be a find-then-update: findMany(PENDING in range),
-      // then later updateMany by id. Under concurrent admins calling
-      // this endpoint with overlapping date ranges, both calls read the
-      // same PENDING rows, both compute totals from them, and the
-      // second updateMany only overwrites the settlementBatchId — the
-      // two FranchiseSettlement rows end up with totals that both
-      // include the overlapping entries → franchise double-counted.
+      // We must NOT stamp settlement_batch_id up-front: that column has a FK
+      // to franchise_settlements(id), and the per-franchise settlements don't
+      // exist yet. The previous code tagged the *cycle* id as a temporary
+      // marker, which violated the FK (P2003 → "A referenced record does not
+      // exist") the instant any entry matched — so a franchise cycle with real
+      // entries could never be created; only empty cycles ever committed.
       //
-      // The fix is to flip status from PENDING to ACCRUED atomically
-      // up-front. PostgreSQL takes row-level write locks on the UPDATE,
-      // so a racing transaction blocks, re-evaluates `status = PENDING`
-      // after we commit, and finds zero rows left to claim in the
-      // overlap. We tag them with the cycle id as a temporary marker
-      // and re-point them to the per-franchise settlement id in step 5.
-      const claimed = await tx.franchiseFinanceLedger.updateMany({
+      // Concurrency: the per-franchise claim below flips status under a
+      // `status = PENDING` guard, so a racing cycle that grabbed an overlapping
+      // row updates fewer rows and the count mismatch rolls this tx back — no
+      // double-count, even though we read (rather than claim) up-front here.
+      //
+      // The admin picks calendar dates, so an entry created at ANY time on the
+      // periodEnd day must be in range. `new Date(periodEnd)` resolves to that
+      // day's 00:00, so an inclusive `lte: periodEnd` silently dropped every
+      // entry after midnight (e.g. a commission locked at 07:57 on the end
+      // day) — the cause of "Create cycle does nothing and shows no error".
+      // Use an exclusive upper bound of the next day to cover the whole day.
+      const claimEndExclusive = new Date(periodEnd);
+      claimEndExclusive.setUTCDate(claimEndExclusive.getUTCDate() + 1);
+      const pendingEntries = await tx.franchiseFinanceLedger.findMany({
         where: {
           status: 'PENDING',
-          createdAt: { gte: periodStart, lte: periodEnd },
+          createdAt: { gte: periodStart, lt: claimEndExclusive },
           settlementBatchId: null,
         },
-        data: {
-          status: 'ACCRUED',
-          settlementBatchId: cycle.id,
-        },
-      });
-
-      if (claimed.count === 0) {
-        return { cycle, settlements: [] as any[], empty: true };
-      }
-
-      // Re-fetch only the rows WE claimed in this transaction — a
-      // concurrent cycle cannot have tagged its rows with our cycle.id.
-      const pendingEntries = await tx.franchiseFinanceLedger.findMany({
-        where: { settlementBatchId: cycle.id },
         include: {
           franchise: {
             select: {
@@ -190,6 +184,10 @@ export class FranchiseSettlementService {
         },
         orderBy: { createdAt: 'asc' },
       });
+
+      if (pendingEntries.length === 0) {
+        return { cycle, settlements: [] as any[], empty: true };
+      }
 
       // 3. Group by franchiseId
       const grouped = new Map<string, any[]>();
@@ -374,15 +372,27 @@ export class FranchiseSettlementService {
           },
         });
 
-        // Link ledger entries to settlement via settlementBatchId + mark ACCRUED
+        // Atomically CLAIM this franchise's entries now that the settlement
+        // row exists: flip PENDING → ACCRUED and stamp the real settlement id
+        // (a valid franchise_settlements FK — the cycle id used here before
+        // violated that FK). The `status: 'PENDING'` guard + row locks mean a
+        // racing cycle that grabbed any of these rows between our read and here
+        // updates fewer rows; the count mismatch aborts the whole tx so the
+        // settlement totals (computed from the read) can't include rows we
+        // didn't actually claim.
         const entryIds = entries.map((e: any) => e.id);
-        await tx.franchiseFinanceLedger.updateMany({
-          where: { id: { in: entryIds } },
+        const claimed = await tx.franchiseFinanceLedger.updateMany({
+          where: { id: { in: entryIds }, status: 'PENDING', settlementBatchId: null },
           data: {
             status: 'ACCRUED',
             settlementBatchId: settlement.id,
           },
         });
+        if (claimed.count !== entryIds.length) {
+          throw new BadRequestAppException(
+            'Another settlement run claimed overlapping ledger entries; please retry.',
+          );
+        }
 
         // Phase 252 — generic dynamic charge-rule engine retired. The franchise
         // payout is netted by the statutory taxes only (commission-GST stamped
@@ -430,9 +440,143 @@ export class FranchiseSettlementService {
     return { cycle: result.cycle, settlements: result.settlements };
   }
 
+  // ── Preview settlement cycle (dry-run) ──────────────────────
+  //
+  // Mirrors createSettlementCycle's candidate read + per-franchise net so the
+  // numbers an admin sees are exactly what a subsequent create would write —
+  // the seller flow's previewCycle has the same contract. Read-only: no cycle,
+  // no claim, no settlement rows, no transaction.
+  async previewSettlementCycle(periodStart: Date, periodEnd: Date) {
+    // Same end-of-day window as create (entries on the periodEnd day are in).
+    const claimEndExclusive = new Date(periodEnd);
+    claimEndExclusive.setUTCDate(claimEndExclusive.getUTCDate() + 1);
+
+    // A create is blocked when an overlapping cycle already has franchise
+    // settlements (createSettlementCycle throws on that). Surface it as a
+    // warning so the admin knows the create won't go through.
+    const overlapCycles = await this.prisma.settlementCycle.findMany({
+      where: {
+        NOT: { AND: [{ periodStart }, { periodEnd }] },
+        periodStart: { lte: periodEnd },
+        periodEnd: { gte: periodStart },
+      },
+      select: { id: true, periodStart: true, periodEnd: true, status: true },
+    });
+    let overlap: {
+      id: string;
+      status: string;
+      periodStart: Date;
+      periodEnd: Date;
+    } | null = null;
+    if (overlapCycles.length > 0) {
+      const settledInOverlap = await this.prisma.franchiseSettlement.count({
+        where: { cycleId: { in: overlapCycles.map((c) => c.id) } },
+      });
+      if (settledInOverlap > 0) {
+        const c = overlapCycles[0]!;
+        overlap = {
+          id: c.id,
+          status: c.status,
+          periodStart: c.periodStart,
+          periodEnd: c.periodEnd,
+        };
+      }
+    }
+
+    const pendingEntries = await this.prisma.franchiseFinanceLedger.findMany({
+      where: {
+        status: 'PENDING',
+        createdAt: { gte: periodStart, lt: claimEndExclusive },
+        settlementBatchId: null,
+      },
+      include: {
+        franchise: { select: { id: true, businessName: true, franchiseCode: true } },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+
+    // Group by franchise and compute the SAME net createSettlementCycle writes:
+    //   net = grossSalesEarning − returnReversals + adjustments − discountFunded
+    // (commission-GST / TCS / TDS are applied later at approve/pay, not here).
+    // Keep this switch in sync with the create loop's per-entry aggregation.
+    const grouped = new Map<string, typeof pendingEntries>();
+    for (const e of pendingEntries) {
+      const arr = grouped.get(e.franchiseId) ?? [];
+      arr.push(e);
+      grouped.set(e.franchiseId, arr);
+    }
+
+    const D = (n: unknown) => new Prisma.Decimal((n as any) ?? 0);
+    let cycleNet = D(0);
+    const franchiseBreakdown = await Promise.all(
+      Array.from(grouped.entries()).map(async ([franchiseId, entries]) => {
+        let gross = D(0);
+        let reversal = D(0);
+        let adjustment = D(0);
+        for (const entry of entries) {
+          const fe = D(entry.franchiseEarning);
+          switch (entry.sourceType) {
+            case 'ONLINE_ORDER':
+            case 'POS_SALE':
+            case 'POS_SALE_REVERSAL':
+              gross = gross.plus(fe);
+              break;
+            case 'RETURN_REVERSAL':
+              reversal = reversal.plus(fe.abs());
+              break;
+            case 'ADJUSTMENT':
+              adjustment = adjustment.plus(fe);
+              break;
+            // PROCUREMENT_FEE / PROCUREMENT_COST carry 0 franchise earning.
+          }
+        }
+        const discountPaise = await this.sumFranchiseDiscountDeduction(
+          this.prisma,
+          franchiseId,
+          periodStart,
+          periodEnd,
+        );
+        const discountRupees = new Prisma.Decimal(discountPaise.toString()).div(100);
+        const net = gross
+          .minus(reversal)
+          .plus(adjustment)
+          .minus(discountRupees)
+          .toDecimalPlaces(2);
+        cycleNet = cycleNet.plus(net);
+        const first = entries[0]!;
+        return {
+          franchiseId,
+          franchiseName: first.franchise?.businessName ?? 'Unknown',
+          franchiseCode: first.franchise?.franchiseCode ?? null,
+          entryCount: entries.length,
+          grossFranchiseEarning: gross.toFixed(2),
+          discountFundedDeductionInPaise: discountPaise.toString(),
+          netPayableToFranchise: net.toFixed(2),
+        };
+      }),
+    );
+
+    return {
+      isDryRun: true as const,
+      periodStart,
+      periodEnd,
+      franchiseCount: grouped.size,
+      entryCount: pendingEntries.length,
+      totalNetPayable: cycleNet.toFixed(2),
+      franchiseBreakdown,
+      overlap,
+      // "as of" — a point-in-time snapshot; the commission cron may add rows
+      // before the operator confirms (create re-aggregates at commit time).
+      asOf: new Date().toISOString(),
+    };
+  }
+
   // ── Approve settlement ──────────────────────────────────────
 
-  async approveSettlement(settlementId: string) {
+  async approveSettlement(
+    settlementId: string,
+    args?: { approvedByAdminId?: string },
+  ) {
     const settlement = await this.financeRepo.findSettlementById(settlementId);
     if (!settlement) {
       throw new NotFoundAppException('Franchise settlement not found');
@@ -470,7 +614,15 @@ export class FranchiseSettlementService {
         where: { id: settlementId },
         data: {
           status: 'APPROVED',
+          // Approval provenance — who signed off and when.
+          approvedByAdminId: args?.approvedByAdminId ?? null,
+          approvedAt: new Date(),
+          // A re-approval of a FAILED row clears the stale payout metadata so it
+          // can't be mistaken for / carried into the next pay.
           paymentReference: null,
+          paymentMethod: null,
+          paymentProofUrl: null,
+          paidByAdminId: null,
           paidAt: null,
         },
       });
@@ -530,18 +682,29 @@ export class FranchiseSettlementService {
   }
 
   // ── Mark settlement as paid ─────────────────────────────────
+  // Captures UTR (unique — duplicate money-out guard) + method + proof +
+  // paidByAdminId, and accepts an APPROVED or a retried FAILED settlement.
 
   async markSettlementPaid(
     settlementId: string,
-    paymentReference: string,
+    args: {
+      paymentReference: string;
+      paymentMethod?: string;
+      paymentProofUrl?: string;
+      paidByAdminId?: string;
+    },
   ) {
+    const { paymentReference, paymentMethod, paymentProofUrl, paidByAdminId } =
+      args;
     const settlement = await this.financeRepo.findSettlementById(settlementId);
     if (!settlement) {
       throw new NotFoundAppException('Franchise settlement not found');
     }
-    if (settlement.status !== 'APPROVED') {
+    // Allow a FAILED payout to be retried (mirrors the seller flow), not only a
+    // fresh APPROVED one.
+    if (settlement.status !== 'APPROVED' && settlement.status !== 'FAILED') {
       throw new BadRequestAppException(
-        `Cannot mark as paid. Settlement status is ${settlement.status}. Only APPROVED settlements can be marked as paid.`,
+        `Cannot mark as paid. Settlement status is ${settlement.status}. Only APPROVED or FAILED settlements can be marked as paid.`,
       );
     }
 
@@ -566,32 +729,48 @@ export class FranchiseSettlementService {
     // Phase 251 — single source of truth (settlement-net.ts), shared with the
     // seller side. Already clamped ≥0.
     const paidAmountInPaise = settlementNetFromRow(settlement, grossPaise);
-    const updated = await this.prisma.$transaction(async (tx) => {
-      const flip = await tx.franchiseSettlement.updateMany({
-        where: { id: settlementId, status: 'APPROVED' },
-        data: {
-          status: 'PAID',
-          paidAt: new Date(),
-          paymentReference,
-          paidAmountInPaise,
-        },
+    let updated;
+    try {
+      updated = await this.prisma.$transaction(async (tx) => {
+        const flip = await tx.franchiseSettlement.updateMany({
+          // APPROVED → PAID, or a retry of a FAILED payout.
+          where: { id: settlementId, status: { in: ['APPROVED', 'FAILED'] } },
+          data: {
+            status: 'PAID',
+            paidAt: new Date(),
+            paymentReference,
+            paymentMethod: paymentMethod ?? null,
+            paymentProofUrl: paymentProofUrl ?? null,
+            paidByAdminId: paidByAdminId ?? null,
+            paidAmountInPaise,
+          },
+        });
+        if (flip.count !== 1) {
+          throw new BadRequestAppException(
+            'Settlement is no longer APPROVED/FAILED (it may have just been paid by a concurrent request). No payment was recorded.',
+          );
+        }
+        if (entryIds.length > 0) {
+          await tx.franchiseFinanceLedger.updateMany({
+            where: { id: { in: entryIds } },
+            data: { status: 'SETTLED', settlementBatchId: settlementId },
+          });
+        }
+        const u = await tx.franchiseSettlement.findUnique({
+          where: { id: settlementId },
+        });
+        return u!;
       });
-      if (flip.count !== 1) {
+    } catch (err) {
+      // Unique violation on payment_reference — this UTR is already recorded
+      // against another settlement (duplicate money-out detection).
+      if ((err as { code?: string })?.code === 'P2002') {
         throw new BadRequestAppException(
-          'Settlement is no longer APPROVED (it may have just been paid by a concurrent request). No payment was recorded.',
+          `Payment reference "${paymentReference}" is already recorded against another settlement.`,
         );
       }
-      if (entryIds.length > 0) {
-        await tx.franchiseFinanceLedger.updateMany({
-          where: { id: { in: entryIds } },
-          data: { status: 'SETTLED', settlementBatchId: settlementId },
-        });
-      }
-      const u = await tx.franchiseSettlement.findUnique({
-        where: { id: settlementId },
-      });
-      return u!;
-    });
+      throw err;
+    }
 
     // Phase 250 (Franchise tax) — flip the §194-O TDS ledger COMPUTED → WITHHELD
     // now the franchise has been paid (the TDS was withheld from the payout).

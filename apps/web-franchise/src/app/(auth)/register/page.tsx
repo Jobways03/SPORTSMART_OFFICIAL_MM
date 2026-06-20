@@ -73,6 +73,26 @@ export default function FranchiseRegisterPage() {
     setErrors((prev) => ({ ...prev, [field]: error || undefined }));
   };
 
+  // Live validation as the user types: show format errors immediately, but
+  // never nag "required" on an empty field (blur + submit still enforce that).
+  const liveValidate = (field: string, value: string) => {
+    if (!value.trim()) {
+      setErrors((prev) => ({ ...prev, [field]: undefined }));
+      return;
+    }
+    setErrors((prev) => ({ ...prev, [field]: validateField(field, value) || undefined }));
+  };
+
+  // Live password-match check — only once the confirm field has content, so it
+  // doesn't nag before the user has re-typed the password.
+  const liveConfirm = (pw: string, confirm: string) => {
+    if (!confirm) {
+      setErrors((prev) => ({ ...prev, confirmPassword: undefined }));
+      return;
+    }
+    setErrors((prev) => ({ ...prev, confirmPassword: validateConfirmPassword(pw, confirm) || undefined }));
+  };
+
   const validateAll = (): boolean => {
     const newErrors: FormErrors = {};
     const onErr = validateOwnerName(ownerName);
@@ -209,12 +229,14 @@ export default function FranchiseRegisterPage() {
                     placeholder="Owner's full name"
                     value={ownerName}
                     maxLength={100}
-                    onChange={(e) =>
+                    onChange={(e) => {
                       // PERSON name — strip anything that isn't a letter/space/
                       // period/apostrophe/hyphen so digits/specials can't be
                       // typed or pasted in. Submit re-checks via validateOwnerName.
-                      setOwnerName(e.target.value.replace(/[^A-Za-z .'-]/g, ''))
-                    }
+                      const v = e.target.value.replace(/[^A-Za-z .'-]/g, '');
+                      setOwnerName(v);
+                      liveValidate('ownerName', v);
+                    }}
                     onBlur={() => handleBlur('ownerName', ownerName)}
                     aria-invalid={!!errors.ownerName}
                     autoComplete="name"
@@ -233,14 +255,14 @@ export default function FranchiseRegisterPage() {
                     placeholder="Business or franchise name"
                     value={businessName}
                     maxLength={150}
-                    onChange={(e) =>
+                    onChange={(e) => {
                       // BUSINESS name — keep letters, digits and the common
                       // legal-name punctuation (& . , - / ( ) '). Digits are
                       // intentionally preserved ("3M", "7-Eleven", "Demo1").
-                      setBusinessName(
-                        e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, ''),
-                      )
-                    }
+                      const v = e.target.value.replace(/[^A-Za-z0-9 &.,\-/()']/g, '');
+                      setBusinessName(v);
+                      liveValidate('businessName', v);
+                    }}
                     onBlur={() => handleBlur('businessName', businessName)}
                     aria-invalid={!!errors.businessName}
                     autoComplete="organization"
@@ -260,7 +282,7 @@ export default function FranchiseRegisterPage() {
                     placeholder="you@example.com"
                     value={email}
                     maxLength={255}
-                    onChange={(e) => setEmail(e.target.value)}
+                    onChange={(e) => { setEmail(e.target.value); liveValidate('email', e.target.value); }}
                     onBlur={() => handleBlur('email', email)}
                     aria-invalid={!!errors.email}
                     autoComplete="email"
@@ -278,6 +300,8 @@ export default function FranchiseRegisterPage() {
                     placeholder="10-digit mobile"
                     value={phoneNumber}
                     onChange={(e) => {
+                      // Digits only; drop any leading 0–5 so it can only start
+                      // with 6/7/8/9; cap at 10. The hint guides — no red error.
                       let next = e.target.value.replace(/\D/g, '');
                       next = next.replace(/^[0-5]+/, '');
                       next = next.slice(0, 10);
@@ -295,6 +319,9 @@ export default function FranchiseRegisterPage() {
                     aria-invalid={!!errors.phoneNumber}
                     autoComplete="tel"
                   />
+                  <span style={{ display: 'block', marginTop: 4, fontSize: 12, color: '#6b7280' }}>
+                    Indian mobile — should start with 6, 7, 8, or 9.
+                  </span>
                   {errors.phoneNumber && (
                     <span className="field-error" role="alert">{errors.phoneNumber}</span>
                   )}
@@ -311,7 +338,7 @@ export default function FranchiseRegisterPage() {
                       placeholder="Create a strong password"
                       value={password}
                       maxLength={128}
-                      onChange={(e) => setPassword(e.target.value)}
+                      onChange={(e) => { setPassword(e.target.value); liveConfirm(e.target.value, confirmPassword); }}
                       onBlur={() => handleBlur('password', password)}
                       aria-invalid={!!errors.password}
                       aria-describedby="password-strength"
@@ -341,7 +368,7 @@ export default function FranchiseRegisterPage() {
                       placeholder="Re-enter your password"
                       value={confirmPassword}
                       maxLength={128}
-                      onChange={(e) => setConfirmPassword(e.target.value)}
+                      onChange={(e) => { setConfirmPassword(e.target.value); liveConfirm(password, e.target.value); }}
                       onBlur={() => handleBlur('confirmPassword', confirmPassword)}
                       aria-invalid={!!errors.confirmPassword}
                       autoComplete="new-password"

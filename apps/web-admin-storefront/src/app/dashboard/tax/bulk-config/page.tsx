@@ -16,12 +16,17 @@
  * `tax.bulk-config` permission key; the backend 403s as a safety net.
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
+import { adminTaxService, type HsnMasterItem } from '@/services/admin-tax.service';
 
 type Taxability = 'TAXABLE' | 'NIL_RATED' | 'EXEMPT' | 'NON_GST';
+
+// Taxability values this screen's select can represent. The HSN master may
+// carry ZERO_RATED / OUT_OF_SCOPE too — those are left unchanged on auto-fill.
+const TAXABILITY_OPTS: Taxability[] = ['TAXABLE', 'NIL_RATED', 'EXEMPT', 'NON_GST'];
 
 interface PreviewSample {
   id: string;
@@ -65,6 +70,70 @@ export default function BulkTaxConfigPage() {
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [resultCount, setResultCount] = useState<number | null>(null);
+
+  // HSN picker — type a code/name to search the HSN master; picking a row
+  // fills the code AND auto-applies its GST rate / supply type / UQC.
+  const [hsnResults, setHsnResults] = useState<HsnMasterItem[]>([]);
+  const [hsnOpen, setHsnOpen] = useState(false);
+  const [hsnSearching, setHsnSearching] = useState(false);
+  const hsnBoxRef = useRef<HTMLDivElement | null>(null);
+  const hsnTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const runHsnSearch = useCallback((term: string) => {
+    if (hsnTimer.current) clearTimeout(hsnTimer.current);
+    const q = term.trim();
+    setHsnSearching(true);
+    // Empty query → list the active HSN rows, so just focusing the field
+    // surfaces the available codes; typing then filters by code or name.
+    hsnTimer.current = setTimeout(async () => {
+      try {
+        const res = await adminTaxService.listHsn({
+          search: q.length > 0 ? q : undefined,
+          activeOnly: true,
+          // Typed query → tight list; empty (focus) → broader so the whole
+          // active master is scrollable without having to type first.
+          limit: q.length > 0 ? 10 : 50,
+        });
+        setHsnResults(res.data?.items ?? []);
+      } catch {
+        setHsnResults([]);
+      } finally {
+        setHsnSearching(false);
+      }
+    }, 200);
+  }, []);
+
+  const onHsnInput = (v: string) => {
+    setHsnCode(v);
+    setHsnOpen(true);
+    runHsnSearch(v);
+  };
+
+  // Pick a suggestion: fill the code AND auto-apply rate / supply type / UQC.
+  // The admin can still override any field before previewing.
+  const pickHsn = (item: HsnMasterItem) => {
+    setHsnCode(item.hsnCode);
+    setGstRateBps(String(item.defaultGstRateBps));
+    if ((TAXABILITY_OPTS as string[]).includes(item.supplyTaxability)) {
+      setSupplyTaxability(item.supplyTaxability as Taxability);
+    }
+    if (item.defaultUqcCode) setDefaultUqcCode(item.defaultUqcCode);
+    setHsnOpen(false);
+    setHsnResults([]);
+  };
+
+  useEffect(() => {
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (hsnBoxRef.current && !hsnBoxRef.current.contains(e.target as Node)) {
+        setHsnOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      if (hsnTimer.current) clearTimeout(hsnTimer.current);
+    };
+  }, []);
 
   function parseProductIds(): { valid: string[]; invalid: string[] } {
     const tokens = productIdsRaw
@@ -280,16 +349,40 @@ export default function BulkTaxConfigPage() {
       <section style={cardStyle}>
         <h2 style={h2}>2. Tax fields to write</h2>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-          <div>
-            <label style={labelStyle}>HSN code (4-8 digits)</label>
+          <div ref={hsnBoxRef} style={{ position: 'relative' }}>
+            <label style={labelStyle}>HSN code — type code or name (e.g. “bat”)</label>
             <input
               type="text"
               value={hsnCode}
-              onChange={(e) => setHsnCode(e.target.value)}
-              placeholder="e.g. 95069900"
-              maxLength={8}
+              onChange={(e) => onHsnInput(e.target.value)}
+              onFocus={() => { setHsnOpen(true); runHsnSearch(hsnCode); }}
+              placeholder="e.g. 9506 or “bat”"
+              autoComplete="off"
               style={inputStyle}
             />
+            {hsnOpen && (
+              <div style={hsnDropdown}>
+                {hsnSearching && <div style={hsnEmpty}>Searching…</div>}
+                {!hsnSearching && hsnResults.length === 0 && (
+                  <div style={hsnEmpty}>No matching HSN in the master.</div>
+                )}
+                {!hsnSearching &&
+                  hsnResults.map((it) => (
+                    <button
+                      type="button"
+                      key={it.id}
+                      onClick={() => pickHsn(it)}
+                      title={`${it.description}${it.categoryHint ? ` · ${it.categoryHint}` : ''} — GST ${(it.defaultGstRateBps / 100).toFixed(2)}%${it.defaultUqcCode ? ` · UQC ${it.defaultUqcCode}` : ''}`}
+                      style={hsnRow}
+                    >
+                      <span style={hsnRowCode}>{it.hsnCode}</span>
+                      <span style={hsnRowDesc}>{it.description}</span>
+                      <span style={hsnRowRate}>{(it.defaultGstRateBps / 100).toFixed(0)}%</span>
+                      {it.categoryHint && <span style={hsnRowChip}>{it.categoryHint}</span>}
+                    </button>
+                  ))}
+              </div>
+            )}
           </div>
           <div>
             <label style={labelStyle}>GST rate (basis points 0-10000)</label>
@@ -408,6 +501,35 @@ const labelStyle: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
   width: '100%', padding: '8px 10px', fontSize: 13,
   border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', boxSizing: 'border-box',
+};
+const hsnDropdown: React.CSSProperties = {
+  position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
+  marginTop: 4, background: '#fff', border: '1px solid #d1d5db', borderRadius: 6,
+  boxShadow: '0 6px 18px rgba(0,0,0,0.12)', maxHeight: 260, overflowY: 'auto',
+  textTransform: 'none', letterSpacing: 'normal',
+};
+const hsnEmpty: React.CSSProperties = {
+  padding: '8px 10px', fontSize: 12, color: '#6b7280',
+};
+const hsnRow: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+  padding: '8px 10px', border: 0, borderBottom: '1px solid #f3f4f6',
+  background: '#fff', cursor: 'pointer', textAlign: 'left', font: 'inherit',
+};
+const hsnRowCode: React.CSSProperties = {
+  fontSize: 13, fontWeight: 700, color: '#111827',
+  fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+};
+const hsnRowDesc: React.CSSProperties = {
+  fontSize: 12, color: '#374151', flex: 1, overflow: 'hidden',
+  textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+};
+const hsnRowRate: React.CSSProperties = {
+  fontSize: 12, fontWeight: 600, color: '#166534', whiteSpace: 'nowrap',
+};
+const hsnRowChip: React.CSSProperties = {
+  fontSize: 10, fontWeight: 600, color: '#3730a3', background: '#e0e7ff',
+  padding: '2px 6px', borderRadius: 999, whiteSpace: 'nowrap',
 };
 const th: React.CSSProperties = {
   padding: '4px 6px', textAlign: 'left', fontSize: 11, fontWeight: 600, color: '#6b7280',

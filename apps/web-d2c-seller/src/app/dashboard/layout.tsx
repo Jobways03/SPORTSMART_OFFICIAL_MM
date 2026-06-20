@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { type SellerProfileData } from '@/services/profile.service';
 import { sellerAuthService } from '@/services/auth.service';
+import { apiClient } from '@/lib/api-client';
 import './dashboard.css';
 
 interface SellerInfo {
@@ -74,6 +75,7 @@ export default function DashboardLayout({
   const [seller, setSeller] = useState<SellerInfo | null>(null);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [ordersCount, setOrdersCount] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const refreshProfile = useCallback(async () => {
@@ -158,6 +160,31 @@ export default function DashboardLayout({
       router.replace('/dashboard/onboarding');
     }
   }, [seller, pathname, router]);
+
+  // New-order count for the Orders sidebar badge — sub-orders awaiting the
+  // seller's accept/reject. Only polled once the account is active/verified.
+  useEffect(() => {
+    if (!seller) return;
+    const active =
+      seller.status === 'ACTIVE' &&
+      seller.verificationStatus === 'VERIFIED' &&
+      seller.isEmailVerified === true;
+    if (!active) {
+      setOrdersCount(0);
+      return;
+    }
+    const fetchOrders = () => {
+      apiClient<{ pagination?: { total?: number } }>('/seller/orders?acceptStatus=OPEN&limit=1')
+        .then((res) => {
+          const total = res.data?.pagination?.total;
+          if (typeof total === 'number') setOrdersCount(total);
+        })
+        .catch(() => {});
+    };
+    fetchOrders();
+    const interval = setInterval(fetchOrders, 60000);
+    return () => clearInterval(interval);
+  }, [seller]);
 
   const handleLogout = useCallback(async () => {
     setDropdownOpen(false);
@@ -361,6 +388,22 @@ export default function DashboardLayout({
                 dangerouslySetInnerHTML={{ __html: item.icon }}
               />
               {item.label}
+              {item.href === '/dashboard/orders' && !item.disabled && ordersCount > 0 && (
+                <span style={{
+                  marginLeft: 'auto',
+                  background: '#ef4444',
+                  color: '#fff',
+                  fontSize: 10,
+                  fontWeight: 700,
+                  padding: '2px 7px',
+                  borderRadius: 10,
+                  minWidth: 18,
+                  textAlign: 'center',
+                  lineHeight: '16px',
+                }}>
+                  {ordersCount > 99 ? '99+' : ordersCount}
+                </span>
+              )}
               {item.disabled && (
                 <span style={{
                   fontSize: 9,

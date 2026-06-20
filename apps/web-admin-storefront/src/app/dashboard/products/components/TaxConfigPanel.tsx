@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
 import { usePermissions } from '@/lib/permissions';
+import { adminTaxService, type HsnMasterItem } from '@/services/admin-tax.service';
 
 /**
  * Phase 45 (2026-05-21) — admin per-product tax-config attestation
@@ -77,6 +78,15 @@ export function TaxConfigPanel({ productId }: Props) {
     defaultUqcCode: '',
   });
   const [saving, setSaving] = useState(false);
+  // HSN picker: typing in the HSN field searches the HSN master; picking a
+  // row fills the code AND auto-applies its GST rate / supply type / UQC.
+  // Admin-driven — nothing is forced; the admin still confirms by saving.
+  // Hovering a suggestion reveals its full description + category.
+  const [hsnResults, setHsnResults] = useState<HsnMasterItem[]>([]);
+  const [hsnOpen, setHsnOpen] = useState(false);
+  const [hsnSearching, setHsnSearching] = useState(false);
+  const hsnBoxRef = useRef<HTMLDivElement | null>(null);
+  const hsnTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -110,6 +120,67 @@ export function TaxConfigPanel({ productId }: Props) {
 
   const setField = (k: keyof typeof edit, v: string) =>
     setEdit((prev) => ({ ...prev, [k]: v }));
+
+  // Debounced HSN-master lookup as the admin types in the HSN field. Matches
+  // on code prefix OR description/category (so "9506" and "bat" both work).
+  const runHsnSearch = useCallback((term: string) => {
+    if (hsnTimer.current) clearTimeout(hsnTimer.current);
+    const q = term.trim();
+    setHsnSearching(true);
+    // Empty query → list the active HSN rows, so just focusing the field
+    // surfaces the available codes (e.g. the lone "Cricket Batt" row);
+    // typing then filters by code prefix or description.
+    hsnTimer.current = setTimeout(async () => {
+      try {
+        const res = await adminTaxService.listHsn({
+          search: q.length > 0 ? q : undefined,
+          activeOnly: true,
+          // Typed query → tight list; empty (focus) → broader so the whole
+          // active master is scrollable without having to type first.
+          limit: q.length > 0 ? 10 : 50,
+        });
+        setHsnResults(res.data?.items ?? []);
+      } catch {
+        setHsnResults([]);
+      } finally {
+        setHsnSearching(false);
+      }
+    }, 200);
+  }, []);
+
+  const onHsnInput = (v: string) => {
+    setField('hsnCode', v);
+    setHsnOpen(true);
+    runHsnSearch(v);
+  };
+
+  // Pick a suggestion: fill the code AND auto-apply rate / supply type / UQC
+  // from the chosen HSN-master row. The admin can still override any field.
+  const pickHsn = (item: HsnMasterItem) => {
+    setEdit((prev) => ({
+      ...prev,
+      hsnCode: item.hsnCode,
+      gstRateBps: String(item.defaultGstRateBps),
+      supplyTaxability: item.supplyTaxability || prev.supplyTaxability,
+      defaultUqcCode: item.defaultUqcCode || prev.defaultUqcCode,
+    }));
+    setHsnOpen(false);
+    setHsnResults([]);
+  };
+
+  // Close the suggestion dropdown on outside click; clear the timer on unmount.
+  useEffect(() => {
+    const onDocMouseDown = (e: MouseEvent) => {
+      if (hsnBoxRef.current && !hsnBoxRef.current.contains(e.target as Node)) {
+        setHsnOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDocMouseDown);
+    return () => {
+      document.removeEventListener('mousedown', onDocMouseDown);
+      if (hsnTimer.current) clearTimeout(hsnTimer.current);
+    };
+  }, []);
 
   // Save HSN / GST / supply-type / cess / UQC for THIS product only via the
   // SUPER_ADMIN-gated bulk endpoint (productIds: [this one]). Resets the
@@ -242,21 +313,48 @@ export function TaxConfigPanel({ productId }: Props) {
             Set tax config (super-admin)
           </div>
           <div style={{ fontSize: 12, color: '#6b7280', marginBottom: 10 }}>
-            HSN / GST rate is set per product by a super-admin. Saving updates
-            this product only and resets attestation — re-verify below.
+            Start typing an HSN code or product name (e.g. “bat”) in the HSN
+            field to pick from the HSN master — the GST rate, supply type, and
+            UQC fill in automatically. Saving updates this product only and
+            resets attestation — re-verify below.
           </div>
           <div style={editGrid}>
             <label style={editLabel}>
               HSN / SAC code
-              <input
-                type="text"
-                value={edit.hsnCode}
-                onChange={(e) => setField('hsnCode', e.target.value)}
-                placeholder="e.g. 95069900"
-                maxLength={8}
-                inputMode="numeric"
-                style={inputStyle}
-              />
+              <div ref={hsnBoxRef} style={{ position: 'relative' }}>
+                <input
+                  type="text"
+                  value={edit.hsnCode}
+                  onChange={(e) => onHsnInput(e.target.value)}
+                  onFocus={() => { setHsnOpen(true); runHsnSearch(edit.hsnCode); }}
+                  placeholder="Type code or name — e.g. 9506 or “bat”"
+                  autoComplete="off"
+                  style={{ ...inputStyle, marginBottom: 0, textTransform: 'none', letterSpacing: 'normal', fontWeight: 400 }}
+                />
+                {hsnOpen && (
+                  <div style={hsnDropdown}>
+                    {hsnSearching && <div style={hsnEmpty}>Searching…</div>}
+                    {!hsnSearching && hsnResults.length === 0 && (
+                      <div style={hsnEmpty}>No matching HSN in the master.</div>
+                    )}
+                    {!hsnSearching &&
+                      hsnResults.map((it) => (
+                        <button
+                          type="button"
+                          key={it.id}
+                          onClick={() => pickHsn(it)}
+                          title={`${it.description}${it.categoryHint ? ` · ${it.categoryHint}` : ''} — GST ${(it.defaultGstRateBps / 100).toFixed(2)}%${it.defaultUqcCode ? ` · UQC ${it.defaultUqcCode}` : ''}`}
+                          style={hsnRow}
+                        >
+                          <span style={hsnRowCode}>{it.hsnCode}</span>
+                          <span style={hsnRowDesc}>{it.description}</span>
+                          <span style={hsnRowRate}>{(it.defaultGstRateBps / 100).toFixed(0)}%</span>
+                          {it.categoryHint && <span style={hsnRowChip}>{it.categoryHint}</span>}
+                        </button>
+                      ))}
+                  </div>
+                )}
+              </div>
             </label>
             <label style={editLabel}>
               GST rate
@@ -447,6 +545,35 @@ const editLabel: React.CSSProperties = {
 const inputStyle: React.CSSProperties = {
   width: '100%', height: 32, padding: '0 10px', fontSize: 13,
   border: '1px solid #d1d5db', borderRadius: 6, background: '#fff', marginBottom: 10,
+};
+const hsnDropdown: React.CSSProperties = {
+  position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 20,
+  marginTop: 4, background: '#fff', border: '1px solid #d1d5db', borderRadius: 6,
+  boxShadow: '0 6px 18px rgba(0,0,0,0.12)', maxHeight: 260, overflowY: 'auto',
+  textTransform: 'none', letterSpacing: 'normal', fontWeight: 400,
+};
+const hsnEmpty: React.CSSProperties = {
+  padding: '8px 10px', fontSize: 12, color: '#6b7280', textTransform: 'none',
+};
+const hsnRow: React.CSSProperties = {
+  display: 'flex', alignItems: 'center', gap: 8, width: '100%',
+  padding: '8px 10px', border: 0, borderBottom: '1px solid #f3f4f6',
+  background: '#fff', cursor: 'pointer', textAlign: 'left', font: 'inherit',
+};
+const hsnRowCode: React.CSSProperties = {
+  fontSize: 13, fontWeight: 700, color: '#111827',
+  fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap',
+};
+const hsnRowDesc: React.CSSProperties = {
+  fontSize: 12, color: '#374151', flex: 1, overflow: 'hidden',
+  textOverflow: 'ellipsis', whiteSpace: 'nowrap', textTransform: 'none',
+};
+const hsnRowRate: React.CSSProperties = {
+  fontSize: 12, fontWeight: 600, color: '#166534', whiteSpace: 'nowrap',
+};
+const hsnRowChip: React.CSSProperties = {
+  fontSize: 10, fontWeight: 600, color: '#3730a3', background: '#e0e7ff',
+  padding: '2px 6px', borderRadius: 999, whiteSpace: 'nowrap', textTransform: 'none',
 };
 const tableStyle: React.CSSProperties = {
   width: '100%', borderCollapse: 'collapse', fontSize: 12, marginTop: 8,

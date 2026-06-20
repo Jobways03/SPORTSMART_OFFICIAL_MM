@@ -70,7 +70,10 @@ export class SellerRegisterController {
   }
 
   @Post('register')
-  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  // 7 registrations / 60s / IP — a humane limit so a genuine user who fumbles
+  // the form a few times (typo'd email/phone, password rules) isn't blocked
+  // before a valid submission, while still defeating signup flooding.
+  @Throttle({ default: { limit: 7, ttl: 60_000 } })
   @HttpCode(HttpStatus.ACCEPTED)
   async register(
     @Body() dto: SellerRegisterDto,

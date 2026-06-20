@@ -47,6 +47,7 @@ import { AdminEditFranchiseProfileDto } from '../dtos/admin-edit-franchise-profi
 import { AdminSendFranchiseMessageDto } from '../dtos/admin-send-franchise-message.dto';
 import { AdminChangeFranchisePasswordDto } from '../dtos/admin-change-franchise-password.dto';
 import { AdminUpdateFranchiseBankDto } from '../dtos/admin-update-franchise-bank.dto';
+import { GstnVerificationService } from '../../../tax/application/services/gstn-verification.service';
 
 @ApiTags('Admin Franchise')
 @Controller('admin/franchises')
@@ -72,7 +73,49 @@ export class AdminFranchiseController {
     private readonly adminDeleteFranchiseUseCase: AdminDeleteFranchiseUseCase,
     private readonly fulfillmentHoldUseCase: AdminFranchiseFulfillmentHoldUseCase,
     private readonly prisma: PrismaService,
+    private readonly gstnVerification: GstnVerificationService,
   ) {}
+
+  /**
+   * Franchise tax-ID verification — closes the parity gap with sellers.
+   * Runs the automated government GSTN-portal check on the franchise's GSTIN
+   * (writing portal status + legal-name match back onto the row) AND records
+   * the admin's PAN attestation. Before this, franchise tax IDs were
+   * format-validated only — never checked against the portal, with no admin
+   * verify action.
+   */
+  @Post(':franchiseId/verify-tax-ids')
+  @Permissions('franchise.approve')
+  async verifyTaxIds(
+    @Param('franchiseId') franchiseId: string,
+    @Req() req: Request,
+  ) {
+    const adminId = (req as any).adminId;
+    // 1. GSTIN — automated government-portal verification (parity with seller).
+    const gst = await this.gstnVerification.verifyFranchiseGstin({
+      franchiseId,
+      actorId: adminId,
+      ipAddress: req.ip ?? null,
+    });
+    // 2. PAN — admin attestation (manual), mirroring the seller flow.
+    const fr = await this.prisma.franchisePartner.findUnique({
+      where: { id: franchiseId },
+      select: { panNumber: true, panVerified: true },
+    });
+    let panVerified = fr?.panVerified ?? false;
+    if (fr?.panNumber && !panVerified) {
+      await this.prisma.franchisePartner.update({
+        where: { id: franchiseId },
+        data: { panVerified: true, panVerifiedAt: new Date() },
+      });
+      panVerified = true;
+    }
+    return {
+      success: true,
+      message: 'Franchise tax IDs verified',
+      data: { gst, panVerified },
+    };
+  }
 
   /**
    * Phase 159j (audit PII) — mask a PAN to its last 4 for display. The PAN is

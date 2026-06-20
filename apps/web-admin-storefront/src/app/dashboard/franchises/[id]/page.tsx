@@ -175,6 +175,11 @@ function FranchiseDetailInner({ id }: { id: string }) {
               run: (reason) => adminFranchisesService.setFulfillmentHold(id, true, reason),
             })}>Hold fulfillment</button>
           )}
+          <button style={pageBtn} onClick={() => setModal({
+            title: 'Verify tax IDs — runs the government GSTIN-portal check + records PAN attestation',
+            label: 'Note', requireReason: false,
+            run: () => adminFranchisesService.verifyTaxIds(id),
+          })}>Verify Tax IDs</button>
         </div>
       )}
 

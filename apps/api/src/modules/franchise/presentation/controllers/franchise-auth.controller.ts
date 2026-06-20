@@ -63,7 +63,9 @@ export class FranchiseAuthController {
   }
 
   @Post('register')
-  @Throttle({ default: { limit: 3, ttl: 60_000 } })
+  // 7 registrations / 60s / IP — humane for an honest user fumbling the form a
+  // few times, while still defeating signup flooding.
+  @Throttle({ default: { limit: 7, ttl: 60_000 } })
   @HttpCode(HttpStatus.ACCEPTED)
   async register(
     @Body() dto: FranchiseRegisterDto,

@@ -5,7 +5,7 @@ import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { franchiseAuthService } from '@/services/auth.service';
 import { franchiseProfileService, FranchiseProfile } from '@/services/profile.service';
-import { ApiError } from '@/lib/api-client';
+import { ApiError, apiClient } from '@/lib/api-client';
 import { deriveBanner } from '@/lib/dashboard-banner';
 import './dashboard.css';
 
@@ -57,6 +57,7 @@ export default function DashboardLayout({
   const [loading, setLoading] = useState(true);
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [ordersCount, setOrdersCount] = useState(0);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Phase 20 (2026-05-20) — refetch profile from /franchise/profile on
@@ -126,6 +127,23 @@ export default function DashboardLayout({
   useEffect(() => {
     setSidebarOpen(false);
   }, [pathname]);
+
+  // New-order count for the Orders sidebar badge — sub-orders awaiting the
+  // franchise's accept/reject. Polls every 60s; silent-fail.
+  useEffect(() => {
+    if (!profile) return;
+    const fetchOrders = () => {
+      apiClient<{ pagination?: { total?: number } }>('/franchise/orders?acceptStatus=OPEN&limit=1')
+        .then((res) => {
+          const total = res.data?.pagination?.total;
+          if (typeof total === 'number') setOrdersCount(total);
+        })
+        .catch(() => {});
+    };
+    fetchOrders();
+    const interval = setInterval(fetchOrders, 60000);
+    return () => clearInterval(interval);
+  }, [profile]);
 
   const handleLogout = useCallback(async () => {
     await franchiseAuthService.logout();
@@ -236,6 +254,22 @@ export default function DashboardLayout({
               >
                 <span className="nav-icon" dangerouslySetInnerHTML={{ __html: item.icon }} />
                 {item.label}
+                {item.href === '/dashboard/orders' && ordersCount > 0 && (
+                  <span style={{
+                    marginLeft: 'auto',
+                    background: '#ef4444',
+                    color: '#fff',
+                    fontSize: 10,
+                    fontWeight: 700,
+                    padding: '2px 7px',
+                    borderRadius: 10,
+                    minWidth: 18,
+                    textAlign: 'center',
+                    lineHeight: '16px',
+                  }}>
+                    {ordersCount > 99 ? '99+' : ordersCount}
+                  </span>
+                )}
                 {item.comingSoon && <span className="sidebar-badge">SOON</span>}
               </Link>
             );

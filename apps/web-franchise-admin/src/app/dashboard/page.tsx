@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { adminFranchisesService } from '@/services/admin-franchises.service';
 
@@ -78,6 +78,17 @@ const Ic = {
       <circle cx="12" cy="12" r="10" /><line x1="12" y1="16" x2="12" y2="12" /><line x1="12" y1="8" x2="12.01" y2="8" />
     </svg>
   ),
+  refresh: (
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="23 4 23 10 17 10" /><polyline points="1 20 1 14 7 14" />
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+    </svg>
+  ),
+  arrow: (
+    <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" />
+    </svg>
+  ),
 };
 
 // ── Stat tint palette ────────────────────────────────────────────────
@@ -94,6 +105,7 @@ export default function FranchiseAdminDashboardPage() {
   const [adminName, setAdminName] = useState('');
   const [kpis, setKpis] = useState<KpiState>(INITIAL_KPIS);
   const [loaded, setLoaded] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     try {
@@ -102,68 +114,70 @@ export default function FranchiseAdminDashboardPage() {
     } catch {}
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const franchisesPromise = adminFranchisesService
+  const loadKpis = useCallback(async () => {
+    const [franchisesData, pendingSettlements] = await Promise.all([
+      adminFranchisesService
         .listFranchises({ limit: 100 })
         .then((res) => res.data ?? null)
-        .catch(() => null);
-
-      const pendingSettlementsPromise = adminFranchisesService
+        .catch(() => null),
+      adminFranchisesService
         .listSettlements({ status: 'PENDING', limit: 1 })
         .then((res: any) => res?.data?.pagination?.total ?? null)
-        .catch(() => null);
+        .catch(() => null),
+    ]);
 
-      const [franchisesData, pendingSettlements] = await Promise.all([
-        franchisesPromise,
-        pendingSettlementsPromise,
-      ]);
-      if (cancelled) return;
+    let totalFranchises: number | null = null;
+    let activeFranchises: number | null = null;
+    let pendingVerification: number | null = null;
+    let franchiseIds: string[] = [];
 
-      let totalFranchises: number | null = null;
-      let activeFranchises: number | null = null;
-      let pendingVerification: number | null = null;
-      let franchiseIds: string[] = [];
+    if (franchisesData) {
+      totalFranchises = franchisesData.pagination.total;
+      activeFranchises = franchisesData.franchises.filter(
+        (f) => f.status === 'ACTIVE',
+      ).length;
+      pendingVerification = franchisesData.franchises.filter(
+        (f) => f.verificationStatus !== 'VERIFIED',
+      ).length;
+      franchiseIds = franchisesData.franchises.map((f) => f.id);
+    }
 
-      if (franchisesData) {
-        totalFranchises = franchisesData.pagination.total;
-        activeFranchises = franchisesData.franchises.filter(
-          (f) => f.status === 'ACTIVE',
-        ).length;
-        pendingVerification = franchisesData.franchises.filter(
-          (f) => f.verificationStatus !== 'VERIFIED',
-        ).length;
-        franchiseIds = franchisesData.franchises.map((f) => f.id);
-      }
+    setKpis((prev) => ({
+      ...prev,
+      totalFranchises,
+      activeFranchises,
+      pendingVerification,
+      pendingSettlements,
+    }));
 
-      setKpis((prev) => ({
-        ...prev,
-        totalFranchises,
-        activeFranchises,
-        pendingVerification,
-        pendingSettlements,
-      }));
-
-      if (franchiseIds.length > 0) {
-        const totals = await Promise.all(
-          franchiseIds.map((id) =>
-            adminFranchisesService
-              .listFranchiseOrders(id, { limit: 1 })
-              .then((r) => r.data?.pagination.total ?? 0)
-              .catch(() => 0),
-          ),
-        );
-        if (cancelled) return;
-        const totalOrders = totals.reduce((a, b) => a + b, 0);
-        setKpis((prev) => ({ ...prev, totalOrders }));
-      } else {
-        setKpis((prev) => ({ ...prev, totalOrders: 0 }));
-      }
-      if (!cancelled) setLoaded(true);
-    })();
-    return () => { cancelled = true; };
+    if (franchiseIds.length > 0) {
+      const totals = await Promise.all(
+        franchiseIds.map((id) =>
+          adminFranchisesService
+            .listFranchiseOrders(id, { limit: 1 })
+            .then((r) => r.data?.pagination.total ?? 0)
+            .catch(() => 0),
+        ),
+      );
+      setKpis((prev) => ({ ...prev, totalOrders: totals.reduce((a, b) => a + b, 0) }));
+    } else {
+      setKpis((prev) => ({ ...prev, totalOrders: 0 }));
+    }
+    setLoaded(true);
   }, []);
+
+  useEffect(() => {
+    void loadKpis();
+  }, [loadKpis]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await loadKpis();
+    } finally {
+      setRefreshing(false);
+    }
+  };
 
   const fmt = (v: number | null) => (v === null ? '—' : v.toLocaleString('en-IN'));
 
@@ -205,6 +219,29 @@ export default function FranchiseAdminDashboardPage() {
           <p style={sub}>
             Here&apos;s a snapshot of every franchise on the platform.
           </p>
+        </div>
+        <div style={headerActions}>
+          <span style={livePill}>
+            <span style={liveDot} />
+            Live data
+          </span>
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            style={{ ...refreshBtn, opacity: refreshing ? 0.65 : 1, cursor: refreshing ? 'default' : 'pointer' }}
+          >
+            <span
+              style={{
+                display: 'inline-flex',
+                transition: 'transform 0.6s ease',
+                transform: refreshing ? 'rotate(360deg)' : 'none',
+              }}
+            >
+              {Ic.refresh}
+            </span>
+            {refreshing ? 'Refreshing…' : 'Refresh'}
+          </button>
         </div>
       </header>
 
@@ -252,6 +289,7 @@ export default function FranchiseAdminDashboardPage() {
           loading={kpis.pendingVerification === null}
           hint="Awaiting KYC review"
           actionable={(kpis.pendingVerification ?? 0) > 0}
+          href="/dashboard/verification"
         />
         <Stat
           label="Total orders"
@@ -269,6 +307,7 @@ export default function FranchiseAdminDashboardPage() {
           loading={kpis.pendingSettlements === null}
           hint="Awaiting payout"
           actionable={(kpis.pendingSettlements ?? 0) > 0}
+          href="/dashboard/settlements"
         />
       </section>
 
@@ -350,6 +389,7 @@ function Stat({
   loading,
   hint,
   actionable,
+  href,
 }: {
   label: string;
   value: string;
@@ -358,17 +398,30 @@ function Stat({
   loading?: boolean;
   hint?: string;
   actionable?: boolean;
+  href?: string;
 }) {
   const t = TINTS[tint];
-  return (
-    <div
-      style={{
-        ...statCard,
-        boxShadow: actionable
-          ? `0 0 0 3px ${t.ring}, 0 1px 2px rgba(15,23,42,0.04)`
-          : '0 1px 2px rgba(15,23,42,0.04)',
-      }}
-    >
+  const clickable = Boolean(actionable && href);
+  const base: React.CSSProperties = {
+    ...statCard,
+    boxShadow: actionable
+      ? `0 0 0 1px ${t.ring}, 0 1px 2px rgba(15,23,42,0.04)`
+      : '0 1px 2px rgba(15,23,42,0.04)',
+  };
+  const body = (
+    <>
+      {/* tint accent bar — brighter when the card needs attention */}
+      <span
+        style={{
+          position: 'absolute',
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 3,
+          background: t.fg,
+          opacity: actionable ? 1 : 0.5,
+        }}
+      />
       <div style={statRow}>
         <span style={{ ...statBadge, background: t.bg, color: t.fg }}>{icon}</span>
         <span style={statLabel}>{label}</span>
@@ -377,8 +430,22 @@ function Stat({
         {loading ? <Skeleton width={48} height={28} /> : value}
       </div>
       {hint && <div style={statHint}>{hint}</div>}
-    </div>
+      {clickable && (
+        <div style={{ ...statReview, color: t.fg }}>
+          Review
+          {Ic.arrow}
+        </div>
+      )}
+    </>
   );
+  if (clickable) {
+    return (
+      <Link href={href!} style={{ ...base, textDecoration: 'none', color: 'inherit', display: 'block' }}>
+        {body}
+      </Link>
+    );
+  }
+  return <div style={base}>{body}</div>;
 }
 
 function ActionCard({
@@ -446,7 +513,56 @@ const page: React.CSSProperties = {
 };
 
 const headerWrap: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'flex-start',
+  justifyContent: 'space-between',
+  gap: 16,
+  flexWrap: 'wrap',
   marginBottom: 24,
+};
+
+const headerActions: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 10,
+  flexShrink: 0,
+  paddingTop: 4,
+};
+
+const livePill: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 7,
+  fontSize: 12,
+  fontWeight: 600,
+  color: '#047857',
+  background: '#ecfdf5',
+  border: '1px solid #d1fae5',
+  padding: '6px 11px',
+  borderRadius: 999,
+};
+
+const liveDot: React.CSSProperties = {
+  width: 7,
+  height: 7,
+  borderRadius: 999,
+  background: '#10b981',
+  boxShadow: '0 0 0 3px rgba(16,185,129,0.18)',
+};
+
+const refreshBtn: React.CSSProperties = {
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 7,
+  height: 36,
+  padding: '0 14px',
+  fontSize: 13,
+  fontWeight: 600,
+  color: '#0f172a',
+  background: '#fff',
+  border: '1px solid #e5e7eb',
+  borderRadius: 9,
+  boxShadow: '0 1px 2px rgba(15,23,42,0.04)',
 };
 
 const eyebrow: React.CSSProperties = {
@@ -502,10 +618,12 @@ const statGrid: React.CSSProperties = {
 };
 
 const statCard: React.CSSProperties = {
+  position: 'relative',
+  overflow: 'hidden',
   background: '#fff',
   border: '1px solid #e5e7eb',
   borderRadius: 14,
-  padding: '16px 18px 18px',
+  padding: '18px 18px',
 };
 
 const statRow: React.CSSProperties = {
@@ -546,6 +664,15 @@ const statHint: React.CSSProperties = {
   marginTop: 8,
   fontSize: 12,
   color: '#94a3b8',
+};
+
+const statReview: React.CSSProperties = {
+  marginTop: 12,
+  display: 'inline-flex',
+  alignItems: 'center',
+  gap: 4,
+  fontSize: 12,
+  fontWeight: 700,
 };
 
 const sectionHead: React.CSSProperties = {

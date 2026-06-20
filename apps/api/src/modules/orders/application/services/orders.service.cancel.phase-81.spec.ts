@@ -425,6 +425,96 @@ describe('OrdersService.adminCancelSubOrder (Phase 81)', () => {
       );
     });
 
+    it('refunds shipping too on a pre-shipment FULL cancel (whole order)', async () => {
+      const { svc, refundInstructions } = makeService({
+        master: {
+          id: 'master-1',
+          orderNumber: 'ORD-1',
+          customerId: 'customer-1',
+          paymentStatus: 'PAID',
+          paymentMethod: 'ONLINE',
+          totalAmountInPaise: 51_000n,
+          shippingFeeInPaise: 1_000n,
+          orderStatus: 'ROUTED_TO_SELLER',
+        },
+        // The only sub-order ends CANCELLED → the whole order is cancelled.
+        siblings: [
+          { id: 'sub-1', fulfillmentStatus: 'CANCELLED', acceptStatus: 'CANCELLED' },
+        ],
+      });
+      await svc.adminCancelSubOrder('sub-1', 'admin-1', 'Pre-shipment full cancel');
+      expect(refundInstructions.createSplitForRefund).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // 50_000 product + 1_000 shipping (never incurred — no courier booked).
+          amountInPaise: 51_000n,
+          requiresApproval: false,
+        }),
+      );
+    });
+
+    it('does NOT refund shipping on a PARTIAL cancel (other sub-orders still live)', async () => {
+      const { svc, refundInstructions } = makeService({
+        master: {
+          id: 'master-1',
+          orderNumber: 'ORD-1',
+          customerId: 'customer-1',
+          paymentStatus: 'PAID',
+          paymentMethod: 'ONLINE',
+          totalAmountInPaise: 151_000n,
+          shippingFeeInPaise: 1_000n,
+          orderStatus: 'ROUTED_TO_SELLER',
+        },
+        // sub-2 still live → not the whole order → the one shipping fee stays.
+        siblings: [
+          { id: 'sub-1', fulfillmentStatus: 'CANCELLED', acceptStatus: 'CANCELLED' },
+          { id: 'sub-2', fulfillmentStatus: 'UNFULFILLED', acceptStatus: 'OPEN' },
+        ],
+      });
+      await svc.adminCancelSubOrder('sub-1', 'admin-1', 'Partial pre-shipment cancel');
+      expect(refundInstructions.createSplitForRefund).toHaveBeenCalledWith(
+        expect.objectContaining({ amountInPaise: 50_000n }),
+      );
+    });
+
+    it('does NOT refund shipping on a POST-shipment cancel (shipping was used)', async () => {
+      const { svc, refundInstructions } = makeService({
+        subOrder: {
+          id: 'sub-1',
+          masterOrder: { id: 'master-1', orderNumber: 'ORD-1' },
+          sellerId: 'seller-1',
+          franchiseId: null,
+          fulfillmentNodeType: 'SELLER',
+          fulfillmentStatus: 'SHIPPED',
+          acceptStatus: 'ACCEPTED',
+          subTotalInPaise: 50_000n,
+          items: [{ productId: 'p-1', variantId: null, quantity: 1 }],
+        },
+        master: {
+          id: 'master-1',
+          orderNumber: 'ORD-1',
+          customerId: 'customer-1',
+          paymentStatus: 'PAID',
+          paymentMethod: 'ONLINE',
+          totalAmountInPaise: 51_000n,
+          shippingFeeInPaise: 1_000n,
+          orderStatus: 'DISPATCHED',
+        },
+        siblings: [
+          { id: 'sub-1', fulfillmentStatus: 'CANCELLED', acceptStatus: 'CANCELLED' },
+        ],
+      });
+      await svc.adminCancelSubOrder('sub-1', 'admin-1', 'Force cancel after ship', {
+        force: true,
+      });
+      expect(refundInstructions.createSplitForRefund).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // Product only — shipping NOT refunded post-shipment (it was incurred).
+          amountInPaise: 50_000n,
+          requiresApproval: true,
+        }),
+      );
+    });
+
     it('skips refund for COD sub-order', async () => {
       const { svc, refundInstructions } = makeService({
         master: {

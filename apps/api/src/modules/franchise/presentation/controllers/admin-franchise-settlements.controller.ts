@@ -15,6 +15,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { Response } from 'express';
 import { toCsv, csvFilenameSlug } from '../../../../core/utils';
+import { BadRequestAppException } from '../../../../core/exceptions';
 import {
   AdminAuthGuard,
   RolesGuard,
@@ -24,6 +25,7 @@ import {
 } from '../../../../core/guards';
 import { Roles } from '../../../../core/decorators/roles.decorator';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import { CurrentAdmin } from '../../../../core/decorators/current-actor.decorator';
 import { FranchiseSettlementService } from '../../application/services/franchise-settlement.service';
 import { FranchiseSettlementCreateDto } from '../dtos/franchise-settlement-create.dto';
 import { FranchiseSettlementPayDto } from '../dtos/franchise-settlement-pay.dto';
@@ -191,6 +193,36 @@ export class AdminFranchiseSettlementsController {
     res.send(csv);
   }
 
+  // Declared BEFORE the `:id` route so `/preview` isn't captured as an id.
+  // Read-only dry-run: which franchises / how many ledger entries / total
+  // payout a Create-cycle would settle for the period, plus an overlap
+  // warning. Mirrors the seller settlements preview so the franchise admin
+  // doesn't commit blind. Read perm only; no step-up (nothing is written).
+  @Get('preview')
+  @Permissions('franchise.finance.read')
+  async previewCycle(
+    @Query('periodStart') periodStart?: string,
+    @Query('periodEnd') periodEnd?: string,
+  ) {
+    if (!periodStart || !periodEnd) {
+      throw new BadRequestAppException('periodStart and periodEnd are required');
+    }
+    const start = new Date(periodStart);
+    const end = new Date(periodEnd);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      throw new BadRequestAppException('periodStart and periodEnd must be valid dates');
+    }
+    if (start > end) {
+      throw new BadRequestAppException('periodStart must be on or before periodEnd');
+    }
+    const data = await this.settlementService.previewSettlementCycle(start, end);
+    return {
+      success: true,
+      message: 'Franchise settlement preview generated',
+      data,
+    };
+  }
+
   @Get(':id')
   // Isolation fix (2026-06-16) — see listSettlements: franchise-domain perm.
   @Permissions('franchise.finance.read')
@@ -211,8 +243,13 @@ export class AdminFranchiseSettlementsController {
   // Phase 26 — terminal state pin before pay; 1-min window because pay
   // typically follows immediately and the admin should re-prove freshness.
   @RequiresStepUp({ maxAgeMs: 60_000 })
-  async approveSettlement(@Param('id') id: string) {
-    const data = await this.settlementService.approveSettlement(id);
+  async approveSettlement(
+    @Param('id') id: string,
+    @CurrentAdmin() adminId: string,
+  ) {
+    const data = await this.settlementService.approveSettlement(id, {
+      approvedByAdminId: adminId,
+    });
 
     return {
       success: true,
@@ -255,11 +292,14 @@ export class AdminFranchiseSettlementsController {
   async markSettlementPaid(
     @Param('id') id: string,
     @Body() dto: FranchiseSettlementPayDto,
+    @CurrentAdmin() adminId: string,
   ) {
-    const data = await this.settlementService.markSettlementPaid(
-      id,
-      dto.paymentReference,
-    );
+    const data = await this.settlementService.markSettlementPaid(id, {
+      paymentReference: dto.paymentReference,
+      paymentMethod: dto.paymentMethod,
+      paymentProofUrl: dto.paymentProofUrl,
+      paidByAdminId: adminId,
+    });
 
     return {
       success: true,

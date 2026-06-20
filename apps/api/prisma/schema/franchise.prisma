@@ -46,6 +46,19 @@ model FranchisePartner {
   gstStateCode String? @map("gst_state_code")
   panLast4     String? @map("pan_last_4")
 
+  // Phase 2 (franchise tax-ID verification — parity with seller). PAN is
+  // admin-attested (manual flag); GSTIN is checked against the government GSTN
+  // portal via GstnVerificationService, which writes the portal status +
+  // legal-name match back here. Mirrors SellerGstin's verification columns.
+  panVerified                  Boolean   @default(false) @map("pan_verified")
+  panVerifiedAt                DateTime? @map("pan_verified_at")
+  gstVerified                  Boolean   @default(false) @map("gst_verified")
+  gstVerifiedAt                DateTime? @map("gst_verified_at")
+  gstnPortalStatus             String?   @map("gstn_portal_status")
+  gstLegalName                 String?   @map("gst_legal_name")
+  legalNameMismatch            Boolean   @default(false) @map("legal_name_mismatch")
+  gstVerificationFailureReason String?  @map("gst_verification_failure_reason")
+
   /// Phase 20 (2026-05-20) — KYC submission snapshot timestamp +
   /// JSON snapshot of the payload the franchise submitted. The
   /// snapshot is the canonical record of what the franchise
@@ -1115,8 +1128,17 @@ model FranchiseSettlement {
   commissionGstFranchiseStateCode   String? @map("commission_gst_franchise_state_code")
 
   status           FranchiseSettlementStatus @default(PENDING)
+  // Approval provenance — who signed off and when (mirrors SellerSettlement).
+  approvedByAdminId String?   @map("approved_by_admin_id")
+  approvedAt        DateTime? @map("approved_at")
   paidAt           DateTime?                 @map("paid_at")
-  paymentReference String?                   @map("payment_reference")
+  // Unique so the same bank UTR / payout reference can't be recorded against
+  // two settlements (duplicate money-out detection). Postgres treats NULLs as
+  // distinct, so unpaid rows (null reference) don't collide.
+  paymentReference String?                   @unique @map("payment_reference")
+  // Payout reconciliation metadata (mirrors SellerSettlement).
+  paymentMethod    String?                   @map("payment_method")
+  paymentProofUrl  String?                   @map("payment_proof_url")
   // Phase 146 — payout provenance (mirrors SellerSettlement.paidByAdminId).
   paidByAdminId    String?                   @map("paid_by_admin_id")
   // Phase 178 (Outstanding Payables audit) — SLA / aging / hold / partial-pay.

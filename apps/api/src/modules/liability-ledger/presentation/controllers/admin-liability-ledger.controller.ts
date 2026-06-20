@@ -187,6 +187,74 @@ export class AdminLiabilityLedgerController {
   }
 
   /**
+   * GET /admin/liability-ledger/summary/totals
+   *
+   * Server-side aggregate for the ledger KPI cards. The page previously summed
+   * the (paginated, 50-capped) on-screen rows, which under-counts past one page
+   * and mis-handled reversed/cancelled/reclassified rows. These totals are
+   * computed over the WHOLE table with the correct status filters:
+   *   - sellerDebitsPending : status = PENDING (what the next cycle claws back)
+   *   - logisticsClaims     : not-yet-recovered = PENDING/SUBMITTED/ACCEPTED
+   *                           ("awaiting courier reimbursement")
+   *   - platformExpense     : absorbed cost, EXCLUDING reversed (reversedAt = null)
+   *   - totalRecorded       : live liability across all three, EXCLUDING
+   *                           cancelled debits, cancelled/REJECTED claims (a
+   *                           REJECTED claim is reclassified to a platform
+   *                           expense — counting both would double-count), and
+   *                           reversed expenses.
+   * Two path segments so it never collides with the `:type` list route.
+   */
+  @Get('summary/totals')
+  @Permissions('liability_ledger.read')
+  @Throttle({ default: { limit: 60, ttl: 60_000 } })
+  async summaryTotals() {
+    const [
+      sellerPending,
+      sellerLive,
+      claimsAwaiting,
+      claimsLive,
+      expenseActive,
+    ] = await Promise.all([
+      this.prisma.sellerDebit.aggregate({
+        _sum: { amountInPaise: true },
+        where: { status: 'PENDING' },
+      }),
+      this.prisma.sellerDebit.aggregate({
+        _sum: { amountInPaise: true },
+        where: { status: { not: 'CANCELLED' } },
+      }),
+      this.prisma.logisticsClaim.aggregate({
+        _sum: { amountInPaise: true },
+        where: { status: { in: ['PENDING', 'SUBMITTED', 'ACCEPTED'] } },
+      }),
+      this.prisma.logisticsClaim.aggregate({
+        _sum: { amountInPaise: true },
+        // Exclude REJECTED — its cost now lives as a PlatformExpense, so
+        // counting both would double-count the same money.
+        where: { status: { notIn: ['CANCELLED', 'REJECTED'] } },
+      }),
+      this.prisma.platformExpense.aggregate({
+        _sum: { amountInPaise: true },
+        where: { reversedAt: null },
+      }),
+    ]);
+    const sum = (a: { _sum: { amountInPaise: bigint | null } }): bigint =>
+      a._sum.amountInPaise ?? 0n;
+    const platformExpense = sum(expenseActive);
+    const totalRecorded = sum(sellerLive) + sum(claimsLive) + platformExpense;
+    return {
+      success: true,
+      message: 'Liability ledger totals',
+      data: {
+        totalRecordedInPaise: totalRecorded.toString(),
+        sellerDebitsPendingInPaise: sum(sellerPending).toString(),
+        logisticsClaimsPendingInPaise: sum(claimsAwaiting).toString(),
+        platformExpenseInPaise: platformExpense.toString(),
+      },
+    };
+  }
+
+  /**
    * POST /admin/liability-ledger/debits
    *
    * Phase 150 — record a MANUAL seller debit (goodwill / off-platform claw-

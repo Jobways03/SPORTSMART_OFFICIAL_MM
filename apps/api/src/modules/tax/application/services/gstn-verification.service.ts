@@ -41,6 +41,10 @@ import {
   GstnProvider,
   GstnVerifyResult,
 } from '../../infrastructure/gstn/gstn-provider';
+import {
+  BadRequestAppException,
+  NotFoundAppException,
+} from '../../../../core/exceptions';
 
 export const GSTN_VERIFICATION_EVENTS = {
   VERIFIED: 'tax.gstin.verified',
@@ -242,6 +246,73 @@ export class GstnVerificationService {
 
   // ── provider + helpers ────────────────────────────────────────────
 
+  /**
+   * Verify a FRANCHISE's GSTIN against the government GSTN portal — the same
+   * automated check sellers + customers already get. Reads the GSTIN + business
+   * name off the franchise row, calls the provider, and writes the portal
+   * status + legal-name match back onto the franchise (parity with SellerGstin).
+   */
+  async verifyFranchiseGstin(args: {
+    franchiseId: string;
+    actorId: string;
+    ipAddress?: string | null;
+  }): Promise<VerifyResult> {
+    const row = await this.prisma.franchisePartner.findUnique({
+      where: { id: args.franchiseId },
+    });
+    if (!row) throw new NotFoundAppException('Franchise not found');
+    if (!row.gstNumber) {
+      throw new BadRequestAppException(
+        'Franchise has no GSTIN on file. The franchise must submit a GSTIN via onboarding before it can be verified.',
+      );
+    }
+
+    const { result, notes, mismatch, failureReason } = await this.callProvider({
+      gstin: row.gstNumber,
+      localLegalName: row.businessName,
+    });
+    const isVerified = result.found && result.status === 'ACTIVE';
+    const now = new Date();
+
+    await this.prisma.franchisePartner.update({
+      where: { id: row.id },
+      data: {
+        gstVerified: isVerified,
+        // verifiedAt = last SUCCESS only; preserve prior on a failed re-check.
+        gstVerifiedAt: isVerified ? now : row.gstVerifiedAt,
+        legalNameMismatch: mismatch,
+        gstLegalName: result.legalName,
+        gstnPortalStatus: result.status,
+        gstVerificationFailureReason: isVerified ? null : failureReason,
+      },
+    });
+
+    await this.recordEvent(
+      'FRANCHISE_GSTIN',
+      row.id,
+      row.gstNumber,
+      args.actorId,
+      result,
+      isVerified,
+      mismatch,
+      failureReason,
+    );
+
+    this.logger.log(
+      `FranchisePartner ${row.id} (${row.gstNumber}) via ${this.provider.name}: ` +
+        `verified=${isVerified} found=${result.found} status=${result.status} mismatch=${mismatch} by=${args.actorId}`,
+    );
+
+    return {
+      verified: isVerified,
+      found: result.found,
+      status: result.status,
+      legalName: result.legalName,
+      legalNameMismatch: mismatch,
+      notes,
+    };
+  }
+
   private async callProvider(args: {
     gstin: string;
     localLegalName: string | null;
@@ -326,7 +397,7 @@ export class GstnVerificationService {
   }
 
   private async recordEvent(
-    targetType: 'SELLER_GSTIN' | 'CUSTOMER_TAX_PROFILE',
+    targetType: 'SELLER_GSTIN' | 'CUSTOMER_TAX_PROFILE' | 'FRANCHISE_GSTIN',
     targetId: string,
     gstin: string,
     actorId: string,

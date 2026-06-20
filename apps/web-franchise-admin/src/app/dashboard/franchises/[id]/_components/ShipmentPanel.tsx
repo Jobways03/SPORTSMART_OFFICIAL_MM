@@ -12,6 +12,8 @@ interface Props {
   subOrderId: string;
   /** Allows the parent order detail to refresh after a status update. */
   onChange?: () => void;
+  /** Start expanded — used when rendered inside a focused per-order drawer. */
+  defaultExpanded?: boolean;
 }
 
 /**
@@ -25,15 +27,17 @@ interface Props {
  * expands the panel, so cards stay light when there are many
  * sub-orders on screen.
  */
-export function ShipmentPanel({ subOrderId, onChange }: Props) {
+export function ShipmentPanel({ subOrderId, onChange, defaultExpanded = false }: Props) {
   const [shipment, setShipment] = useState<ShipmentDetail | null>(null);
   const [label, setLabel] = useState<LabelInfo | null>(null);
   const [ndrRto, setNdrRto] = useState<NdrRtoState | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
-  // Default OPEN so the carrier-actions (track / re-attempt / cancel / force-RTO)
-  // are visible without hunting for the "Expand" toggle (2026-06-02).
-  const [expanded, setExpanded] = useState(true);
+  // Expanded reveals the advanced logistics controls (override status / label
+  // / NDR-RTO / carrier actions / force-RTO). The orders list opens this inside
+  // a focused per-order drawer with defaultExpanded so operators see the
+  // controls immediately; elsewhere it can start collapsed.
+  const [expanded, setExpanded] = useState(defaultExpanded);
 
   const [creating, setCreating] = useState(false);
   const [createCourier, setCreateCourier] = useState('');

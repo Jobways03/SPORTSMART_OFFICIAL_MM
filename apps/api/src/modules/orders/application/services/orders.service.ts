@@ -1384,6 +1384,9 @@ export class OrdersService {
         totalAmountInPaise: true,
         // Wallet portion (paise) so a full-master cancel can refund it.
         walletAmountUsedInPaise: true,
+        // Order-level shipping fee — refunded on a pre-shipment full cancel
+        // (the fee was charged but no courier was ever booked).
+        shippingFeeInPaise: true,
         orderStatus: true,
       },
     });
@@ -1402,6 +1405,9 @@ export class OrdersService {
     //   8. Outbox-aware event publish (Gap #7/#14/#16 subscribers).
     let result: any;
     let newMasterStatus: string | null = null;
+    // Set inside the tx once we know whether THIS cancel left every sub-order
+    // cancelled — gates the one-time shipping-fee refund below.
+    let wholeOrderCancelled = false;
     try {
       result = await this.orderRepo.executeTransaction(async (tx) => {
         // 1. FOR UPDATE lock + re-check the row hasn't been raced.
@@ -1509,6 +1515,11 @@ export class OrdersService {
         const allCancelled = siblings.every(
           (s: any) => s.fulfillmentStatus === 'CANCELLED',
         );
+        // The order-level shipping fee is refunded exactly once, on the cancel
+        // that makes the WHOLE order cancelled (this last sub-order). Strict
+        // "all cancelled" (not allTerminal) avoids double-handling shipping
+        // with the seller-reject refund path.
+        wholeOrderCancelled = allCancelled;
 
         if (allCancelled) {
           newMasterStatus = 'CANCELLED';
@@ -1683,12 +1694,23 @@ export class OrdersService {
         subTotalInPaise = derived;
       }
     }
+    // A pre-shipment cancel never incurred shipping (no courier booked), so
+    // the order-level shipping fee is refunded too — but only on the cancel
+    // that closes the WHOLE order, so the single fee is returned exactly once.
+    // Post-shipment cancels keep shipping (it was actually used).
+    const preShipment = !['SHIPPED', 'DELIVERED', 'FULFILLED'].includes(
+      previousFulfillmentStatus as string,
+    );
+    const shippingRefundInPaise =
+      preShipment && wholeOrderCancelled
+        ? ((masterCtx.shippingFeeInPaise as bigint | null) ?? 0n)
+        : 0n;
+    const refundTotalInPaise = (subTotalInPaise ?? 0n) + shippingRefundInPaise;
     if (
       masterCtx.paymentStatus === 'PAID' &&
       masterCtx.paymentMethod === 'ONLINE' &&
       this.refundInstructions &&
-      subTotalInPaise &&
-      subTotalInPaise > 0n
+      refundTotalInPaise > 0n
     ) {
       try {
         await this.refundInstructions.createSplitForRefund({
@@ -1697,7 +1719,8 @@ export class OrdersService {
           sourceLabel: `cancel-sub-order:${subOrderId}`,
           customerId: masterCtx.customerId,
           masterOrderId,
-          amountInPaise: subTotalInPaise,
+          // Product subtotal + (pre-shipment whole-order) shipping fee.
+          amountInPaise: refundTotalInPaise,
           baseIdempotencyKey: `cancel-sub-order:${subOrderId}`,
           // Refund policy: ALWAYS to wallet (store credit) — never reversed to
           // the card/gateway — for both pre- and post-shipment cancels.
@@ -1705,10 +1728,26 @@ export class OrdersService {
           // Approval gated by SHIP STATUS: a pre-shipment cancel auto-credits
           // the wallet instantly (no approval); a post-shipment force-cancel
           // still routes to Finance → Refund Approvals before crediting.
-          requiresApproval: ['SHIPPED', 'DELIVERED', 'FULFILLED'].includes(
-            previousFulfillmentStatus as string,
-          ),
+          requiresApproval: !preShipment,
         });
+        // Customer-visible refund event so the order page can show
+        // "₹X refunded to your wallet". Best-effort, post-commit; keyed for
+        // retry-idempotency so a re-run doesn't duplicate the timeline row.
+        if (this.timeline) {
+          await this.timeline
+            .record({
+              masterOrderId,
+              subOrderId,
+              eventType: 'REFUND_INITIATED',
+              actorType: 'SYSTEM',
+              metadata: {
+                amountInRupees: Number(refundTotalInPaise) / 100,
+                refundMethod: 'WALLET',
+              },
+              idempotencyKey: `cancel-refund-initiated:${subOrderId}`,
+            })
+            .catch(() => undefined);
+        }
       } catch (err) {
         // Refund failure must not roll back the cancel — the order
         // is already terminal at the DB layer. Emit a recovery event
@@ -1726,7 +1765,7 @@ export class OrdersService {
               subOrderId,
               masterOrderId,
               customerId: masterCtx.customerId,
-              amountInPaise: subTotalInPaise.toString(),
+              amountInPaise: refundTotalInPaise.toString(),
               reason: 'SUB_ORDER_CANCELLED',
               error: (err as Error).message,
             },
@@ -4991,6 +5030,67 @@ export class OrdersService {
         at: order.updatedAt,
       });
     }
+
+    // Wallet-refund summary (cancellation / etc.) so the order page can show
+    // "₹X refunded to your wallet" + a timeline line. Best-effort — an empty
+    // result or a query failure just leaves `refund` null.
+    let refund: {
+      toWalletInPaise: string;
+      toWalletInRupees: string;
+      status: 'CREDITED' | 'PENDING';
+    } | null = null;
+    try {
+      // Refunds land in one of two tables depending on how the order was paid:
+      //   • refund_instructions — the online/gateway portion (admin + online cancels)
+      //   • wallet_refund_sagas  — the wallet-paid portion (checkout-cancellation saga)
+      // A fully-wallet-paid cancel has ONLY the latter, so the banner must read both
+      // (the two never cover the same money for one cancel — see the cancel path's
+      // `splitSagaHandledWallet` guard — so summing them can't double-count).
+      const [refundRows, walletSagas] = await Promise.all([
+        this.prisma.refundInstruction.findMany({
+          where: { orderId: order.id, refundMethod: 'WALLET' as any },
+          select: { amountInPaise: true, status: true, createdAt: true },
+        }),
+        this.prisma.walletRefundSaga.findMany({
+          where: { orderId: order.id },
+          select: { amountInPaise: true, status: true, createdAt: true },
+        }),
+      ]);
+      // Cancelled / failed / abandoned entries aren't money the customer got.
+      const countedInstr = refundRows.filter(
+        (r) => r.status !== 'CANCELLED' && r.status !== 'FAILED',
+      );
+      const countedSagas = walletSagas.filter((s) => s.status !== 'ABANDONED');
+      const totalPaise =
+        countedInstr.reduce((s, r) => s + BigInt(r.amountInPaise), 0n) +
+        countedSagas.reduce((s, r) => s + BigInt(r.amountInPaise), 0n);
+      if (totalPaise > 0n) {
+        // CREDITED only when every counted entry is terminal-success; a still-
+        // pending instruction (post-shipment approval) or in-flight saga = PENDING.
+        const allCredited =
+          countedInstr.every((r) => r.status === 'SUCCESS') &&
+          countedSagas.every((s) => s.status === 'COMPLETED');
+        const rupees = (Number(totalPaise) / 100).toFixed(2);
+        refund = {
+          toWalletInPaise: totalPaise.toString(),
+          toWalletInRupees: rupees,
+          status: allCredited ? 'CREDITED' : 'PENDING',
+        };
+        const at = [...countedInstr, ...countedSagas]
+          .map((r) => r.createdAt)
+          .sort((a, b) => a.getTime() - b.getTime())[0];
+        timeline.push({
+          kind: 'REFUND_INITIATED',
+          label: allCredited
+            ? `₹${rupees} refunded to your wallet`
+            : `Refund of ₹${rupees} to your wallet — pending approval`,
+          at: at ?? order.updatedAt,
+        });
+      }
+    } catch {
+      // never block the order page on the refund lookup
+    }
+
     timeline.sort((a, b) => a.at.getTime() - b.at.getTime());
 
     // Strip seller information — show "Fulfilled by SPORTSMART" label
@@ -5041,6 +5141,7 @@ export class OrdersService {
       orderStatusLabel: this.mapOrderStatusLabel(derivedStatus),
       appliedDiscount,
       shipping,
+      refund,
       timeline,
       returns: orderReturns,
       // Phase 26 GST — per-item snapshots (BigInt → string for JSON

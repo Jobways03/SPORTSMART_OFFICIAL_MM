@@ -1,5 +1,6 @@
 import { registerDecorator, ValidationOptions } from 'class-validator';
 import { isGstinValid } from '../../../tax/domain/gstin-validator';
+import { GSTIN_REGEX, PAN_REGEX } from '../../../tax/domain/tax-id-rules';
 
 /**
  * Phase 159j — shared franchise KYC identifier validators, so PAN/GST are
@@ -24,15 +25,18 @@ import { isGstinValid } from '../../../tax/domain/gstin-validator';
  * The old `[A-Z]{5}\d{4}[A-Z]` accepted any letter at position 4, passing
  * structurally-impossible PANs like `ABCDX1234F`.
  */
-export const FRANCHISE_PAN_REGEX = /^[A-Z]{3}[ABCFGHJLPT][A-Z]\d{4}[A-Z]$/;
+// Re-exported from the shared tax-id model so PAN validation is identical
+// across sellers, franchises, and affiliates (one source of truth).
+export const FRANCHISE_PAN_REGEX = PAN_REGEX;
 
 /**
  * Structural GSTIN shape (2-digit state code + 10-char PAN + entity code +
  * 'Z' + check char). Checksum is enforced separately by
  * {@link IsValidGstinChecksum}.
  */
-export const FRANCHISE_GSTIN_REGEX =
-  /^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}[Z]{1}[A-Z\d]{1}$/;
+// Re-exported from the shared tax-id model (one source of truth for the
+// GSTIN structural shape; checksum is still enforced by IsValidGstinChecksum).
+export const FRANCHISE_GSTIN_REGEX = GSTIN_REGEX;
 
 /**
  * GSTIN Mod-36 checksum validation at the request boundary. The structural
