@@ -80,7 +80,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_cpu" {
 
 resource "aws_cloudwatch_metric_alarm" "rds_storage" {
   alarm_name          = "${local.name}-rds-free-storage"
-  alarm_description   = "RDS free storage low — approaching the autoscale ceiling."
+  alarm_description   = "RDS free storage low - approaching the autoscale ceiling."
   namespace           = "AWS/RDS"
   metric_name         = "FreeStorageSpace"
   statistic           = "Average"
@@ -99,7 +99,7 @@ resource "aws_cloudwatch_metric_alarm" "rds_storage" {
 # ── ElastiCache: memory pressure ────────────────────────────────────────
 resource "aws_cloudwatch_metric_alarm" "redis_memory" {
   alarm_name          = "${local.name}-redis-memory"
-  alarm_description   = "Redis memory usage high — risk of evictions (idempotency keys / locks)."
+  alarm_description   = "Redis memory usage high - risk of evictions (idempotency keys / locks)."
   namespace           = "AWS/ElastiCache"
   metric_name         = "DatabaseMemoryUsagePercentage"
   statistic           = "Average"

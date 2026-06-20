@@ -69,8 +69,12 @@ resource "aws_db_parameter_group" "main" {
   family = "postgres16"
 
   parameter {
-    name  = "rds.force_ssl"
-    value = "1"
+    # AWS stores rds.force_ssl with apply_method "pending-reboot" (it's applied
+    # at the engine, already active here). Pin it so the param group doesn't
+    # show a perpetual "immediate -> pending-reboot" diff on every plan.
+    name         = "rds.force_ssl"
+    value        = "1"
+    apply_method = "pending-reboot"
   }
 
   tags = { Name = "${local.name}-pg16" }
@@ -95,7 +99,7 @@ resource "aws_elasticache_subnet_group" "main" {
 resource "aws_elasticache_parameter_group" "main" {
   name        = "${local.name}-redis7"
   family      = "redis7"
-  description = "${local.name} — noeviction so cron locks / counters are never evicted"
+  description = "${local.name} - noeviction so cron locks / counters are never evicted"
 
   parameter {
     name  = "maxmemory-policy"
