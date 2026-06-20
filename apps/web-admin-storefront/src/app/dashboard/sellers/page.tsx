@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
 
@@ -121,7 +121,7 @@ function verificationPill(status: string): { label: string; tone: PillTone } {
 
 /* ── Page ───────────────────────────────────────────────────── */
 
-export default function SellersPage() {
+function SellersContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const initialFilter = (searchParams.get('filter') as FilterKey) || 'all';
@@ -338,6 +338,14 @@ export default function SellersPage() {
         </>
       )}
     </div>
+  );
+}
+
+export default function SellersPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-sm opacity-70">Loading…</div>}>
+      <SellersContent />
+    </Suspense>
   );
 }
 

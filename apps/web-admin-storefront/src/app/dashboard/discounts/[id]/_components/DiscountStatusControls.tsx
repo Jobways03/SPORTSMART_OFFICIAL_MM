@@ -12,7 +12,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useModal } from '@sportsmart/ui';
 import { apiClient, ApiError } from '@/lib/api-client';
-import { STATUS } from '../../page';
+import { STATUS } from '../../status';
 
 type SettableStatus = 'ACTIVE' | 'PAUSED' | 'ARCHIVED' | 'DRAFT';
 

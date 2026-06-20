@@ -929,7 +929,7 @@ export default function SellerProfilePage() {
       <div className="profile-error-page">
         <h2>Unable to load profile</h2>
         <p>{fetchError}</p>
-        <button className="btn-retry" onClick={fetchProfile}>
+        <button className="btn-retry" onClick={() => fetchProfile()}>
           Try Again
         </button>
       </div>
