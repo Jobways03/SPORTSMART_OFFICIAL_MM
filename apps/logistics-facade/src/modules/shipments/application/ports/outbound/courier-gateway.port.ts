@@ -84,6 +84,11 @@ export interface CreateShipmentPayload {
     unitValuePaise: bigint;
   }>;
   direction?: 'forward' | 'reverse';
+  /**
+   * Delhivery `transport_speed`: 'F' = Next Day Delivery (NDD), 'D' = standard
+   * ground. Decided by the caller from pickup→drop distance. Defaults to 'D'.
+   */
+  transportSpeed?: 'F' | 'D';
 }
 
 export interface AddressLike {

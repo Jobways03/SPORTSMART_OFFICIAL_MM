@@ -28,8 +28,22 @@ module.exports = (options, webpack) => {
       : [options.externals]
     : [];
 
+  // Transpile-only dev mode (TRANSPILE_ONLY=true): drop the
+  // ForkTsCheckerWebpackPlugin so the build skips the whole-project type-check
+  // pass — the single biggest memory hog (~1.8 GB) and the slow phase of a cold
+  // `--watch` build. Types are already enforced by the test suite + the
+  // `typecheck` script, so this only affects local run speed/RAM, never prod.
+  // No-op (normal type-checked build) when the flag is unset.
+  const plugins =
+    process.env.TRANSPILE_ONLY === 'true'
+      ? (options.plugins ?? []).filter(
+          (p) => p && p.constructor && p.constructor.name !== 'ForkTsCheckerWebpackPlugin',
+        )
+      : options.plugins;
+
   return {
     ...options,
+    plugins,
     externals: [
       ...existing,
       ({ request }, callback) => {

@@ -29,6 +29,7 @@ import {
 } from '../ports/outbound/courier-gateway.port';
 import { ShippingPublicFacade } from '../facades/shipping-public.facade';
 import { buildCreateShipmentRequest } from '../mappers/sub-order-to-shipment.mapper';
+import { TransportSpeedService } from '../services/transport-speed.service';
 
 @Injectable()
 export class DelhiveryAutoBookHandler {
@@ -40,6 +41,7 @@ export class DelhiveryAutoBookHandler {
     @Inject(COURIER_GATEWAY_RESOLVER)
     private readonly resolver: CourierGatewayResolver,
     private readonly shipping: ShippingPublicFacade,
+    private readonly transportSpeed: TransportSpeedService,
   ) {}
 
   @OnEvent('orders.sub_order.status_changed')
@@ -182,6 +184,18 @@ export class DelhiveryAutoBookHandler {
     if (pickupWarehouseName) {
       req.shipment.pickupWarehouseName = pickupWarehouseName;
     }
+
+    // NDD vs standard: decide transport_speed from the FULFILLING node's
+    // warehouse pincode → the customer's drop pincode, at booking time (so a
+    // reassignment to a farther node is reflected — it's a fresh booking). The
+    // service fails closed to 'D' (flag off, reverse, or unknown distance).
+    const pickupPincode = await this.resolvePickupPincode(sub as any);
+    req.shipment.transportSpeed = await this.transportSpeed.resolve({
+      pickupPincode,
+      dropPincode: req.shipment.shipping?.pincode,
+      direction: req.direction ?? 'forward',
+    });
+
     let result;
     try {
       result = await this.resolver
@@ -264,6 +278,34 @@ export class DelhiveryAutoBookHandler {
         select: { warehouseName: true },
       });
       return reg?.warehouseName ?? null;
+    }
+    return null;
+  }
+
+  /**
+   * The fulfilling node's pickup pincode, for the NDD distance check.
+   *   • FRANCHISE → the franchise's own pincode (loaded on the sub-order).
+   *   • SELLER    → the seller's pickup pincode from its product mappings
+   *     (the Seller row has no pincode column; the pickup pincode lives on
+   *     SellerProductMapping). Any active mapping for the seller shares the
+   *     same warehouse, so the first non-null one is sufficient.
+   * Returns null when none is resolvable → TransportSpeedService fails to 'D'.
+   */
+  private async resolvePickupPincode(sub: {
+    fulfillmentNodeType: string | null;
+    sellerId: string | null;
+    franchiseId: string | null;
+    franchise?: { pincode?: string | null } | null;
+  }): Promise<string | null> {
+    if (sub.fulfillmentNodeType === 'FRANCHISE') {
+      return sub.franchise?.pincode ?? null;
+    }
+    if (sub.sellerId) {
+      const mapping = await this.prisma.sellerProductMapping.findFirst({
+        where: { sellerId: sub.sellerId, pickupPincode: { not: null } },
+        select: { pickupPincode: true },
+      });
+      return mapping?.pickupPincode ?? null;
     }
     return null;
   }

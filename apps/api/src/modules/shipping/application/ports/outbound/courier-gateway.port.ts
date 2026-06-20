@@ -95,6 +95,12 @@ export interface DomainShipment {
   pickupWarehouseName?: string;
   ewayBillNumber?: string;
   direction?: 'forward' | 'reverse';
+  /**
+   * Delhivery `transport_speed`: 'F' = Next Day Delivery (NDD), 'D' = standard
+   * ground. Decided at booking time from the pickup→drop distance (≤ threshold
+   * → 'F'). Optional; the facade / Delhivery mapper defaults to 'D'.
+   */
+  transportSpeed?: 'F' | 'D';
   /** Optional carrier preference slug (free-form). */
   logistics?: string;
   serviceType?: string;

@@ -152,6 +152,13 @@ export const CreateShipmentRequest = z.object({
   // RVP) instead of a forward shipment — `pickup` is the customer's address and
   // `drop` is the seller/warehouse return address.
   direction: z.enum(['forward', 'reverse']).optional(),
+  // Delhivery `transport_speed`: 'F' = Next Day Delivery (NDD), 'D' = standard
+  // ground. The CALLER (apps/api) decides this from the pickup→drop distance
+  // (≤ configured km → 'F'), because the facade's `pickup` is only contract-
+  // shape and doesn't carry the real warehouse pincode. Optional; the Delhivery
+  // mapper defaults to 'D' (standard) when absent, so existing callers are
+  // unaffected.
+  transportSpeed: z.enum(['F', 'D']).optional(),
 }).superRefine((val, ctx) => {
   if (val.cod && val.codAmountPaise === undefined) {
     ctx.addIssue({
