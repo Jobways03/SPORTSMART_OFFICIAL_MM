@@ -32,8 +32,14 @@ export interface GatewayPaymentSnapshot {
 }
 
 export interface ExpectedOrder {
-  /** Platform-side expected total, in paise. */
-  totalAmountInPaise: bigint;
+  /**
+   * Platform-side expected amount the gateway should have CAPTURED, in
+   * paise. For an order paid partly from the customer's wallet this is the
+   * PAYABLE remainder (total − wallet), NOT the full order total — derive
+   * it with `resolveExpectedGatewayPaise`. For a wallet top-up it is the
+   * full top-up amount.
+   */
+  expectedAmountInPaise: bigint;
   /** Platform-side razorpay_order_id created at checkout. */
   razorpayOrderId: string;
 }
@@ -78,10 +84,50 @@ export function assertGatewayPaymentMatchesOrder(
   // safely handle Razorpay's `number` field for very large totals (a JS
   // number loses precision above 2^53 paise ≈ ₹90,072 cr).
   const gatewayPaise = BigInt(payment.amount);
-  if (gatewayPaise !== expected.totalAmountInPaise) {
+  if (gatewayPaise !== expected.expectedAmountInPaise) {
     throw new BadRequestAppException(
-      `Payment amount mismatch: gateway=${gatewayPaise} paise, expected=${expected.totalAmountInPaise} paise`,
+      `Payment amount mismatch: gateway=${gatewayPaise} paise, expected=${expected.expectedAmountInPaise} paise`,
       'GATEWAY_AMOUNT_MISMATCH',
     );
   }
+}
+
+/**
+ * Resolve the authoritative amount the payment gateway should have CAPTURED
+ * for a MasterOrder, in paise.
+ *
+ * THE BUG THIS PREVENTS: when a customer pays part of an order from their
+ * wallet, the gateway is charged only the PAYABLE remainder (total − wallet).
+ * Comparing the captured amount against the full `totalAmountInPaise` made
+ * EVERY wallet-assisted online payment fail verification (GATEWAY_AMOUNT_MISMATCH)
+ * and the order expire unpaid.
+ *
+ * Resolution order:
+ *   1. `gatewayAmountInPaise` — the exact paise we told Razorpay to charge,
+ *      stamped at place-order / retry. It is written OUTSIDE the
+ *      MONEY_DUAL_WRITE path, so it is correct for wallet-assisted orders AND
+ *      independent of the rupee→paise dual-write flag (which, when off, would
+ *      otherwise leave `totalAmountInPaise` at its 0 default).
+ *   2. Fallback for rows predating the column (gatewayAmountInPaise = 0):
+ *      `totalAmountInPaise − walletAmountUsedInPaise`. Subtracting integer
+ *      paise commutes with the round() used at charge time, so this is exact.
+ *   3. Final safety: never return a non-positive expected amount — fall back
+ *      to the full total so a malformed/zero row fails CLOSED (mismatch)
+ *      rather than accepting an arbitrary capture.
+ */
+export function resolveExpectedGatewayPaise(order: {
+  gatewayAmountInPaise?: bigint | number | null;
+  totalAmountInPaise: bigint | number;
+  walletAmountUsedInPaise?: bigint | number | null;
+}): bigint {
+  const gateway =
+    order.gatewayAmountInPaise == null ? 0n : BigInt(order.gatewayAmountInPaise);
+  if (gateway > 0n) return gateway;
+  const total = BigInt(order.totalAmountInPaise);
+  const wallet =
+    order.walletAmountUsedInPaise == null
+      ? 0n
+      : BigInt(order.walletAmountUsedInPaise);
+  const net = total - wallet;
+  return net > 0n ? net : total;
 }

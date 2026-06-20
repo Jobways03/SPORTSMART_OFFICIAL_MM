@@ -11,8 +11,8 @@ data "aws_caller_identity" "current" {}
 resource "aws_iam_openid_connect_provider" "github" {
   count = var.github_oidc_provider_arn == "" ? 1 : 0
 
-  url             = "https://token.actions.githubusercontent.com"
-  client_id_list  = ["sts.amazonaws.com"]
+  url            = "https://token.actions.githubusercontent.com"
+  client_id_list = ["sts.amazonaws.com"]
   thumbprint_list = [
     "6938fd4d98bab03faadb97b34396831e3780aea1",
     "1c58a3a8518e8759bf075b76b750d4f2df264fcd",
@@ -76,7 +76,10 @@ data "aws_iam_policy_document" "deploy" {
       "ecr:CompleteLayerUpload",
       "ecr:PutImage",
     ]
-    resources = [for r in aws_ecr_repository.this : r.arn]
+    resources = concat(
+      [for r in aws_ecr_repository.this : r.arn],
+      [aws_ecr_repository.logistics_facade.arn],
+    )
   }
 
   # Mutating ECS actions, restricted to this environment's cluster.
@@ -122,11 +125,14 @@ data "aws_iam_policy_document" "deploy" {
     resources = ["arn:aws:ssm:${var.region}:${data.aws_caller_identity.current.account_id}:parameter/sportsmart/${var.env}/deploy/*"]
   }
 
-  # Surface migration-task logs on failure.
+  # Surface migration-task logs on failure (api + logistics-facade migrate).
   statement {
-    sid       = "ReadMigrateLogs"
-    actions   = ["logs:GetLogEvents", "logs:DescribeLogStreams"]
-    resources = ["${aws_cloudwatch_log_group.migrate.arn}:*"]
+    sid     = "ReadMigrateLogs"
+    actions = ["logs:GetLogEvents", "logs:DescribeLogStreams"]
+    resources = [
+      "${aws_cloudwatch_log_group.migrate.arn}:*",
+      "${aws_cloudwatch_log_group.logistics_facade_migrate.arn}:*",
+    ]
   }
 }
 

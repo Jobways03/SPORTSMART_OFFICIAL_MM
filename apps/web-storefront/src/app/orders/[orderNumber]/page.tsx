@@ -648,6 +648,17 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
     effectiveOrderStatus !== 'CANCELLED' &&
     paymentWindowOpen;
 
+  // Online-payment audit — an unpaid ONLINE order (PENDING_PAYMENT) is NOT a
+  // placed order: its gateway payment never completed (declined or abandoned).
+  // It must not render with fulfilment chrome ("Processing" badges, the
+  // progress tracker) that makes it look like a real, confirmed order. Show a
+  // clear "complete your payment" treatment instead; the Retry/Cancel CTAs in
+  // the footer own the recovery path. Nothing is shipped until payment succeeds.
+  const isAwaitingPayment =
+    order.paymentMethod !== 'COD' &&
+    order.paymentStatus !== 'PAID' &&
+    effectiveOrderStatus !== 'CANCELLED';
+
   // Phase 197 (My-Orders audit #12) — prefer the server-computed,
   // derived `orderStatusLabel` so the storefront and the API never
   // disagree (the backend already rolls sub-order fulfillment into the
@@ -667,8 +678,27 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
           &#8592; Back to Orders
         </Link>
 
+        {/* Online-payment audit — "this order isn't placed yet" banner. Shown
+            only for an unpaid ONLINE order so a failed/abandoned payment never
+            reads as a confirmed order. */}
+        {isAwaitingPayment && (
+          <div style={{ marginBottom: 20, padding: '14px 16px', border: '1px solid #fcd34d', background: '#fffbeb', borderRadius: 10, display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <span style={{ fontSize: 18, lineHeight: 1 }} aria-hidden>&#9203;</span>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#92400e' }}>
+                Payment pending — your order isn&apos;t placed yet
+              </div>
+              <div style={{ fontSize: 13, color: '#92400e', marginTop: 2 }}>
+                {canRetryPayment
+                  ? 'We haven’t received your payment for this order. Complete the payment below to confirm it — nothing is shipped until then.'
+                  : 'The payment window for this order has closed. It will be cancelled automatically; you can place the order again anytime.'}
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Header */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 12 }}>
           <div>
             <h1 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>Order {order.orderNumber}</h1>
             <div style={{ fontSize: 13, color: '#6b7280' }}>Placed on {formatDate(order.createdAt)}</div>
@@ -692,7 +722,10 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                 order.paymentStatus === 'CANCELLED' ? 'Cancelled' : order.paymentStatus === 'PAID' ? 'Paid' : 'Payment Pending',
                 order.paymentStatus === 'CANCELLED' ? '#dc2626' : order.paymentStatus === 'PAID' ? '#16a34a' : '#d97706',
               )}
-              {statusBadge(displayStatusLabel, displayStatusColor)}
+              {/* Suppress the fulfilment status badge for an unpaid order — the
+                  "Payment Pending" badge above already states the real state;
+                  showing "Processing" alongside it made it look placed. */}
+              {!isAwaitingPayment && statusBadge(displayStatusLabel, displayStatusColor)}
             </div>
           </div>
         </div>
@@ -701,7 +734,7 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
             the items progress independently, so a single rolled-up bar is
             misleading — we render a per-shipment bar inside each group below
             instead. Single-shipment orders keep this clean top bar. */}
-        {!isMultiShipment && (
+        {!isMultiShipment && !isAwaitingPayment && (
           <div style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: '8px 16px', marginBottom: 20, background: '#fafafa' }}>
             <OrderProgressTracker
               orderStatus={effectiveOrderStatus}
@@ -815,11 +848,16 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
           <div key={so.id} style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 16, marginBottom: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: 12, color: '#2563eb', fontWeight: 600 }}>
-                  Fulfilled by SPORTSMART
-                </span>
-                {/* Delivery method indicator. */}
-                {so.deliveryMethod && (
+                {/* Fulfilment attribution + delivery method are hidden for an
+                    unpaid order — nothing is assigned to a fulfiller or shipped
+                    until payment succeeds, so showing them made it read as a
+                    placed order. */}
+                {!isAwaitingPayment && (
+                  <span style={{ fontSize: 12, color: '#2563eb', fontWeight: 600 }}>
+                    Fulfilled by SPORTSMART
+                  </span>
+                )}
+                {!isAwaitingPayment && so.deliveryMethod && (
                   <DeliveryMethodBadge method={so.deliveryMethod} />
                 )}
                 {so.acceptStatus === 'CANCELLED' && (
@@ -835,7 +873,7 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                 own timeline (shared order-level events + this shipment's own
                 tracking/delivery events). Single-shipment orders use the top
                 bar/timeline instead. */}
-            {isMultiShipment && (
+            {isMultiShipment && !isAwaitingPayment && (
               <div style={{ marginTop: 10, marginBottom: 6, padding: '4px 12px', background: '#fafafa', border: '1px solid #f1f5f9', borderRadius: 8 }}>
                 <OrderProgressTracker
                   fulfillmentStatus={so.fulfillmentStatus}
@@ -962,7 +1000,9 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                     Qty: {item.quantity} x {formatPrice(Number(item.unitPrice))}
                   </div>
                   <div style={{ marginTop: 4 }}>
-                    {statusBadge(fulfillmentLabel(so.fulfillmentStatus, order.paymentStatus), fulfillmentColor(so.fulfillmentStatus, order.paymentStatus))}
+                    {isAwaitingPayment
+                      ? statusBadge('Payment pending', '#d97706')
+                      : statusBadge(fulfillmentLabel(so.fulfillmentStatus, order.paymentStatus), fulfillmentColor(so.fulfillmentStatus, order.paymentStatus))}
                   </div>
                 </div>
                 <div style={{ fontWeight: 600, fontSize: 14, whiteSpace: 'nowrap' }}>

@@ -21,7 +21,7 @@ const formatINR = (n: number) =>
 export function PriceBuckets() {
   return (
     <section className="container-x py-8 sm:py-12">
-      <h2 className="font-display text-h2 sm:text-h1 text-ink-900 mb-6">
+      <h2 className="font-display text-2xl sm:text-3xl text-ink-900 mb-6">
         Pick what you love, at your price!
       </h2>
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">

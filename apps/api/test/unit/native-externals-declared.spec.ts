@@ -45,9 +45,12 @@ describe('Webpack native externals are declared production dependencies (deploy 
   const devDeps: Record<string, string> = pkg.devDependencies ?? {};
 
   it('finds the expected native externals (sanity — guards the parser)', () => {
-    // These two are the known native modules require()'d at runtime.
-    // If either is intentionally removed, update this assertion.
-    expect(externals).toEqual(expect.arrayContaining(['sharp', 'bcrypt']));
+    // The known native / runtime-binary-loading modules require()'d at runtime:
+    // sharp + bcrypt (*.node addons), @prisma/client (query-engine .node) and
+    // puppeteer (Chromium). If any is intentionally removed, update this list.
+    expect(externals).toEqual(
+      expect.arrayContaining(['sharp', 'bcrypt', '@prisma/client', 'puppeteer']),
+    );
   });
 
   it.each(externals)(

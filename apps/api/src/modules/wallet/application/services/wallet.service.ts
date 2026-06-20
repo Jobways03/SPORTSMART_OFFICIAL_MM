@@ -652,7 +652,9 @@ export class WalletService {
 
     try {
       assertGatewayPaymentMatchesOrder(gatewayPayment, {
-        totalAmountInPaise: BigInt(tx.amountInPaise),
+        // Wallet top-up is paid in full at the gateway (no wallet within a
+        // top-up), so the expected amount is the whole top-up amount.
+        expectedAmountInPaise: BigInt(tx.amountInPaise),
         razorpayOrderId: args.razorpayOrderId,
       });
     } catch (err: any) {

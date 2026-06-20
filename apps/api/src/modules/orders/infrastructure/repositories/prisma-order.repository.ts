@@ -136,7 +136,7 @@ export class PrismaOrderRepository implements OrderRepository {
    * Returns {} for `all` so callers can spread it unconditionally.
    */
   private customerBucketWhere(
-    bucket?: 'all' | 'active' | 'delivered' | 'cancelled',
+    bucket?: 'all' | 'active' | 'delivered' | 'cancelled' | 'awaiting_payment',
   ): any {
     const cancelledClause = {
       OR: [
@@ -158,9 +158,49 @@ export class PrismaOrderRepository implements OrderRepository {
         },
       ],
     };
+    // Online-payment audit — an ONLINE order sits at orderStatus=PENDING_PAYMENT
+    // with paymentStatus PENDING/CREATED while the customer is still completing
+    // (or retrying) the Razorpay payment. It's a pre-payment cart, not a placed
+    // order, so it must NOT appear among the customer's real orders ("all" /
+    // "active") looking like a confirmed "Processing" order. It surfaces only in
+    // the dedicated "awaiting_payment" bucket, which the storefront renders as a
+    // separate "Complete your payment" strip with Retry/Cancel. On success it
+    // flips to PLACED/PAID (→ active); on expiry/cancel it goes terminal
+    // (orderStatus CANCELLED / paymentStatus EXPIRED → the cancelled bucket).
+    // Mirrors the admin list, which already hides PENDING_PAYMENT as a
+    // "pre-payment cart, not a real order".
+    const awaitingPaymentClause = {
+      orderStatus: 'PENDING_PAYMENT' as any,
+      paymentStatus: { in: ['PENDING', 'CREATED'] as any },
+    };
+    // A never-captured online checkout — a Razorpay order was minted
+    // (razorpayOrderId set) but payment was NEVER captured (razorpayPaymentId
+    // null) and it never reached PAID. This spans the whole dead lifecycle of a
+    // failed/abandoned online checkout: PENDING_PAYMENT (awaiting), CANCELLED,
+    // and EXPIRED. None of these were real purchases, so they must not appear in
+    // ANY real-order bucket — a cancelled/expired one must NOT resurface under
+    // "Cancelled" either. razorpayOrderId-not-null distinguishes them from a
+    // wallet-fully-paid order (no gateway leg) that was legitimately PAID and
+    // later cancelled/refunded — that one stays visible. (Includes
+    // awaitingPaymentClause to also catch the brief pre-mint PENDING window.)
+    const neverCapturedOnline = {
+      OR: [
+        awaitingPaymentClause,
+        {
+          razorpayOrderId: { not: null },
+          razorpayPaymentId: null,
+          paymentStatus: { not: 'PAID' as any },
+        },
+      ],
+    };
     switch (bucket) {
+      case 'awaiting_payment':
+        // Only the still-retryable subset surfaces (the storefront strip).
+        return awaitingPaymentClause;
       case 'cancelled':
-        return cancelledClause;
+        // Real (paid-then-)cancelled orders only — never-captured online
+        // checkouts are not "cancelled orders", they never truly existed.
+        return { AND: [cancelledClause, { NOT: neverCapturedOnline }] };
       case 'delivered':
         return {
           orderStatus: 'DELIVERED' as any,
@@ -169,11 +209,16 @@ export class PrismaOrderRepository implements OrderRepository {
       case 'active':
         return {
           NOT: {
-            OR: [{ orderStatus: 'DELIVERED' as any }, cancelledClause],
+            OR: [
+              { orderStatus: 'DELIVERED' as any },
+              cancelledClause,
+              neverCapturedOnline,
+            ],
           },
         };
       default:
-        return {};
+        // "all" — every real order EXCEPT never-captured online checkouts.
+        return { NOT: neverCapturedOnline };
     }
   }
 
@@ -181,7 +226,7 @@ export class PrismaOrderRepository implements OrderRepository {
     customerId: string,
     skip: number,
     take: number,
-    bucket?: 'all' | 'active' | 'delivered' | 'cancelled',
+    bucket?: 'all' | 'active' | 'delivered' | 'cancelled' | 'awaiting_payment',
   ): Promise<any[]> {
     return this.prisma.masterOrder.findMany({
       where: { customerId, ...this.customerBucketWhere(bucket) },
@@ -198,7 +243,7 @@ export class PrismaOrderRepository implements OrderRepository {
 
   async countCustomerOrders(
     customerId: string,
-    bucket?: 'all' | 'active' | 'delivered' | 'cancelled',
+    bucket?: 'all' | 'active' | 'delivered' | 'cancelled' | 'awaiting_payment',
   ): Promise<number> {
     return this.prisma.masterOrder.count({
       where: { customerId, ...this.customerBucketWhere(bucket) },
@@ -216,14 +261,17 @@ export class PrismaOrderRepository implements OrderRepository {
     active: number;
     delivered: number;
     cancelled: number;
+    awaiting_payment: number;
   }> {
-    const [all, active, delivered, cancelled] = await Promise.all([
-      this.countCustomerOrders(customerId, 'all'),
-      this.countCustomerOrders(customerId, 'active'),
-      this.countCustomerOrders(customerId, 'delivered'),
-      this.countCustomerOrders(customerId, 'cancelled'),
-    ]);
-    return { all, active, delivered, cancelled };
+    const [all, active, delivered, cancelled, awaiting_payment] =
+      await Promise.all([
+        this.countCustomerOrders(customerId, 'all'),
+        this.countCustomerOrders(customerId, 'active'),
+        this.countCustomerOrders(customerId, 'delivered'),
+        this.countCustomerOrders(customerId, 'cancelled'),
+        this.countCustomerOrders(customerId, 'awaiting_payment'),
+      ]);
+    return { all, active, delivered, cancelled, awaiting_payment };
   }
 
   async updateMasterOrder(id: string, data: any): Promise<any> {

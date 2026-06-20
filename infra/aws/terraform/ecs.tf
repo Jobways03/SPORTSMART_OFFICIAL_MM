@@ -31,6 +31,10 @@ locals {
     TRUST_PROXY_HOPS               = "1" # behind the ALB
     AUTH_COOKIE_DOMAIN             = var.auth_cookie_domain
     HEALTH_EXTERNAL_PROBES_DEFAULT = "false"
+    # Internal Cloud Map URL of the logistics-facade (logistics-facade.tf).
+    # Setting this enables the API's logistics integration; the matching API
+    # key is injected as a secret below. Unset = integration disabled.
+    LOGISTICS_FACADE_URL = local.logistics_facade_url
   }
   api_environment = [
     for k, v in merge(local.api_base_environment, var.api_extra_environment) : {
@@ -48,6 +52,13 @@ locals {
     [for k in local.external_secret_keys : {
       name      = k
       valueFrom = "${aws_secretsmanager_secret.external.arn}:${k}::"
+    }],
+    # API <-> facade shared secret: the SAME generated value the facade reads
+    # as INTERNAL_API_KEY, surfaced to apps/api under its own env name. One
+    # value, two env names, two containers (logistics-facade.tf).
+    [{
+      name      = "LOGISTICS_FACADE_API_KEY"
+      valueFrom = "${aws_secretsmanager_secret.generated.arn}:INTERNAL_API_KEY::"
     }],
   )
 }

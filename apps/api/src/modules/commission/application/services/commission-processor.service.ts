@@ -163,6 +163,51 @@ export class CommissionProcessorService {
       if (subOrders.length === 0)
         return { scanned, processed, failed, skippedUnpaidCod };
 
+      // Online-payment defense-in-depth — never lock commission (and therefore
+      // the seller payable) on an ONLINE order whose gateway payment isn't PAID.
+      // A DELIVERED ONLINE sub-order is normally always PAID (an ONLINE order
+      // only leaves PENDING_PAYMENT by flipping to PLACED + PAID atomically), so
+      // this is belt-and-suspenders against any future path that advances
+      // fulfilment without capture. COD is intentionally exempt — it is paid on
+      // delivery and governed by the COMMISSION_REQUIRE_COD_PAID gate below.
+      {
+        const masterIds = Array.from(
+          new Set(
+            (subOrders as any[])
+              .map((so) => so.masterOrderId)
+              .filter((x): x is string => !!x),
+          ),
+        );
+        if (masterIds.length > 0) {
+          const unpaidOnlineMasterIds = new Set(
+            (
+              await this.prisma.masterOrder.findMany({
+                where: {
+                  id: { in: masterIds },
+                  paymentMethod: 'ONLINE',
+                  paymentStatus: { not: 'PAID' },
+                },
+                select: { id: true },
+              })
+            ).map((m) => m.id),
+          );
+          if (unpaidOnlineMasterIds.size > 0) {
+            const before = subOrders.length;
+            subOrders = (subOrders as any[]).filter(
+              (so) => !unpaidOnlineMasterIds.has(so.masterOrderId),
+            ) as typeof subOrders;
+            const dropped = before - subOrders.length;
+            if (dropped > 0) {
+              this.logger.warn(
+                `Commission tick: skipped ${dropped} delivered ONLINE sub-order(s) whose order is not PAID — refusing to lock commission on an uncaptured payment`,
+              );
+            }
+            if (subOrders.length === 0)
+              return { scanned, processed, failed, skippedUnpaidCod };
+          }
+        }
+      }
+
       // Cluster-B (#2b) — COD cash-in-hand gate. The eligibility scan
       // (findDeliveredSubOrdersPastReturnWindow) admits a DELIVERED COD
       // sub-order the moment its return window closes, REGARDLESS of whether

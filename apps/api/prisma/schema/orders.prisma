@@ -489,6 +489,15 @@ model MasterOrder {
   razorpayOrderId   String?   @map("razorpay_order_id")
   razorpayPaymentId String?   @map("razorpay_payment_id")
   paymentExpiresAt  DateTime? @map("payment_expires_at")
+  // The exact amount (paise) we asked the payment gateway to CAPTURE =
+  // payable after any wallet portion. Stamped DIRECTLY at place-order /
+  // retry (outside the MONEY_DUAL_WRITE path) so online-payment
+  // verification is correct for wallet-assisted orders AND independent of
+  // the rupee→paise dual-write flag. 0 for COD / fully-wallet-covered /
+  // pre-migration rows — verify callers fall back to
+  // (totalAmountInPaise − walletAmountUsedInPaise) via
+  // resolveExpectedGatewayPaise().
+  gatewayAmountInPaise BigInt @default(0) @map("gateway_amount_in_paise")
   // Phase 165 (Razorpay Integration audit #5/#6) — gateway-side failure
   // detail captured from the payment.failed webhook so support can see
   // "card declined" / "insufficient funds" instead of a generic message,

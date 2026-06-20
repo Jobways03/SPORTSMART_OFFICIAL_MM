@@ -69,12 +69,12 @@ export interface OrderRepository {
     skip: number,
     take: number,
     // Phase 197 (My-Orders audit #7) — optional server-side bucket.
-    bucket?: 'all' | 'active' | 'delivered' | 'cancelled',
+    bucket?: 'all' | 'active' | 'delivered' | 'cancelled' | 'awaiting_payment',
   ): Promise<any[]>;
 
   countCustomerOrders(
     customerId: string,
-    bucket?: 'all' | 'active' | 'delivered' | 'cancelled',
+    bucket?: 'all' | 'active' | 'delivered' | 'cancelled' | 'awaiting_payment',
   ): Promise<number>;
 
   // Phase 197 (My-Orders audit #7) — per-bucket counts for tab badges.
@@ -83,6 +83,7 @@ export interface OrderRepository {
     active: number;
     delivered: number;
     cancelled: number;
+    awaiting_payment: number;
   }>;
 
   updateMasterOrder(id: string, data: any): Promise<any>;

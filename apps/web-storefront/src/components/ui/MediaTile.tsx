@@ -84,6 +84,13 @@ interface MediaTileProps {
   imageSrc?: string | null;
   slotName: string;
   aspect?: string;
+  /**
+   * Responsive aspect override. When set, the tile uses these Tailwind
+   * `aspect-[…]` classes (e.g. `"aspect-[4/5] sm:aspect-[16/9] md:aspect-[5/2]"`)
+   * instead of the single fixed inline `aspect`, so a banner can be taller on
+   * phones and wide on desktop. Takes precedence over `aspect` when provided.
+   */
+  aspectClassName?: string;
   tone?: Tone;
   align?: Align;
 
@@ -122,6 +129,7 @@ export function MediaTile({
   imageSrc,
   slotName,
   aspect = '1/1',
+  aspectClassName,
   tone = 'gray',
   align = 'bottom-left',
   eyebrow,
@@ -160,9 +168,11 @@ export function MediaTile({
 
   const inner = (
     <div
-      className={`relative overflow-hidden rounded-2xl ${className}`}
+      className={`relative overflow-hidden rounded-2xl ${aspectClassName ?? ''} ${className}`}
       style={{
-        aspectRatio: aspect,
+        // A responsive `aspectClassName` (Tailwind) wins over the fixed inline
+        // ratio; only fall back to the inline `aspect` when no class is given.
+        ...(aspectClassName ? {} : { aspectRatio: aspect }),
         backgroundImage: `url(${effectiveImageSrc})`,
         backgroundSize: 'cover',
         backgroundPosition: 'center',

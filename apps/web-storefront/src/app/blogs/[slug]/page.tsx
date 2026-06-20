@@ -149,7 +149,7 @@ export default function BlogDetailPage() {
 
       <style jsx global>{`
         .blog-content h1, .blog-content h2, .blog-content h3, .blog-content h4 {
-          font-family: var(--font-display, inherit);
+          font-family: var(--font-sans, inherit);
           color: #0F1115;
           line-height: 1.2;
           margin-top: 1.5em;

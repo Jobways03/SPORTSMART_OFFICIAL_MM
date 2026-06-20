@@ -12,11 +12,22 @@ import {
 } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
-import { AlertCircle, CheckCircle2, ArrowRight, Loader2 } from 'lucide-react';
+import { AuthMobileHeader } from '@/components/auth/AuthMobileHeader';
+import {
+  AlertCircle,
+  ArrowRight,
+  CheckCircle2,
+  Heart,
+  Loader2,
+  MailCheck,
+  ShieldCheck,
+  Truck,
+} from 'lucide-react';
 import { authService } from '@/services/auth.service';
 import { ApiError } from '@/lib/api-client';
 import { validateOtp } from '@/lib/validators';
 import { CaptchaWidget } from '@/components/CaptchaWidget';
+import { AuthBrandPanel } from '@/components/auth/AuthBrandPanel';
 
 const OTP_LENGTH = 6;
 const COOLDOWN_SECONDS = 60;
@@ -237,29 +248,43 @@ function VerifyRegistrationOtpForm() {
   const showInvalid = boxesInvalid || !!otpError;
 
   return (
-    <div className="min-h-screen bg-ink-50 flex flex-col">
-      <header className="flex items-center justify-between px-6 lg:px-10 py-6">
-        <Link
-          href="/"
-          className="font-display text-2xl tracking-wide italic leading-none"
-        >
-          <span className="text-sale">SPORTSMART</span>
-          <span className="text-ink-900">.com</span>
-        </Link>
-        <span className="ml-auto text-caption text-ink-600">
-          Already verified?{' '}
-          <Link
-            href="/login"
-            className="text-accent-dark font-semibold hover:text-ink-900 hover:underline underline-offset-2"
-          >
-            Sign in
-          </Link>
-        </span>
-      </header>
+    <div className="min-h-screen bg-ink-50 flex justify-center">
+      <div className="w-full max-w-[1320px] min-h-screen grid lg:grid-cols-2">
+        {/* Branded panel */}
+        <AuthBrandPanel>
+          <h2 className="font-display text-[clamp(56px,6vw,96px)] leading-[0.92] tracking-tight text-ink-900">
+            One last
+            <br />
+            <span className="font-brush text-sale text-[0.85em] tracking-normal">
+              step.
+            </span>
+          </h2>
+          <p className="mt-6 text-body-lg text-ink-700 max-w-md">
+            Verify your email to activate your account and start shopping.
+          </p>
+          <ul className="mt-10 grid sm:grid-cols-2 gap-3 max-w-lg">
+            {[
+              { icon: MailCheck, title: 'Code sent', desc: 'Check your inbox & spam' },
+              { icon: Truck, title: 'Free shipping', desc: 'On orders over ₹999' },
+              { icon: Heart, title: 'Save favourites', desc: 'Wishlist & quick reorders' },
+              { icon: ShieldCheck, title: '100% authentic', desc: 'Direct from brand sellers' },
+            ].map(({ icon: Icon, title, desc }) => (
+              <li key={title} className="bg-white border border-ink-900/10 p-3">
+                <Icon className="size-4 text-accent-dark" strokeWidth={1.75} />
+                <div className="mt-2 text-body font-semibold text-ink-900">{title}</div>
+                <div className="text-caption text-ink-600">{desc}</div>
+              </li>
+            ))}
+          </ul>
+        </AuthBrandPanel>
 
-      <main className="flex-1 px-6 lg:px-10 py-8 flex items-start sm:items-center justify-center">
-        <div className="w-full max-w-md">
-          <h1 className="font-display text-h1 text-ink-900 leading-none">
+        {/* Form panel */}
+        <div className="flex flex-col">
+          <AuthMobileHeader switchPrompt="Already verified?" switchLabel="Sign in" switchHref="/login" />
+
+          <main className="flex-1 px-6 lg:px-10 pt-6 lg:pt-10 pb-10 flex items-start sm:items-center">
+            <div className="w-full max-w-md mx-auto">
+          <h1 className="font-display text-2xl sm:text-3xl text-ink-900 leading-tight">
             Verify your email
           </h1>
           <p className="mt-3 text-body-lg text-ink-600">
@@ -322,7 +347,7 @@ function VerifyRegistrationOtpForm() {
                     onPaste={i === 0 ? handlePaste : undefined}
                     aria-label={`Digit ${i + 1}`}
                     aria-invalid={showInvalid}
-                    className={`w-10 sm:w-12 h-14 text-center text-h3 font-semibold bg-white border-2 rounded-xl focus:outline-none transition-colors ${
+                    className={`size-11 sm:size-14 text-center text-h3 font-semibold bg-white border-2 rounded-md focus:outline-none transition-colors ${
                       showInvalid
                         ? 'border-danger focus:border-danger'
                         : 'border-ink-300 hover:border-ink-500 focus:border-ink-900'
@@ -413,12 +438,10 @@ function VerifyRegistrationOtpForm() {
               Already verified? Sign in
             </Link>
           </p>
+            </div>
+          </main>
         </div>
-      </main>
-
-      <footer className="px-6 py-5 border-t border-ink-200 text-caption text-ink-500 text-center">
-        &copy; {new Date().getFullYear()} Sportsmart. All rights reserved.
-      </footer>
+      </div>
     </div>
   );
 }

@@ -382,3 +382,81 @@ describe('previewServiceability (Phase 64 — Gaps #3 + #5)', () => {
     expect(result.reason).toBe('NO_SERVICE_AREA');
   });
 });
+
+// ─── Distance approximation flag (2026-06-20) ─────────────────────────
+//
+// When a node's distance is computed from an APPROXIMATED pincode centroid
+// (the customer's or the node's pincode exists in the master but lacks exact
+// coordinates), the allocated candidate must carry distanceApproximate=true so
+// admin UIs can flag a misleadingly-small estimate. Exact coords on both ends
+// must NOT set the flag. Regression for the "2.51 km to a coordless pincode"
+// report — the seller pickup pincode (e.g. 500063) is region-approximated.
+describe('allocate distanceApproximate flag', () => {
+  it('flags a seller whose pickup pincode coords are region-approximated', async () => {
+    const { svc, postOfficeCache } = buildMocks({
+      // Exact customer coords (not approximate).
+      postOffice: { latitude: 17.4113, longitude: 78.5183 },
+      sellerMappings: [
+        activeSellerMapping({
+          latitude: null,
+          longitude: null,
+          pickupPincode: '500063',
+        }),
+      ],
+    });
+    // The coordless pickup pincode resolves to a region centroid (approximate).
+    postOfficeCache.lookupMany.mockResolvedValue(
+      new Map([
+        ['500063', { latitude: 17.4063, longitude: 78.5413, approximate: true }],
+      ]),
+    );
+    const result = await svc.allocate({
+      productId: PRODUCT_ID,
+      variantId: VARIANT_ID,
+      customerPincode: '500007',
+      quantity: 1,
+    });
+    const node = result.allEligible.find((c) => c.sellerId === SELLER_ID);
+    expect(node).toBeDefined();
+    expect(node!.distanceKm).not.toBeNull();
+    expect(node!.distanceApproximate).toBe(true);
+  });
+
+  it('does NOT flag a seller with exact mapping coords + exact customer coords', async () => {
+    const { svc } = buildMocks({
+      postOffice: { latitude: 17.4113, longitude: 78.5183 },
+      sellerMappings: [
+        activeSellerMapping({ latitude: 17.45, longitude: 78.49 }),
+      ],
+    });
+    const result = await svc.allocate({
+      productId: PRODUCT_ID,
+      variantId: VARIANT_ID,
+      customerPincode: '500007',
+      quantity: 1,
+    });
+    const node = result.allEligible.find((c) => c.sellerId === SELLER_ID);
+    expect(node).toBeDefined();
+    expect(node!.distanceKm).not.toBeNull();
+    expect(node!.distanceApproximate).toBe(false);
+  });
+
+  it('flags every node when the CUSTOMER pincode itself is approximated', async () => {
+    const { svc } = buildMocks({
+      // Customer coords are themselves a region approximation.
+      postOffice: { latitude: 17.41, longitude: 78.52, approximate: true },
+      sellerMappings: [
+        activeSellerMapping({ latitude: 17.45, longitude: 78.49 }),
+      ],
+    });
+    const result = await svc.allocate({
+      productId: PRODUCT_ID,
+      variantId: VARIANT_ID,
+      customerPincode: '500007',
+      quantity: 1,
+    });
+    const node = result.allEligible.find((c) => c.sellerId === SELLER_ID);
+    expect(node).toBeDefined();
+    expect(node!.distanceApproximate).toBe(true);
+  });
+});

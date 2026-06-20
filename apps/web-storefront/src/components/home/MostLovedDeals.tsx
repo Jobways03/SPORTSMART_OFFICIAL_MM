@@ -31,7 +31,7 @@ export function MostLovedDeals({ content = {}, slots = [] }: Props) {
           <span className="text-sale-600">●</span>
           <span className="text-ink-600">Top discounts</span>
         </div>
-        <h2 className="mt-1 font-display text-h2 sm:text-h1 text-ink-900 leading-[1.05] tracking-tight">
+        <h2 className="mt-1 font-display text-2xl sm:text-3xl text-ink-900 leading-[1.15] tracking-tight">
           Most loved deals. Too good to miss.
         </h2>
       </div>

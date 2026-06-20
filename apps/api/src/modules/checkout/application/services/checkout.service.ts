@@ -4,6 +4,8 @@ import { AuditPublicFacade } from '../../../audit/application/facades/audit-publ
 import {
   CHECKOUT_REPOSITORY,
   ICheckoutRepository,
+  PlaceOrderTransactionResult,
+  PlaceOrderTransactionInput,
   CreateOrderItemInput,
   FulfillmentGroupInput,
 } from '../../domain/repositories/checkout.repository.interface';
@@ -12,7 +14,10 @@ import {
   ConflictAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
-import { assertGatewayPaymentMatchesOrder } from '../../../../core/money/gateway-amount-verifier';
+import {
+  assertGatewayPaymentMatchesOrder,
+  resolveExpectedGatewayPaise,
+} from '../../../../core/money/gateway-amount-verifier';
 import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 import { assertTransition } from '../../../../core/fsm/status-transitions';
 import {
@@ -34,6 +39,11 @@ import { DiscountAllocationService } from '../../../discounts/application/servic
 // sub_order_tax_summaries + order_tax_summaries for EVERY order
 // (with or without a discount applied). See docs/tax/CA.md §A.
 import { TaxSnapshotService } from '../../../tax/application/services/tax-snapshot.service';
+// Option B (Phase 2) — deferred ONLINE order creation (flag-gated).
+import { DeferredOrderService } from './deferred-order.service';
+// Prisma CheckoutSession aliased — `CheckoutSession` already names the Redis
+// session interface in this file (the deferred intent is the Postgres model).
+import type { CheckoutSession as DeferredCheckoutSession } from '@prisma/client';
 import { TaxPublicFacade } from '../../../tax/application/facades/tax-public.facade';
 // Phase 30 — CheckoutTaxPreviewService returns the CGST/SGST/IGST
 // breakdown for the pre-payment summary so the customer sees the
@@ -62,6 +72,7 @@ import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razo
 // for process.env directly from a service.
 import { RazorpayClient } from '../../../../integrations/razorpay/clients/razorpay.client';
 import { CodRuleEngine } from '../../../cod/application/services/cod-rule-engine.service';
+import { CodPublicFacade } from '../../../cod/application/facades/cod-public.facade';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { StockRestoreService } from '../../../orders/application/services/stock-restore.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
@@ -121,6 +132,10 @@ export class CheckoutService {
     // auto-logs every evaluation to cod_decision_log, so there's no
     // need for a separate audit call here.
     private readonly codRuleEngine: CodRuleEngine,
+    // Per-seller COD eligibility (SELLER_DENY, seller-active, serviceability,
+    // value min/max, abuse counter). Used at place-order to gate COD per
+    // fulfillment node, not just once at cart level.
+    private readonly codFacade: CodPublicFacade,
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
     private readonly redis: RedisService,
@@ -144,6 +159,9 @@ export class CheckoutService {
     private readonly auditFacade: AuditPublicFacade,
     // Phase 70 (2026-05-22) — Payment entity scaffolding.
     private readonly paymentLifecycle: PaymentLifecycleService,
+    // Option B (Phase 2) — deferred ONLINE order creation (flag-gated; the
+    // legacy create-then-pay path stays the default until the flag is flipped).
+    private readonly deferredOrderService: DeferredOrderService,
   ) {}
 
   // ── Initiate Checkout ──────────────────────────────────────────────────
@@ -896,15 +914,71 @@ export class CheckoutService {
         (sum, it) => sum + (it.lineTotal ?? 0),
         0,
       );
-      const eligibility = await this.codRuleEngine.evaluate({
-        pincode,
-        customerId: userId,
-        orderTotalInr,
-      });
-      if (!eligibility.eligible) {
+
+      // Order-level value guardrails (env). The rule engine has a VALUE_LIMIT
+      // (max) rule type but NO minimum rule type, so the configured
+      // COD_FALLBACK_MIN_ORDER_VALUE_INR was never enforced at checkout — a ₹1
+      // COD order slipped through. Enforce both bounds for EVERY COD cart
+      // (covers franchise-only carts, where the per-seller facade loop below
+      // doesn't run).
+      const codMaxInr = this.env.getNumber('COD_FALLBACK_MAX_ORDER_VALUE_INR', 10000);
+      const codMinInr = this.env.getNumber('COD_FALLBACK_MIN_ORDER_VALUE_INR', 100);
+      if (orderTotalInr < codMinInr) {
         throw new BadRequestAppException(
-          `COD not available for this order: ${eligibility.reason ?? 'blocked by COD rule'}`,
+          `COD is not available below ₹${codMinInr}. Please pay online for smaller orders.`,
         );
+      }
+      if (orderTotalInr > codMaxInr) {
+        throw new BadRequestAppException(
+          `COD is not available above ₹${codMaxInr}. Please pay online for this order.`,
+        );
+      }
+
+      // Per-fulfillment-node COD eligibility. The previous single cart-level
+      // codRuleEngine.evaluate() omitted sellerId, so admin SELLER_DENY rules
+      // (and seller-active / per-seller serviceability / abuse) were silently
+      // bypassed — a seller flagged COD-ineligible still received COD orders in
+      // a multi-seller cart. Evaluate each SELLER node through the full facade.
+      const codSellerIds = Array.from(
+        new Set(
+          session.items
+            .filter((i) => i.allocatedNodeType !== 'FRANCHISE' && i.allocatedSellerId)
+            .map((i) => i.allocatedSellerId as string),
+        ),
+      );
+      for (const sellerId of codSellerIds) {
+        const verdict = await this.codFacade.evaluateCodEligibility({
+          customerId: userId,
+          sellerId,
+          orderValue: orderTotalInr,
+          pincode,
+        });
+        if (!verdict.allowed) {
+          throw new BadRequestAppException(
+            `COD not available for this order: ${verdict.reasons.join('; ')}`,
+          );
+        }
+      }
+
+      // FRANCHISE nodes (and pure-franchise carts) — the facade's seller-row /
+      // seller-service-area lookups don't apply to franchises, so run the
+      // admin rule engine directly (pincode / value / customer rules; sellerId
+      // omitted by design — SELLER_DENY is a seller concept). Also covers the
+      // case where there were NO seller nodes so the loop above ran zero times.
+      const hasFranchiseNode = session.items.some(
+        (i) => i.allocatedNodeType === 'FRANCHISE',
+      );
+      if (hasFranchiseNode || codSellerIds.length === 0) {
+        const verdict = await this.codRuleEngine.evaluate({
+          pincode,
+          customerId: userId,
+          orderTotalInr,
+        });
+        if (!verdict.eligible) {
+          throw new BadRequestAppException(
+            `COD not available for this order: ${verdict.reason ?? 'blocked by COD rule'}`,
+          );
+        }
       }
     }
 
@@ -1205,30 +1279,64 @@ export class CheckoutService {
       // forensic field — never fail the order
     }
 
+    const placeInput: PlaceOrderTransactionInput = {
+      customerId: userId,
+      addressSnapshot: session.addressSnapshot,
+      totalAmount: chargedTotal,
+      itemCount: session.itemCount,
+      paymentMethod: method,
+      fulfillmentGroups,
+      discountCode,
+      discountAmount,
+      // Phase 62 — customerId threaded through for perUserLimit
+      // enforcement + self-referral backstop (audit Gaps #1 + #3).
+      affiliateAttribution: attribution
+        ? { ...attribution, customerId: userId }
+        : null,
+      shippingOptionId: resolvedShippingOptionId,
+      shippingOptionName: resolvedShippingOptionName,
+      shippingFeeInPaise: resolvedShippingFeeInPaise,
+      selectedTaxProfileId: selectedTaxProfileId ?? null,
+      // Phase 67 (audit Gaps #3 + #9).
+      idempotencyKey: masterOrderIdempotencyKey,
+      sourceCartId,
+    };
+
+    // Option B (Phase 2) — DEFERRED ONLINE checkout. When the flag is on and
+    // this is an online order with a gateway portion to capture, do NOT create
+    // the order now: persist a CheckoutSession intent (frozen snapshot + the
+    // already-reserved stock held, NOT confirmed) and mint the Razorpay order;
+    // the real MasterOrder is materialized only on payment success (Phase 3).
+    // COD and wallet-fully-covered (payable <= 0) keep the immediate create-
+    // then-pay path; flag off ⇒ entirely unchanged.
+    if (
+      this.deferredOrderService.enabled() &&
+      method === 'ONLINE' &&
+      payableInRupees > 0
+    ) {
+      return await this.createDeferredOnlineCheckout({
+        placeInput,
+        addressId: session.addressId ?? null,
+        sessionCreatedAt: String(session.createdAt),
+        reservationLinks: session.items.map((it) => ({
+          productId: it.productId,
+          variantId: it.variantId ?? null,
+          quantity: it.quantity,
+          reservationId: it.reservationId ?? null,
+          allocatedNodeType: it.allocatedNodeType ?? null,
+          allocatedSellerId: it.allocatedSellerId ?? null,
+        })),
+        walletDebitInPaise,
+        payableInRupees,
+        discountId,
+        allocationEnabled,
+        discountReservationId,
+      });
+    }
+
     let result;
     try {
-      result = await this.repo.placeOrderTransaction({
-        customerId: userId,
-        addressSnapshot: session.addressSnapshot,
-        totalAmount: chargedTotal,
-        itemCount: session.itemCount,
-        paymentMethod: method,
-        fulfillmentGroups,
-        discountCode,
-        discountAmount,
-        // Phase 62 — customerId threaded through for perUserLimit
-        // enforcement + self-referral backstop (audit Gaps #1 + #3).
-        affiliateAttribution: attribution
-          ? { ...attribution, customerId: userId }
-          : null,
-        shippingOptionId: resolvedShippingOptionId,
-        shippingOptionName: resolvedShippingOptionName,
-        shippingFeeInPaise: resolvedShippingFeeInPaise,
-        selectedTaxProfileId: selectedTaxProfileId ?? null,
-        // Phase 67 (audit Gaps #3 + #9).
-        idempotencyKey: masterOrderIdempotencyKey,
-        sourceCartId,
-      });
+      result = await this.repo.placeOrderTransaction(placeInput);
     } catch (err) {
       // Phase 67 (audit Gap #3) — idempotency-conflict recovery.
       // The repo throws IDEMPOTENCY_CONFLICT when the partial
@@ -1244,16 +1352,12 @@ export class CheckoutService {
           this.logger.warn(
             `Idempotency conflict resolved for user ${userId}; returning existing order ${existing.orderNumber}`,
           );
-          // Release discount reservation just in case the conflict
-          // path leaked it (best-effort).
-          if (discountReservationId) {
-            try {
-              await this.discountReservation.release({
-                redemptionId: discountReservationId,
-                reason: 'CHECKOUT_FAILED',
-              });
-            } catch { /* ignore */ }
-          }
+          // Do NOT release the discount reservation here. It is keyed on
+          // session.createdAt, so this losing concurrent request shares the
+          // SAME reservation row as the winner (the order-creating request),
+          // which owns its lifecycle (commit on success / release on its own
+          // failure). Releasing here races that commit and can flip a valid
+          // redemption to RELEASED — coupon usage silently uncounted.
           return {
             orderNumber: existing.orderNumber,
             totalAmount: existing.totalAmount,
@@ -1320,413 +1424,61 @@ export class CheckoutService {
       throw err;
     }
 
-    // Confirm all seller reservations (deducts from actual stockQty)
-    // Franchise reservations are already deducted via the ledger at reserve time.
-    //
-    // Phase 67 (audit Gaps #2 + #10) — partial-failure resilience:
-    //   • Each confirmation tracks success/failure so we don't pretend
-    //     all stock confirmed when item N+1 onward threw.
-    //   • The (orderItemId → reservationId) map feeds
-    //     linkStockReservationsToOrderItems so refund-by-item has a
-    //     direct FK-style pointer (Gap #10 fix).
-    //   • A partial failure cancels the order + best-effort restores
-    //     the successfully-confirmed reservations instead of leaving
-    //     a half-confirmed order in PLACED state.
-    const orderItemReservationMap: Record<string, string> = {};
-    const confirmedReservationIds: string[] = [];
-    let stockConfirmError: Error | null = null;
-    // Map: index in session.items → orderItemId. We need to know the
-    // OrderItem id per session item so the FK linkage can be written.
-    // Build it by re-reading the order items in (subOrder, line-order).
-    const orderItemsForLinkage = await this.prisma.orderItem.findMany({
-      where: { subOrder: { masterOrderId: result.masterOrderId } },
-      select: { id: true, productId: true, variantId: true, quantity: true, subOrderId: true },
-    });
-    for (let i = 0; i < session.items.length; i++) {
-      const item = session.items[i];
-      if (!item) continue;
-      if (!item.reservationId) continue;
-
-      // Phase 159p (audit #3) — franchise reservations have no StockReservation
-      // entity to "confirm" (they're ledger rows), so we skip confirmReservation
-      // for them. But we DO stamp the correlation id onto the matching OrderItem
-      // (same link map the seller path uses) so the sweeper cron can tell this
-      // hold belongs to a placed order and won't release it. No
-      // confirmedReservationIds push: stockRestore.restoreForReservation is a
-      // seller-StockReservation operation and would not apply.
-      if (item.allocatedNodeType === 'FRANCHISE') {
-        const match = orderItemsForLinkage.find(
-          (oi) =>
-            oi.productId === item.productId &&
-            (oi.variantId ?? null) === (item.variantId ?? null) &&
-            oi.quantity === item.quantity &&
-            !Object.values(orderItemReservationMap).includes(item.reservationId!) &&
-            !orderItemReservationMap[oi.id],
-        );
-        if (match) {
-          orderItemReservationMap[match.id] = item.reservationId;
-        }
-        continue;
-      }
-      try {
-        await this.catalogFacade.confirmReservation(
-          item.reservationId,
-          result.masterOrderId,
-        );
-        confirmedReservationIds.push(item.reservationId);
-        // Match the first not-yet-mapped OrderItem with the same
-        // (productId, variantId, quantity). Bounded by line count.
-        const match = orderItemsForLinkage.find(
-          (oi) =>
-            oi.productId === item.productId &&
-            (oi.variantId ?? null) === (item.variantId ?? null) &&
-            oi.quantity === item.quantity &&
-            !Object.values(orderItemReservationMap).includes(item.reservationId!) &&
-            !orderItemReservationMap[oi.id],
-        );
-        if (match) {
-          orderItemReservationMap[match.id] = item.reservationId;
-        }
-      } catch (err) {
-        stockConfirmError = err as Error;
-        this.logger.error(
-          `Stock confirmation failed for reservation ${item.reservationId} on order ${result.masterOrderId} (item ${i + 1}/${session.items.length}): ${(err as Error).message}`,
-        );
-        break;
-      }
-    }
-
-    // Phase 67 (audit Gap #2) — partial confirmation rollback.
-    // If any seller confirmation failed, cancel the order and undo
-    // the confirmations that already succeeded. Without this the
-    // order stayed PLACED with phantom stock consumption on items
-    // 1..N-1.
-    if (stockConfirmError) {
-      await this.prisma.$transaction(async (tx) => {
-        await tx.masterOrder.update({
-          where: { id: result.masterOrderId },
-          data: this.moneyDualWrite.applyPaise('masterOrder', {
-            orderStatus: 'CANCELLED',
-            paymentStatus: 'CANCELLED',
-          }),
-        });
-        for (const reservationId of confirmedReservationIds) {
-          try {
-            await this.stockRestore.restoreForReservation(tx, reservationId);
-          } catch (restoreErr) {
-            this.logger.warn(
-              `Stock-restore failed for reservation ${reservationId} on order ${result.masterOrderId}: ${(restoreErr as Error).message}`,
-            );
-          }
-        }
-      });
-      // Release the discount reservation too — order is dead.
-      if (discountReservationId) {
-        try {
-          await this.discountReservation.release({
-            redemptionId: discountReservationId,
-            reason: 'CHECKOUT_FAILED',
-          });
-        } catch { /* ignore */ }
-      }
-      throw new BadRequestAppException(
-        `Stock confirmation failed: ${stockConfirmError.message}. Order has been cancelled.`,
+    // Idempotency fast-path: the repo found an existing order with this
+    // deterministic key (a concurrent double-submit / retry where the original
+    // already committed). Its post-tx side effects — stock confirm, wallet
+    // debit, Razorpay order, discount commit, finalize, events — ALL ran during
+    // the original placement. Re-running them here would double-deduct stock,
+    // double-debit the wallet, and mint a second Razorpay order. Short-circuit
+    // exactly like the IDEMPOTENCY_CONFLICT path: release THIS request's
+    // orphaned discount reservation and return the existing order's summary.
+    if (result.reusedExistingOrder) {
+      this.logger.warn(
+        `Reused existing order ${result.orderNumber} for user ${userId} (idempotent replay); skipping post-tx side effects.`,
       );
+      // Do NOT release the discount reservation here. The reservation is keyed
+      // on session.createdAt, so this concurrent duplicate shares the SAME
+      // reservation row as the order-creating request — which owns its
+      // lifecycle (commits it on success, releases it on its own failure).
+      // Releasing here would race that commit and flip a valid redemption to
+      // RELEASED (lost coupon usage count).
+      return {
+        orderNumber: result.orderNumber,
+        totalAmount: result.totalAmount,
+        walletPaidAmount: 0,
+        itemCount: result.itemCount,
+        paymentMethod: method,
+        idempotencyReplay: true,
+      };
     }
 
-    // Phase 67 (audit Gap #10) — stamp the reservation id back onto
-    // each OrderItem so refund-by-item has a direct pointer. Best-
-    // effort: a failure here doesn't unwind the order (refunds can
-    // still derive via the older mappingId lookup).
-    if (Object.keys(orderItemReservationMap).length > 0) {
-      try {
-        await this.repo.linkStockReservationsToOrderItems(
-          result.masterOrderId,
-          orderItemReservationMap,
-        );
-      } catch (err) {
-        this.logger.warn(
-          `linkStockReservationsToOrderItems failed for ${result.masterOrderId}: ${(err as Error).message}`,
-        );
-      }
-    }
-
-    // Wallet debit — runs AFTER the order is committed so the ledger
-    // entry references a real order id. If it fails (e.g. balance race
-    // lost the optimistic-lock retry budget), cancel the order AND
-    // restore the stock that was just confirmed above. Pre-Follow-up
-    // #H8, the cancel happened but the stock stayed deducted, leaving
-    // the catalog ledger short until manual cleanup.
-    let walletTransactionId: string | null = null;
-    if (walletDebitInPaise > 0) {
-      try {
-        const debitResult = await this.walletFacade.debitForCheckout({
-          userId,
-          amountInPaise: walletDebitInPaise,
-          orderId: result.masterOrderId,
-          orderNumber: result.orderNumber,
-          description: `Order ${result.orderNumber} — wallet portion`,
-        });
-        walletTransactionId = debitResult.transaction.id;
-        // Phase 184 (#2/#3) — snapshot the authoritative wallet portion + the
-        // linked ledger row on the order. Non-fatal if it fails (the refund
-        // calculator falls back to the ledger query); log loudly.
-        await this.prisma.masterOrder
-          .update({
-            where: { id: result.masterOrderId },
-            data: {
-              walletAmountUsedInPaise: BigInt(walletDebitInPaise),
-              walletTransactionId,
-            },
-          })
-          .catch((snapErr) =>
-            this.logger.warn(
-              `Wallet-usage snapshot failed for order ${result.masterOrderId}: ${(snapErr as Error).message}`,
-            ),
-          );
-      } catch (err) {
-        // Follow-up #H8 — flip the order status + restore stock atomically.
-        // Seller reservations were CONFIRMED above (lines 963-970), so
-        // `restoreForReservation` undoes both the stockQty + variant.stock
-        // decrements. Franchise items had their stock deducted at reserve
-        // time and need an explicit `unreserveStock` to release.
-        await this.prisma.$transaction(async (tx) => {
-          await tx.masterOrder.update({
-            where: { id: result.masterOrderId },
-            data: this.moneyDualWrite.applyPaise('masterOrder', {
-              orderStatus: 'CANCELLED',
-              paymentStatus: 'CANCELLED',
-            }),
-          });
-          for (const item of session.items) {
-            if (item.allocatedNodeType === 'FRANCHISE') continue;
-            if (!item.reservationId) continue;
-            try {
-              await this.stockRestore.restoreForReservation(
-                tx,
-                item.reservationId,
-              );
-            } catch (restoreErr) {
-              // Log + continue: a partial restore is still better than no
-              // restore, and the cron sweepers will catch stragglers.
-              this.logger.warn(
-                `H8 stock-restore failed for reservation ${item.reservationId} on order ${result.masterOrderId}: ${
-                  (restoreErr as Error).message
-                }`,
-              );
-            }
-          }
-        });
-
-        // Franchise reservations release outside the tx — the franchise
-        // facade owns its own transaction boundary. Best-effort; the
-        // FranchiseReservationCleanupService picks up stragglers.
-        for (const item of session.items) {
-          if (item.allocatedNodeType !== 'FRANCHISE') continue;
-          if (!item.allocatedSellerId) continue;
-          try {
-            await this.franchiseFacade.unreserveStock(
-              item.allocatedSellerId,
-              item.productId,
-              item.variantId,
-              item.quantity,
-              // Phase 159p (audit #3) — correlation id so the release matches
-              // the reserve row for the sweeper's follow-up check.
-              item.reservationId ?? undefined,
-            );
-          } catch (unrErr) {
-            this.logger.warn(
-              `H8 franchise unreserve failed for order ${result.masterOrderId}: ${
-                (unrErr as Error).message
-              }`,
-            );
-          }
-        }
-
-        throw new BadRequestAppException(
-          `Wallet debit failed: ${(err as Error).message}. Order cancelled and stock restored.`,
-        );
-      }
-    }
+    // Confirm seller stock + debit the wallet portion (with rollback) — shared
+    // with the deferred-order materialization path (Option B Phase 1).
+    const { walletTransactionId } = await this.confirmStockAndDebitWallet({
+      result,
+      reservationLinks: session.items,
+      walletDebitInPaise,
+      userId,
+      discountReservationId,
+    });
 
     // Remove checkout session
     await this.sessionService.delete(userId);
 
-    // Phase B (P0.1, P0.5) — allocation + ledger + redemption.
-    //
-    // When the allocation feature flag is ON: write the full per-item
-    // discount allocation, GST snapshots, and liability ledger rows,
-    // then mark the redemption REDEEMED. All in one transaction; on
-    // failure the order is still committed (customer charged correctly,
-    // MasterOrder.discountAmount preserved) but the per-item ledger
-    // is missing — a recovery cron will retry.
-    //
-    // When the flag is OFF: legacy path — bump usedCount directly.
-    if (discountId && allocationEnabled && discountReservationId) {
-      try {
-        await this.discountAllocation.allocateAndPersist({
-          masterOrderId: result.masterOrderId,
-          discountId,
-          discountCode,
-          redemptionId: discountReservationId,
-          discountAmountInPaise: BigInt(Math.round(discountAmount * 100)),
-          // For now we only support order-level percent/fixed via
-          // checkout. BXGY allocation needs the resolved get-eligible
-          // set passed in via DiscountPublicFacade.validateCouponForCheckout
-          // — extending that response shape is a follow-up.
-          discountType: 'AMOUNT_OFF_ORDER',
-          discountMethod: 'CODE',
-          // Phase 62 — pass through the affiliate-aware source so
-          // allocation rows + ledger entries carry the right tag
-          // (audit Gap #16). Re-read here because the reservation
-          // branch's local var is out of scope.
-          // Phase 247-FB — ALSO read the discount's ACTUAL funding config.
-          // Previously this hardcoded `{ fundingType: 'PLATFORM' }`, so a
-          // SELLER/BRAND/SHARED/FRANCHISE-funded campaign was silently
-          // booked as PLATFORM at allocation — the funding the admin set
-          // never reached the liability ledger (a real cost-attribution
-          // leak). We now thread the real split + franchise/brand ids.
-          ...(await (async () => {
-            const d = await this.prisma.discount.findUnique({
-              where: { id: discountId },
-              select: {
-                affiliateId: true,
-                fundingType: true,
-                platformFundingPercent: true,
-                sellerFundingPercent: true,
-                brandFundingPercent: true,
-                franchiseFundingPercent: true,
-                franchiseId: true,
-                brandId: true,
-              },
-            });
-            return {
-              source: d?.affiliateId
-                ? ('AFFILIATE' as const)
-                : ('CODE' as const),
-              funding: {
-                fundingType: (d?.fundingType as any) ?? 'PLATFORM',
-                platformFundingPercent: Number(d?.platformFundingPercent ?? 100),
-                sellerFundingPercent: Number(d?.sellerFundingPercent ?? 0),
-                brandFundingPercent: Number(d?.brandFundingPercent ?? 0),
-                franchiseFundingPercent: Number(
-                  d?.franchiseFundingPercent ?? 0,
-                ),
-                franchiseId: d?.franchiseId ?? null,
-                brandId: d?.brandId ?? null,
-              },
-            };
-          })()),
-        });
-      } catch (err) {
-        // Order is committed and customer was charged correctly.
-        // Allocation rows are missing — log + emit an outbox event
-        // for the recovery worker. Don't fail the response.
-        // (See Phase E P1.1 for the recovery handler.)
-        this.logger.error(
-          `Discount allocation failed for order ${result.masterOrderId} ` +
-          `(discountId=${discountId}, redemptionId=${discountReservationId}): ` +
-          `${(err as Error)?.message}`,
-          (err as Error)?.stack,
-        );
-        try {
-          await this.eventBus.publish({
-            eventName: 'discount.allocation.failed',
-            aggregate: 'MasterOrder',
-            aggregateId: result.masterOrderId,
-            occurredAt: new Date(),
-            payload: {
-              masterOrderId: result.masterOrderId,
-              discountId,
-              redemptionId: discountReservationId,
-              discountAmount,
-              error: (err as Error)?.message,
-            },
-          });
-        } catch {
-          // best-effort — if outbox is also down, the operator will
-          // see the order without allocation rows during reconciliation.
-        }
-      }
-    } else if (discountId) {
-      // Legacy path: just bump usedCount. Best-effort.
-      try {
-        await this.discountFacade.incrementUsedCount(discountId);
-      } catch {
-        // ignore — a retry path can be added later if needed
-      }
-    }
+    // Discount allocation + ledger + redemption, then GST tax snapshots —
+    // shared with the deferred-order materialization path (Option B Phase 1).
+    await this.runOrderDiscountAndTax({
+      result,
+      discountId,
+      allocationEnabled,
+      discountReservationId,
+      discountCode,
+      discountAmount,
+    });
 
-    // Phase 6 GST — write tax snapshots + per-sub-order + master
-    // summaries for EVERY order, with or without a discount. Runs in
-    // its own transaction; idempotent on retry (upserts on unique
-    // keys). Failure is non-fatal — order is already committed and
-    // customer was charged correctly; a recovery cron can re-run
-    // snapshot creation (Phase 19 PDF retry already polls for missing
-    // tax artefacts and triggers a retry).
-    try {
-      // Resolve tax treatment from the discount row if a discount was
-      // applied; otherwise default PRE_SUPPLY_TRANSACTIONAL has no
-      // effect (no allocation rows for the snapshot service to read).
-      let taxTreatment: 'PRE_SUPPLY_TRANSACTIONAL' | 'POST_SUPPLY_LINKED' | 'POST_SUPPLY_UNLINKED' | 'DISPLAY_ONLY' =
-        'PRE_SUPPLY_TRANSACTIONAL';
-      if (discountId) {
-        const dRow = await this.prisma.discount.findUnique({
-          where: { id: discountId },
-          select: { taxTreatment: true },
-        });
-        if (dRow?.taxTreatment) taxTreatment = dRow.taxTreatment;
-      }
-      await this.taxSnapshot.createSnapshotsForMasterOrder(
-        result.masterOrderId,
-        { taxTreatment },
-      );
-    } catch (err) {
-      this.logger.error(
-        `Tax snapshot creation failed for order ${result.masterOrderId}: ${(err as Error)?.message}`,
-        (err as Error)?.stack,
-      );
-      // Order proceeds; tax recovery cron handles missing snapshots.
-    }
-
-    // Publish domain events for order creation
-    try {
-      await this.eventBus.publish({
-        eventName: 'orders.master.created',
-        aggregate: 'MasterOrder',
-        aggregateId: result.masterOrderId,
-        occurredAt: new Date(),
-        payload: {
-          masterOrderId: result.masterOrderId,
-          orderNumber: result.orderNumber,
-          customerId: userId,
-          totalAmount: result.totalAmount,
-          itemCount: result.itemCount,
-        },
-      });
-
-      for (const so of result.createdSubOrders) {
-        await this.eventBus.publish({
-          eventName: 'orders.sub_order.created',
-          aggregate: 'SubOrder',
-          aggregateId: so.subOrderId,
-          occurredAt: new Date(),
-          payload: {
-            subOrderId: so.subOrderId,
-            masterOrderId: result.masterOrderId,
-            orderNumber: result.orderNumber,
-            sellerId: so.sellerId,
-            franchiseId: so.franchiseId,
-            fulfillmentNodeType: so.fulfillmentNodeType,
-            nodeName: so.nodeName,
-            subTotal: so.subTotal,
-            itemCount: so.itemCount,
-          },
-        });
-      }
-    } catch {
-      // Events are best-effort — do not fail the order if event publishing fails
-    }
+    // Publish domain events for order creation (shared with the deferred-order
+    // materialization path — Option B Stage 1).
+    await this.emitOrderCreatedEvents(result, userId);
 
     // For ONLINE payments: create Razorpay order and return details for frontend.
     // The gateway charges only the *payable* portion — wallet has already
@@ -1837,6 +1589,16 @@ export class CheckoutService {
           data: this.moneyDualWrite.applyPaise('masterOrder', {
             razorpayOrderId: razorpayOrder.providerOrderId,
             paymentExpiresAt,
+            // PENDING → CREATED: the gateway order intent is minted (modal not
+            // yet completed). Lets the expiry sweep / analytics distinguish
+            // "Razorpay order created, awaiting customer" from a bare PENDING.
+            // verify + webhook both accept CREATED as a pre-paid state.
+            paymentStatus: 'CREATED',
+            // Stamp the EXACT paise we asked the gateway to capture (payable
+            // = total − wallet). Written directly (passes through applyPaise
+            // untouched — not a registry field), so verify is correct for
+            // wallet-assisted orders AND independent of MONEY_DUAL_WRITE.
+            gatewayAmountInPaise: BigInt(Math.round(payableInRupees * 100)),
           }),
         });
 
@@ -2009,6 +1771,619 @@ export class CheckoutService {
   // Both calls are best-effort: a failure to finalize / write audit
   // must not break the customer's order confirmation. The recovery
   // cron picks up un-finalized orders for ops review.
+  /**
+   * Option B (Phase 2) — persist a DEFERRED online checkout: snapshot the exact
+   * order-creation input + the held reservations into a CheckoutSession, mint a
+   * Razorpay order against the SESSION (no MasterOrder yet), and return the
+   * gateway handoff. Nothing is committed — no order, no wallet debit, no
+   * discount redemption; payment success materializes it (Phase 3). Reached only
+   * behind CHECKOUT_DEFERRED_ORDER_CREATION for ONLINE orders with payable > 0.
+   *
+   * Lifecycle of the held resources (Phase-2 review notes):
+   *   • The Redis checkout session / cart is INTENTIONALLY left live (not
+   *     deleted) — Option B keeps the cart recoverable until payment succeeds;
+   *     Phase 3's materialize clears it (placeOrderTransaction deletes the cart)
+   *     and deletes the Redis session at that point. An abandoned one lapses on
+   *     its own TTL.
+   *   • Stock AND discount reservations are HELD (RESERVED, not committed). If
+   *     the customer never pays they are released by their existing TTL sweeps
+   *     (catalog releaseExpiredReservations + discounts ReleaseExpiredRedemptions
+   *     Cron) — so nothing is permanently orphaned. Phase 5 will release them
+   *     EXPLICITLY on CheckoutSession expiry (sooner than the per-row TTL);
+   *     discountReservationId is snapshotted precisely so Phase 5 can do that.
+   *   • walletDebitInPaise is also preserved on the walletApplyInPaise BigInt
+   *     column — Phase 3 should read the gateway/wallet paise from the BigInt
+   *     columns (pristine), not the snapshot's Number mirror.
+   */
+  private async createDeferredOnlineCheckout(ctx: {
+    placeInput: PlaceOrderTransactionInput;
+    addressId: string | null;
+    sessionCreatedAt: string;
+    reservationLinks: Array<{
+      productId: string;
+      variantId: string | null;
+      quantity: number;
+      reservationId: string | null;
+      allocatedNodeType: string | null;
+      allocatedSellerId: string | null;
+    }>;
+    walletDebitInPaise: number;
+    payableInRupees: number;
+    discountId: string | null;
+    allocationEnabled: boolean;
+    discountReservationId: string | null;
+  }) {
+    const {
+      placeInput,
+      addressId,
+      sessionCreatedAt,
+      reservationLinks,
+      walletDebitInPaise,
+      payableInRupees,
+      discountId,
+      allocationEnabled,
+      discountReservationId,
+    } = ctx;
+
+    const gatewayAmountInPaise = BigInt(Math.round(payableInRupees * 100));
+
+    // 1) Persist the intent (no order, no wallet debit, no discount commit).
+    const checkoutSession = await this.deferredOrderService.createSession({
+      placeInput,
+      walletApplyInPaise: BigInt(walletDebitInPaise),
+      gatewayAmountInPaise,
+      addressId,
+      windowMinutes: PAYMENT_WINDOW_MINUTES,
+      reservationLinks,
+      discountId,
+      allocationEnabled,
+      discountReservationId,
+    });
+
+    // 2) Mint the Razorpay order against the SESSION. Deterministic idempotency
+    //    key (customer + session.createdAt) so a double-submit / retry past the
+    //    @Idempotent TTL returns the same gateway order.
+    const idempotencyKey = `checkout-session-${createHash('sha256')
+      .update(`${placeInput.customerId}|${sessionCreatedAt}`)
+      .digest('hex')
+      .slice(0, 40)}`;
+    const razorpayOrder = await this.razorpayAdapter.createOrder({
+      amountInPaise: gatewayAmountInPaise,
+      receipt: checkoutSession.id,
+      notes: {
+        checkoutSessionId: checkoutSession.id,
+        customerId: placeInput.customerId,
+      },
+      idempotencyKey,
+    });
+    await this.deferredOrderService.attachRazorpayOrder(
+      checkoutSession.id,
+      razorpayOrder.providerOrderId,
+    );
+
+    // 3) Return the gateway handoff. NOTE: no orderNumber yet — the order is
+    //    created on payment success (Phase 3); the frontend keys off
+    //    checkoutSessionId and waits for the order to appear (Phase 6).
+    return {
+      checkoutSessionId: checkoutSession.id,
+      paymentMethod: 'ONLINE' as const,
+      deferred: true as const,
+      payment: {
+        razorpayOrderId: razorpayOrder.providerOrderId,
+        razorpayKeyId: this.razorpayClient.getKeyId(),
+        amount: Number(razorpayOrder.amountInPaise) / 100,
+        currency: razorpayOrder.currency,
+        expiresAt: checkoutSession.expiresAt.toISOString(),
+      },
+    };
+  }
+
+  /**
+   * Confirm seller stock reservations (deduct stockQty + link reservation→
+   * OrderItem) then debit the wallet portion — with full partial-failure
+   * rollback (cancel the order + restore confirmed stock + release franchise
+   * holds + the discount reservation). Throws BadRequestAppException on failure.
+   *
+   * Option B (Phase 1) — extracted from placeOrderLocked over a reservation-link
+   * list so the deferred-order materialization path runs the IDENTICAL sequence
+   * from a CheckoutSession snapshot (A passes the live Redis `session.items`; B
+   * passes links rebuilt from the snapshot), with no duplicated copy to drift.
+   */
+  private async confirmStockAndDebitWallet(ctx: {
+    result: PlaceOrderTransactionResult;
+    reservationLinks: Array<{
+      productId: string;
+      variantId: string | null;
+      quantity: number;
+      reservationId?: string | null;
+      allocatedNodeType?: 'SELLER' | 'FRANCHISE' | string | null;
+      allocatedSellerId?: string | null;
+    }>;
+    walletDebitInPaise: number;
+    userId: string;
+    discountReservationId: string | null;
+  }): Promise<{ walletTransactionId: string | null }> {
+    const {
+      result,
+      reservationLinks,
+      walletDebitInPaise,
+      userId,
+      discountReservationId,
+    } = ctx;
+
+    // Confirm all seller reservations (deducts from actual stockQty)
+    // Franchise reservations are already deducted via the ledger at reserve time.
+    //
+    // Phase 67 (audit Gaps #2 + #10) — partial-failure resilience:
+    //   • Each confirmation tracks success/failure so we don't pretend
+    //     all stock confirmed when item N+1 onward threw.
+    //   • The (orderItemId → reservationId) map feeds
+    //     linkStockReservationsToOrderItems so refund-by-item has a
+    //     direct FK-style pointer (Gap #10 fix).
+    //   • A partial failure cancels the order + best-effort restores
+    //     the successfully-confirmed reservations instead of leaving
+    //     a half-confirmed order in PLACED state.
+    const orderItemReservationMap: Record<string, string> = {};
+    const confirmedReservationIds: string[] = [];
+    let stockConfirmError: Error | null = null;
+    // Map: index in reservationLinks → orderItemId. We need to know the
+    // OrderItem id per reservation link so the FK linkage can be written.
+    // Build it by re-reading the order items in (subOrder, line-order).
+    const orderItemsForLinkage = await this.prisma.orderItem.findMany({
+      where: { subOrder: { masterOrderId: result.masterOrderId } },
+      select: { id: true, productId: true, variantId: true, quantity: true, subOrderId: true },
+    });
+    for (let i = 0; i < reservationLinks.length; i++) {
+      const item = reservationLinks[i];
+      if (!item) continue;
+      if (!item.reservationId) continue;
+
+      // Phase 159p (audit #3) — franchise reservations have no StockReservation
+      // entity to "confirm" (they're ledger rows), so we skip confirmReservation
+      // for them. But we DO stamp the correlation id onto the matching OrderItem
+      // (same link map the seller path uses) so the sweeper cron can tell this
+      // hold belongs to a placed order and won't release it. No
+      // confirmedReservationIds push: stockRestore.restoreForReservation is a
+      // seller-StockReservation operation and would not apply.
+      if (item.allocatedNodeType === 'FRANCHISE') {
+        const match = orderItemsForLinkage.find(
+          (oi) =>
+            oi.productId === item.productId &&
+            (oi.variantId ?? null) === (item.variantId ?? null) &&
+            oi.quantity === item.quantity &&
+            !Object.values(orderItemReservationMap).includes(item.reservationId!) &&
+            !orderItemReservationMap[oi.id],
+        );
+        if (match) {
+          orderItemReservationMap[match.id] = item.reservationId;
+        }
+        continue;
+      }
+      try {
+        await this.catalogFacade.confirmReservation(
+          item.reservationId,
+          result.masterOrderId,
+        );
+        confirmedReservationIds.push(item.reservationId);
+        // Match the first not-yet-mapped OrderItem with the same
+        // (productId, variantId, quantity). Bounded by line count.
+        const match = orderItemsForLinkage.find(
+          (oi) =>
+            oi.productId === item.productId &&
+            (oi.variantId ?? null) === (item.variantId ?? null) &&
+            oi.quantity === item.quantity &&
+            !Object.values(orderItemReservationMap).includes(item.reservationId!) &&
+            !orderItemReservationMap[oi.id],
+        );
+        if (match) {
+          orderItemReservationMap[match.id] = item.reservationId;
+        }
+      } catch (err) {
+        stockConfirmError = err as Error;
+        this.logger.error(
+          `Stock confirmation failed for reservation ${item.reservationId} on order ${result.masterOrderId} (item ${i + 1}/${reservationLinks.length}): ${(err as Error).message}`,
+        );
+        break;
+      }
+    }
+
+    // Phase 67 (audit Gap #2) — partial confirmation rollback.
+    // If any seller confirmation failed, cancel the order and undo
+    // the confirmations that already succeeded. Without this the
+    // order stayed PLACED with phantom stock consumption on items
+    // 1..N-1.
+    if (stockConfirmError) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.masterOrder.update({
+          where: { id: result.masterOrderId },
+          data: this.moneyDualWrite.applyPaise('masterOrder', {
+            orderStatus: 'CANCELLED',
+            paymentStatus: 'CANCELLED',
+          }),
+        });
+        for (const reservationId of confirmedReservationIds) {
+          try {
+            await this.stockRestore.restoreForReservation(tx, reservationId);
+          } catch (restoreErr) {
+            this.logger.warn(
+              `Stock-restore failed for reservation ${reservationId} on order ${result.masterOrderId}: ${(restoreErr as Error).message}`,
+            );
+          }
+        }
+      });
+      // Release the FRANCHISE holds placed at initiate. These are ledger
+      // reservations (no StockReservation entity), so they're untouched by the
+      // seller restoreForReservation loop above — without this they'd sit
+      // locked until the 15-min cleanup cron, stranding franchise stock for an
+      // order that's now CANCELLED. Mirrors the placeOrderTransaction-failure
+      // compensation path. Best-effort; FranchiseReservationCleanupService is
+      // the TTL backstop.
+      for (const item of reservationLinks) {
+        if (item.allocatedNodeType === 'FRANCHISE' && item.allocatedSellerId) {
+          try {
+            await this.franchiseFacade.unreserveStock(
+              item.allocatedSellerId,
+              item.productId,
+              item.variantId,
+              item.quantity,
+              item.reservationId ?? undefined,
+            );
+          } catch {
+            /* best-effort — cleanup cron releases stragglers */
+          }
+        }
+      }
+      // Release the discount reservation too — order is dead.
+      if (discountReservationId) {
+        try {
+          await this.discountReservation.release({
+            redemptionId: discountReservationId,
+            reason: 'CHECKOUT_FAILED',
+          });
+        } catch { /* ignore */ }
+      }
+      throw new BadRequestAppException(
+        `Stock confirmation failed: ${stockConfirmError.message}. Order has been cancelled.`,
+      );
+    }
+
+    // Phase 67 (audit Gap #10) — stamp the reservation id back onto
+    // each OrderItem so refund-by-item has a direct pointer. Best-
+    // effort: a failure here doesn't unwind the order (refunds can
+    // still derive via the older mappingId lookup).
+    if (Object.keys(orderItemReservationMap).length > 0) {
+      try {
+        await this.repo.linkStockReservationsToOrderItems(
+          result.masterOrderId,
+          orderItemReservationMap,
+        );
+      } catch (err) {
+        this.logger.warn(
+          `linkStockReservationsToOrderItems failed for ${result.masterOrderId}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    // Wallet debit — runs AFTER the order is committed so the ledger
+    // entry references a real order id. If it fails (e.g. balance race
+    // lost the optimistic-lock retry budget), cancel the order AND
+    // restore the stock that was just confirmed above. Pre-Follow-up
+    // #H8, the cancel happened but the stock stayed deducted, leaving
+    // the catalog ledger short until manual cleanup.
+    let walletTransactionId: string | null = null;
+    if (walletDebitInPaise > 0) {
+      try {
+        const debitResult = await this.walletFacade.debitForCheckout({
+          userId,
+          amountInPaise: walletDebitInPaise,
+          orderId: result.masterOrderId,
+          orderNumber: result.orderNumber,
+          description: `Order ${result.orderNumber} — wallet portion`,
+        });
+        walletTransactionId = debitResult.transaction.id;
+        // Phase 184 (#2/#3) — snapshot the authoritative wallet portion + the
+        // linked ledger row on the order. Non-fatal if it fails (the refund
+        // calculator falls back to the ledger query); log loudly.
+        await this.prisma.masterOrder
+          .update({
+            where: { id: result.masterOrderId },
+            data: {
+              walletAmountUsedInPaise: BigInt(walletDebitInPaise),
+              walletTransactionId,
+            },
+          })
+          .catch((snapErr) =>
+            this.logger.warn(
+              `Wallet-usage snapshot failed for order ${result.masterOrderId}: ${(snapErr as Error).message}`,
+            ),
+          );
+      } catch (err) {
+        // Follow-up #H8 — flip the order status + restore stock atomically.
+        // Seller reservations were CONFIRMED above (lines 963-970), so
+        // `restoreForReservation` undoes both the stockQty + variant.stock
+        // decrements. Franchise items had their stock deducted at reserve
+        // time and need an explicit `unreserveStock` to release.
+        await this.prisma.$transaction(async (tx) => {
+          await tx.masterOrder.update({
+            where: { id: result.masterOrderId },
+            data: this.moneyDualWrite.applyPaise('masterOrder', {
+              orderStatus: 'CANCELLED',
+              paymentStatus: 'CANCELLED',
+            }),
+          });
+          for (const item of reservationLinks) {
+            if (item.allocatedNodeType === 'FRANCHISE') continue;
+            if (!item.reservationId) continue;
+            try {
+              await this.stockRestore.restoreForReservation(
+                tx,
+                item.reservationId,
+              );
+            } catch (restoreErr) {
+              // Log + continue: a partial restore is still better than no
+              // restore, and the cron sweepers will catch stragglers.
+              this.logger.warn(
+                `H8 stock-restore failed for reservation ${item.reservationId} on order ${result.masterOrderId}: ${
+                  (restoreErr as Error).message
+                }`,
+              );
+            }
+          }
+        });
+
+        // Franchise reservations release outside the tx — the franchise
+        // facade owns its own transaction boundary. Best-effort; the
+        // FranchiseReservationCleanupService picks up stragglers.
+        for (const item of reservationLinks) {
+          if (item.allocatedNodeType !== 'FRANCHISE') continue;
+          if (!item.allocatedSellerId) continue;
+          try {
+            await this.franchiseFacade.unreserveStock(
+              item.allocatedSellerId,
+              item.productId,
+              item.variantId,
+              item.quantity,
+              // Phase 159p (audit #3) — correlation id so the release matches
+              // the reserve row for the sweeper's follow-up check.
+              item.reservationId ?? undefined,
+            );
+          } catch (unrErr) {
+            this.logger.warn(
+              `H8 franchise unreserve failed for order ${result.masterOrderId}: ${
+                (unrErr as Error).message
+              }`,
+            );
+          }
+        }
+
+        throw new BadRequestAppException(
+          `Wallet debit failed: ${(err as Error).message}. Order cancelled and stock restored.`,
+        );
+      }
+    }
+
+    return { walletTransactionId };
+  }
+
+  /**
+   * Per-item discount allocation + liability ledger + redemption commit (or the
+   * legacy usedCount bump), then GST tax snapshots. Both steps are best-effort:
+   * the order is already committed and the customer charged correctly, so a
+   * failure logs / emits for a recovery cron rather than unwinding the order.
+   *
+   * Option B (Phase 1) — extracted from placeOrderLocked so the deferred-order
+   * materialization path runs the IDENTICAL sequence from a CheckoutSession
+   * snapshot, with no duplicated copy to drift. Session-free by construction
+   * (keys only on the order result + discount inputs).
+   */
+  private async runOrderDiscountAndTax(ctx: {
+    result: PlaceOrderTransactionResult;
+    discountId: string | null;
+    allocationEnabled: boolean;
+    discountReservationId: string | null;
+    discountCode: string | null;
+    discountAmount: number;
+  }): Promise<void> {
+    const {
+      result,
+      discountId,
+      allocationEnabled,
+      discountReservationId,
+      discountCode,
+      discountAmount,
+    } = ctx;
+
+    // Phase B (P0.1, P0.5) — allocation + ledger + redemption.
+    //
+    // When the allocation feature flag is ON: write the full per-item
+    // discount allocation, GST snapshots, and liability ledger rows,
+    // then mark the redemption REDEEMED. All in one transaction; on
+    // failure the order is still committed (customer charged correctly,
+    // MasterOrder.discountAmount preserved) but the per-item ledger
+    // is missing — a recovery cron will retry.
+    //
+    // When the flag is OFF: legacy path — bump usedCount directly.
+    if (discountId && allocationEnabled && discountReservationId) {
+      try {
+        await this.discountAllocation.allocateAndPersist({
+          masterOrderId: result.masterOrderId,
+          discountId,
+          discountCode,
+          redemptionId: discountReservationId,
+          discountAmountInPaise: BigInt(Math.round(discountAmount * 100)),
+          // For now we only support order-level percent/fixed via
+          // checkout. BXGY allocation needs the resolved get-eligible
+          // set passed in via DiscountPublicFacade.validateCouponForCheckout
+          // — extending that response shape is a follow-up.
+          discountType: 'AMOUNT_OFF_ORDER',
+          discountMethod: 'CODE',
+          // Phase 62 — pass through the affiliate-aware source so
+          // allocation rows + ledger entries carry the right tag
+          // (audit Gap #16). Re-read here because the reservation
+          // branch's local var is out of scope.
+          // Phase 247-FB — ALSO read the discount's ACTUAL funding config.
+          // Previously this hardcoded `{ fundingType: 'PLATFORM' }`, so a
+          // SELLER/BRAND/SHARED/FRANCHISE-funded campaign was silently
+          // booked as PLATFORM at allocation — the funding the admin set
+          // never reached the liability ledger (a real cost-attribution
+          // leak). We now thread the real split + franchise/brand ids.
+          ...(await (async () => {
+            const d = await this.prisma.discount.findUnique({
+              where: { id: discountId },
+              select: {
+                affiliateId: true,
+                fundingType: true,
+                platformFundingPercent: true,
+                sellerFundingPercent: true,
+                brandFundingPercent: true,
+                franchiseFundingPercent: true,
+                franchiseId: true,
+                brandId: true,
+              },
+            });
+            return {
+              source: d?.affiliateId
+                ? ('AFFILIATE' as const)
+                : ('CODE' as const),
+              funding: {
+                fundingType: (d?.fundingType as any) ?? 'PLATFORM',
+                platformFundingPercent: Number(d?.platformFundingPercent ?? 100),
+                sellerFundingPercent: Number(d?.sellerFundingPercent ?? 0),
+                brandFundingPercent: Number(d?.brandFundingPercent ?? 0),
+                franchiseFundingPercent: Number(
+                  d?.franchiseFundingPercent ?? 0,
+                ),
+                franchiseId: d?.franchiseId ?? null,
+                brandId: d?.brandId ?? null,
+              },
+            };
+          })()),
+        });
+      } catch (err) {
+        // Order is committed and customer was charged correctly.
+        // Allocation rows are missing — log + emit an outbox event
+        // for the recovery worker. Don't fail the response.
+        // (See Phase E P1.1 for the recovery handler.)
+        this.logger.error(
+          `Discount allocation failed for order ${result.masterOrderId} ` +
+          `(discountId=${discountId}, redemptionId=${discountReservationId}): ` +
+          `${(err as Error)?.message}`,
+          (err as Error)?.stack,
+        );
+        try {
+          await this.eventBus.publish({
+            eventName: 'discount.allocation.failed',
+            aggregate: 'MasterOrder',
+            aggregateId: result.masterOrderId,
+            occurredAt: new Date(),
+            payload: {
+              masterOrderId: result.masterOrderId,
+              discountId,
+              redemptionId: discountReservationId,
+              discountAmount,
+              error: (err as Error)?.message,
+            },
+          });
+        } catch {
+          // best-effort — if outbox is also down, the operator will
+          // see the order without allocation rows during reconciliation.
+        }
+      }
+    } else if (discountId) {
+      // Legacy path: just bump usedCount. Best-effort.
+      try {
+        await this.discountFacade.incrementUsedCount(discountId);
+      } catch {
+        // ignore — a retry path can be added later if needed
+      }
+    }
+
+    // Phase 6 GST — write tax snapshots + per-sub-order + master
+    // summaries for EVERY order, with or without a discount. Runs in
+    // its own transaction; idempotent on retry (upserts on unique
+    // keys). Failure is non-fatal — order is already committed and
+    // customer was charged correctly; a recovery cron can re-run
+    // snapshot creation (Phase 19 PDF retry already polls for missing
+    // tax artefacts and triggers a retry).
+    try {
+      // Resolve tax treatment from the discount row if a discount was
+      // applied; otherwise default PRE_SUPPLY_TRANSACTIONAL has no
+      // effect (no allocation rows for the snapshot service to read).
+      let taxTreatment: 'PRE_SUPPLY_TRANSACTIONAL' | 'POST_SUPPLY_LINKED' | 'POST_SUPPLY_UNLINKED' | 'DISPLAY_ONLY' =
+        'PRE_SUPPLY_TRANSACTIONAL';
+      if (discountId) {
+        const dRow = await this.prisma.discount.findUnique({
+          where: { id: discountId },
+          select: { taxTreatment: true },
+        });
+        if (dRow?.taxTreatment) taxTreatment = dRow.taxTreatment;
+      }
+      await this.taxSnapshot.createSnapshotsForMasterOrder(
+        result.masterOrderId,
+        { taxTreatment },
+      );
+    } catch (err) {
+      this.logger.error(
+        `Tax snapshot creation failed for order ${result.masterOrderId}: ${(err as Error)?.message}`,
+        (err as Error)?.stack,
+      );
+      // Order proceeds; tax recovery cron handles missing snapshots.
+    }
+  }
+
+  /**
+   * Emit the order-creation domain events (orders.master.created + one
+   * orders.sub_order.created per sub-order). Best-effort — a publish failure
+   * must never fail an already-committed order.
+   *
+   * Option B (Stage 1) — extracted from placeOrderLocked so the deferred-order
+   * materialization path emits the IDENTICAL events from a CheckoutSession
+   * snapshot, with no duplicated copy to drift. Session-free by construction
+   * (keys only on the placeOrderTransaction result + customer id).
+   */
+  private async emitOrderCreatedEvents(
+    result: PlaceOrderTransactionResult,
+    userId: string,
+  ): Promise<void> {
+    try {
+      await this.eventBus.publish({
+        eventName: 'orders.master.created',
+        aggregate: 'MasterOrder',
+        aggregateId: result.masterOrderId,
+        occurredAt: new Date(),
+        payload: {
+          masterOrderId: result.masterOrderId,
+          orderNumber: result.orderNumber,
+          customerId: userId,
+          totalAmount: result.totalAmount,
+          itemCount: result.itemCount,
+        },
+      });
+
+      for (const so of result.createdSubOrders) {
+        await this.eventBus.publish({
+          eventName: 'orders.sub_order.created',
+          aggregate: 'SubOrder',
+          aggregateId: so.subOrderId,
+          occurredAt: new Date(),
+          payload: {
+            subOrderId: so.subOrderId,
+            masterOrderId: result.masterOrderId,
+            orderNumber: result.orderNumber,
+            sellerId: so.sellerId,
+            franchiseId: so.franchiseId,
+            fulfillmentNodeType: so.fulfillmentNodeType,
+            nodeName: so.nodeName,
+            subTotal: so.subTotal,
+            itemCount: so.itemCount,
+          },
+        });
+      }
+    } catch {
+      // Events are best-effort — do not fail the order if event publishing fails
+    }
+  }
+
   private async finalizeAndAuditOrder(input: {
     masterOrderId: string;
     orderNumber: string;
@@ -2062,6 +2437,25 @@ export class CheckoutService {
       razorpaySignature: string;
     },
   ) {
+    // Option B (Phase 3) — deferred path. When the flag is on and this Razorpay
+    // order belongs to a CheckoutSession (no MasterOrder was created at
+    // checkout), validate the payment and MATERIALIZE the order from the
+    // session. Falls through to the legacy MasterOrder path otherwise.
+    if (this.deferredOrderService.enabled()) {
+      const deferredSession =
+        await this.deferredOrderService.findByRazorpayOrderId(
+          input.razorpayOrderId,
+          userId,
+        );
+      if (deferredSession) {
+        return await this.verifyAndMaterializeDeferred(
+          userId,
+          input,
+          deferredSession,
+        );
+      }
+    }
+
     const order = await this.prisma.masterOrder.findFirst({
       where: {
         customerId: userId,
@@ -2137,7 +2531,14 @@ export class CheckoutService {
             `(razorpay_order ${input.razorpayOrderId}, payment ${input.razorpayPaymentId}). ` +
             `Computed HMAC did not match the signature provided.`,
         })
-        .catch(() => undefined);
+        // Money-safety alert: a write failure must NOT be silent — log LOUDLY
+        // so a degraded alert store is visible to ops (the throw below is the
+        // load-bearing guard; this just preserves observability).
+        .catch((alertErr) =>
+          this.logger.error(
+            `Failed to record SIGNATURE_INVALID alert for ${order.orderNumber}: ${(alertErr as Error)?.message ?? alertErr}`,
+          ),
+        );
       throw new BadRequestAppException('Payment verification failed — invalid signature');
     }
 
@@ -2177,7 +2578,11 @@ export class CheckoutService {
 
     try {
       assertGatewayPaymentMatchesOrder(gatewayPayment, {
-        totalAmountInPaise: BigInt(order.totalAmountInPaise),
+        // The gateway was charged the PAYABLE (total − wallet), not the full
+        // order total. Comparing against totalAmountInPaise rejected every
+        // wallet-assisted online payment. resolveExpectedGatewayPaise reads
+        // the authoritative gatewayAmountInPaise (or the net fallback).
+        expectedAmountInPaise: resolveExpectedGatewayPaise(order),
         razorpayOrderId: input.razorpayOrderId,
       });
     } catch (err: any) {
@@ -2204,14 +2609,22 @@ export class CheckoutService {
           // Phase 165 (#12) — pass BigInt paise directly; the facade accepts
           // number | bigint | string, so we avoid the lossy Number() coercion
           // that truncated amounts above ~₹90L.
-          expectedInPaise: BigInt(order.totalAmountInPaise),
+          // Report the GATEWAY-expected amount (payable), not the full order
+          // total, so finance sees the real comparison baseline.
+          expectedInPaise: resolveExpectedGatewayPaise(order),
           actualInPaise: gatewayPayment.amount,
           severity: 95,
           description:
             `Gateway verification rejected for order ${order.orderNumber}: ${err.message} ` +
             `(razorpay_order ${input.razorpayOrderId}, payment ${input.razorpayPaymentId}).`,
         })
-        .catch(() => undefined);
+        // Money-safety alert (AMOUNT_MISMATCH/SIGNATURE) — log on write failure
+        // instead of swallowing, so finance loses no visibility on anomalies.
+        .catch((alertErr) =>
+          this.logger.error(
+            `Failed to record gateway-mismatch alert for ${order.orderNumber}: ${(alertErr as Error)?.message ?? alertErr}`,
+          ),
+        );
       throw err;
     }
 
@@ -2306,7 +2719,8 @@ export class CheckoutService {
         status: 'SUCCESS',
         providerOrderId: input.razorpayOrderId,
         providerPaymentId: input.razorpayPaymentId,
-        amountInPaise: BigInt(order.totalAmountInPaise),
+        // The captured (gateway) amount = payable, not the full order total.
+        amountInPaise: resolveExpectedGatewayPaise(order),
       })
       .catch(() => undefined);
 
@@ -2324,7 +2738,17 @@ export class CheckoutService {
           amount: Number(order.totalAmount),
         },
       })
-      .catch(() => {});
+      // The order is already durably PAID at this point. If this publish fails
+      // (or the process dies before it), downstream effects (commission lock,
+      // confirmation email, loyalty) are missed and the poller won't re-find
+      // the order (razorpayPaymentId is set). Log LOUDLY so ops can replay.
+      // The durable exactly-once fix is the transactional outbox (OUTBOX_ENABLED)
+      // — emit the event in the same tx as the CAS flip; tracked separately.
+      .catch((pubErr) =>
+        this.logger.error(
+          `payments.payment.captured publish FAILED for PAID order ${order.orderNumber}: ${(pubErr as Error)?.message ?? pubErr} — downstream side-effects may be missed`,
+        ),
+      );
 
     // Phase 165 (#15) — compliance audit on a successful payment verification
     // (PaymentAttempt is observability; this is the actor-attributed ledger).
@@ -2360,6 +2784,490 @@ export class CheckoutService {
    * Creates a fresh Razorpay order (idempotent — Razorpay allows multiple
    * orders for the same receipt) and returns new payment details.
    */
+  /**
+   * Option B (Phase 4) — ASYNC materialize entry for the GATEWAY-TRUSTED paths
+   * (the Razorpay webhook + the deferred-capture recovery cron). Unlike the sync
+   * customer verify there is no HMAC signature to check (that only exists on the
+   * browser redirect); trust comes from the webhook's own signature check / the
+   * cron's direct gateway poll, PLUS a re-fetch here that asserts the captured
+   * amount equals the session's gateway amount. Looks the session up by
+   * razorpayOrderId (gateway-trusted; no customer scope). Returns the order on
+   * success, or null when no session owns this order id, the session is already
+   * terminal, the gateway amount can't be confirmed, or a concurrent caller is
+   * still materializing. NEVER throws — async callers log + rely on the backstop
+   * cron; materialize() itself marks the session FAILED on refundable errors.
+   */
+  async materializeFromGateway(
+    razorpayOrderId: string,
+    razorpayPaymentId: string,
+  ): Promise<{ masterOrderId: string; orderNumber: string } | null> {
+    const session =
+      await this.deferredOrderService.findByRazorpayOrderId(razorpayOrderId);
+    if (!session) {
+      // No deferred session owns this gateway order — a genuine legacy orphan
+      // (the legacy webhook/poller path handles those). Nothing to do here.
+      return null;
+    }
+
+    // Already materialized — idempotent success.
+    if (session.status === 'ORDER_CREATED' && session.masterOrderId) {
+      const existing = await this.prisma.masterOrder.findUnique({
+        where: { id: session.masterOrderId },
+        select: { id: true, orderNumber: true },
+      });
+      if (existing) {
+        return { masterOrderId: existing.id, orderNumber: existing.orderNumber };
+      }
+    }
+
+    // Terminal non-creatable states — a captured payment against an expired or
+    // already-failed session is a Phase-5 refund concern, not a materialize.
+    // A capture on an EXPIRED session that never claimed (no razorpayPaymentId)
+    // is a late capture (delayed webhook / async settle) whose money would
+    // otherwise be stranded — stamp it FAILED + the payment id so the Phase-5
+    // refund sweep refunds it. FAILED sessions already carry the payment id and
+    // are already in the refund queue.
+    if (session.status === 'EXPIRED' || session.status === 'FAILED') {
+      if (!session.razorpayPaymentId) {
+        await this.deferredOrderService.markFailedAwaitingRefund(
+          session.id,
+          razorpayPaymentId,
+          `late capture on ${session.status} session`,
+        );
+        this.logger.warn(
+          `materializeFromGateway: late capture on ${session.status} session ` +
+            `${session.id} → FAILED for refund (payment ${razorpayPaymentId}).`,
+        );
+      } else {
+        this.logger.warn(
+          `materializeFromGateway: session ${session.id} is ${session.status} ` +
+            `(already tracks payment ${session.razorpayPaymentId}); skipping.`,
+        );
+      }
+      return null;
+    }
+
+    // Gateway-truth amount check — re-fetch + assert the captured amount equals
+    // the session's gateway amount (a ₹1 payment must not unlock a ₹10k order).
+    // A fetch failure is transient (the cron retries); a captured-but-wrong-
+    // amount is a MONEY ANOMALY → open a finance alert (parity with the legacy
+    // verify/orphan paths) so it's visible on the payment-ops dashboard. Either
+    // way we do NOT materialize; the session stays CREATED → expires → Phase-5
+    // refunds the captured payment (the safe outcome for a bad amount).
+    let gatewayPayment: Awaited<ReturnType<RazorpayAdapter['getRawPayment']>>;
+    try {
+      gatewayPayment =
+        await this.razorpayAdapter.getRawPayment(razorpayPaymentId);
+    } catch (err) {
+      this.logger.error(
+        `materializeFromGateway: gateway fetch failed for session ` +
+          `${session.id} (payment ${razorpayPaymentId}): ${(err as Error).message}`,
+      );
+      return null;
+    }
+    try {
+      assertGatewayPaymentMatchesOrder(gatewayPayment, {
+        expectedAmountInPaise: BigInt(session.gatewayAmountInPaise),
+        razorpayOrderId,
+      });
+    } catch (err: any) {
+      if (err?.code === 'GATEWAY_AMOUNT_MISMATCH') {
+        // Captured amount ≠ what we asked the gateway to charge — finance must
+        // see this (the legacy sync verify + orphan poller both alert here).
+        this.paymentOpsFacade
+          .flagMismatch({
+            kind: 'AMOUNT_MISMATCH',
+            masterOrderId: null,
+            orderNumber: null,
+            providerPaymentId: razorpayPaymentId,
+            expectedInPaise: BigInt(session.gatewayAmountInPaise),
+            actualInPaise: gatewayPayment.amount,
+            severity: 95,
+            description:
+              `Deferred-checkout amount mismatch for session ${session.id}: ${err.message} ` +
+              `(razorpay_order ${razorpayOrderId}, payment ${razorpayPaymentId}). ` +
+              `Order NOT materialized; session left for Phase-5 refund.`,
+          })
+          .catch((alertErr) =>
+            this.logger.error(
+              `materializeFromGateway: failed to record mismatch alert for ` +
+                `session ${session.id}: ${(alertErr as Error)?.message ?? alertErr}`,
+            ),
+          );
+      }
+      this.logger.error(
+        `materializeFromGateway: gateway validation failed for session ` +
+          `${session.id} (payment ${razorpayPaymentId}): ${err?.message ?? err}`,
+      );
+      return null;
+    }
+
+    try {
+      return await this.materializeOrderFromSession(session, {
+        razorpayPaymentId,
+      });
+    } catch (err) {
+      // materialize already marked the session FAILED (Phase-5 auto-refund).
+      this.logger.error(
+        `materializeFromGateway: materialize threw for session ${session.id} ` +
+          `(payment ${razorpayPaymentId}): ${(err as Error).message}`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Option B (Phase 3) — verify a captured payment for a DEFERRED checkout and
+   * materialize the order from its CheckoutSession. Mirrors the legacy verify's
+   * security checks (HMAC signature + gateway-amount re-fetch) but against the
+   * session's gatewayAmountInPaise (no MasterOrder exists yet).
+   *
+   * NOTE: the HMAC + gateway-amount validation is intentionally DUPLICATED from
+   * the legacy MasterOrder verify path to keep that hardened path untouched —
+   * KEEP THE TWO IN SYNC (deduping into a shared validator is a tracked cleanup).
+   */
+  private async verifyAndMaterializeDeferred(
+    userId: string,
+    input: {
+      razorpayOrderId: string;
+      razorpayPaymentId: string;
+      razorpaySignature: string;
+    },
+    session: DeferredCheckoutSession,
+  ) {
+    // Already materialized — idempotent success.
+    if (session.status === 'ORDER_CREATED' && session.masterOrderId) {
+      const existing = await this.prisma.masterOrder.findUnique({
+        where: { id: session.masterOrderId },
+        select: { orderNumber: true, totalAmount: true },
+      });
+      if (existing) {
+        return {
+          verified: true,
+          orderNumber: existing.orderNumber,
+          totalAmount: Number(existing.totalAmount),
+          paymentId: input.razorpayPaymentId,
+        };
+      }
+    }
+
+    if (session.expiresAt && new Date() > session.expiresAt) {
+      throw new BadRequestAppException(
+        'Payment window has expired. Please place a new order.',
+      );
+    }
+
+    // HMAC signature — fail-closed, constant-time (mirrors the legacy verify).
+    const keySecret = this.razorpayClient.getKeySecret();
+    if (!keySecret) {
+      throw new BadRequestAppException(
+        'Payment verification unavailable — gateway not configured',
+      );
+    }
+    const expectedSignature = crypto
+      .createHmac('sha256', keySecret)
+      .update(`${input.razorpayOrderId}|${input.razorpayPaymentId}`)
+      .digest('hex');
+    const expectedBuf = Buffer.from(expectedSignature, 'utf8');
+    const actualBuf = Buffer.from(input.razorpaySignature, 'utf8');
+    const isValidSignature =
+      expectedBuf.length === actualBuf.length &&
+      crypto.timingSafeEqual(expectedBuf, actualBuf);
+    if (!isValidSignature) {
+      this.logger.error(
+        `Deferred verify: invalid signature for session ${session.id} ` +
+          `(razorpay_order ${input.razorpayOrderId}, payment ${input.razorpayPaymentId})`,
+      );
+      throw new BadRequestAppException(
+        'Payment verification failed — invalid signature',
+      );
+    }
+
+    // Gateway-truth amount check — the HMAC only proves the (order,payment) pair
+    // is from Razorpay; re-fetch + assert the captured amount equals the
+    // session's gateway amount so a ₹1 payment can't unlock a ₹10k order.
+    let gatewayPayment: Awaited<ReturnType<RazorpayAdapter['getRawPayment']>>;
+    try {
+      gatewayPayment = await this.razorpayAdapter.getRawPayment(
+        input.razorpayPaymentId,
+      );
+    } catch (err: any) {
+      this.logger.error(
+        `Deferred verify: gateway fetchPayment failed for ${input.razorpayPaymentId}: ${err?.message ?? err}`,
+      );
+      throw new BadRequestAppException(
+        'Payment verification failed — could not confirm with gateway. Please retry shortly.',
+      );
+    }
+    assertGatewayPaymentMatchesOrder(gatewayPayment, {
+      expectedAmountInPaise: BigInt(session.gatewayAmountInPaise),
+      razorpayOrderId: input.razorpayOrderId,
+    });
+
+    // Validated — materialize (exactly-once via the session CAS).
+    let res: { masterOrderId: string; orderNumber: string } | null;
+    try {
+      res = await this.materializeOrderFromSession(session, {
+        razorpayPaymentId: input.razorpayPaymentId,
+      });
+    } catch (err) {
+      // materialize already marked the session FAILED (Phase-5 auto-refund).
+      this.logger.error(
+        `Deferred verify: materialize threw for session ${session.id}: ${(err as Error).message}`,
+      );
+      throw new BadRequestAppException(
+        'Your payment succeeded but the order could not be created. A refund will be issued automatically.',
+      );
+    }
+    if (!res) {
+      // A concurrent caller (webhook/poller) claimed it and is still creating
+      // the order — tell the client to poll (Phase 6 wires the wait-for-order).
+      throw new ConflictAppException(
+        'Payment received — your order is being created. Please refresh in a moment.',
+      );
+    }
+    return {
+      verified: true,
+      orderNumber: res.orderNumber,
+      totalAmount: Number(session.totalAmountInPaise) / 100,
+      paymentId: input.razorpayPaymentId,
+    };
+  }
+
+  /**
+   * Option B (Phase 3) — MATERIALIZE the real order from a captured
+   * CheckoutSession. The exactly-once guard is claimForMaterialization (atomic
+   * CREATED→PAID); only the winner runs the (non-idempotent) order side-effects.
+   * Reuses the SAME shared methods the legacy place-order path uses, then flips
+   * the just-created order to PLACED/PAID (payment already captured). On any
+   * failure the session is marked FAILED (Phase-5 auto-refund) and the error is
+   * re-thrown. Returns null when a concurrent caller is still materializing.
+   */
+  private async materializeOrderFromSession(
+    session: DeferredCheckoutSession,
+    args: { razorpayPaymentId: string },
+  ): Promise<{ masterOrderId: string; orderNumber: string } | null> {
+    const { razorpayPaymentId } = args;
+
+    // Fast-path: already materialized.
+    if (session.status === 'ORDER_CREATED' && session.masterOrderId) {
+      const existing = await this.prisma.masterOrder.findUnique({
+        where: { id: session.masterOrderId },
+        select: { id: true, orderNumber: true },
+      });
+      if (existing) {
+        return { masterOrderId: existing.id, orderNumber: existing.orderNumber };
+      }
+    }
+
+    // Exactly-once CAS claim (CREATED→PAID). Losers must NOT run side-effects.
+    const { claimed } = await this.deferredOrderService.claimForMaterialization(
+      session.id,
+      razorpayPaymentId,
+    );
+    if (!claimed) {
+      const fresh = session.razorpayOrderId
+        ? await this.deferredOrderService.findByRazorpayOrderId(
+            session.razorpayOrderId,
+          )
+        : null;
+      if (fresh?.status === 'ORDER_CREATED' && fresh.masterOrderId) {
+        const existing = await this.prisma.masterOrder.findUnique({
+          where: { id: fresh.masterOrderId },
+          select: { id: true, orderNumber: true },
+        });
+        if (existing) {
+          return {
+            masterOrderId: existing.id,
+            orderNumber: existing.orderNumber,
+          };
+        }
+      }
+      // Claimed by a concurrent caller still creating the order (PAID, no
+      // masterOrderId yet) — or it crashed mid-materialize (Phase-5 reconciler
+      // finishes/refunds). Signal "in progress" to the caller.
+      return null;
+    }
+
+    // Winner — materialize from the frozen snapshot.
+    const snap = this.deferredOrderService.decodeSnapshot(session);
+
+    // ── REFUNDABLE PHASE. Everything up to and including the PLACED/PAID flip
+    //    is the "is this a valid paid order?" question. A throw here means the
+    //    order is NOT valid (stock gone, price drift, wallet race, or an admin
+    //    cancel landing in the create→flip window) → mark the session FAILED so
+    //    the Phase-5 reconciler auto-refunds the captured payment.
+    let result: Awaited<
+      ReturnType<ICheckoutRepository['placeOrderTransaction']>
+    >;
+    try {
+      result = await this.repo.placeOrderTransaction(snap.placeInput);
+
+      await this.confirmStockAndDebitWallet({
+        result,
+        reservationLinks: snap.reservationLinks,
+        walletDebitInPaise: snap.walletDebitInPaise,
+        userId: session.customerId,
+        discountReservationId: snap.discountReservationId,
+      });
+      await this.runOrderDiscountAndTax({
+        result,
+        discountId: snap.discountId,
+        allocationEnabled: snap.allocationEnabled,
+        discountReservationId: snap.discountReservationId,
+        discountCode: snap.placeInput.discountCode ?? null,
+        discountAmount: snap.placeInput.discountAmount ?? 0,
+      });
+
+      // ── THE COMMIT POINT. Flip the just-created order PENDING_PAYMENT→
+      //    PLACED/PAID (payment already captured) + stamp the gateway linkage.
+      //    CAS-guarded on the still-pending state, exactly like the legacy
+      //    verify flip: an admin cancel (rejectOrder) can land in the
+      //    create→flip window, and the guard refuses to resurrect a cancelled
+      //    order (count===0 → throw → refund).
+      const verificationSlaMinutes = Math.max(
+        1,
+        Number(process.env.VERIFICATION_SLA_MINUTES ?? 60),
+      );
+      const verificationDeadlineAt = new Date(
+        Date.now() + verificationSlaMinutes * 60 * 1000,
+      );
+      const flip = await this.prisma.masterOrder.updateMany({
+        where: {
+          id: result.masterOrderId,
+          orderStatus: 'PENDING_PAYMENT',
+          paymentStatus: { in: ['PENDING', 'CREATED'] as any },
+        },
+        data: this.moneyDualWrite.applyPaise('masterOrder', {
+          orderStatus: 'PLACED',
+          paymentStatus: 'PAID',
+          razorpayOrderId: session.razorpayOrderId,
+          razorpayPaymentId,
+          gatewayAmountInPaise: BigInt(session.gatewayAmountInPaise),
+          verificationDeadlineAt,
+        }),
+      });
+      if (flip.count === 0) {
+        // The order we just created is no longer PENDING_PAYMENT. Only an admin
+        // cancel can do that to a brand-new order id; if it is somehow already
+        // PLACED/PAID treat as idempotently committed, otherwise refuse to
+        // resurrect it and refund.
+        const fresh = await this.prisma.masterOrder.findUnique({
+          where: { id: result.masterOrderId },
+          select: { orderStatus: true, paymentStatus: true },
+        });
+        if (
+          !(fresh?.orderStatus === 'PLACED' && fresh?.paymentStatus === 'PAID')
+        ) {
+          throw new Error(
+            `Order ${result.orderNumber} left PENDING_PAYMENT before the ` +
+              `payment flip (now ${fresh?.orderStatus}/${fresh?.paymentStatus}) — refusing to resurrect.`,
+          );
+        }
+      }
+    } catch (err) {
+      // The shared methods' own rollback already cancelled the order + restored
+      // stock where applicable; mark the session FAILED for the Phase-5
+      // reconciler to auto-refund the captured payment.
+      await this.deferredOrderService.markFailed(
+        session.id,
+        (err as Error).message,
+      );
+      this.logger.error(
+        `Materialize FAILED for session ${session.id} (payment ${razorpayPaymentId}): ${(err as Error).message} — flagged for refund.`,
+      );
+      throw err;
+    }
+
+    // ── COMMITTED. The order EXISTS and is PLACED/PAID — the customer has a
+    //    valid paid order. Everything below is propagation/linkage and must
+    //    NEVER mark the session FAILED (that would refund a real paid order) nor
+    //    throw out of materialize (verify maps a throw to "order could not be
+    //    created"). Each step is best-effort + logged; a re-verify or the
+    //    Phase-5 reconciler finishes any straggler. markOrderCreated runs first
+    //    so the session→order link is set as early as possible.
+    try {
+      await this.deferredOrderService.markOrderCreated(
+        session.id,
+        result.masterOrderId,
+      );
+    } catch (linkErr) {
+      this.logger.error(
+        `markOrderCreated failed for session ${session.id} → order ` +
+          `${result.orderNumber} (order IS paid; reconciler will link): ${(linkErr as Error).message}`,
+      );
+    }
+
+    await this.prisma.subOrder
+      .updateMany({
+        where: { masterOrderId: result.masterOrderId },
+        data: { paymentStatus: 'PAID' },
+      })
+      .catch((e) =>
+        this.logger.error(
+          `subOrder PAID flip failed for ${result.orderNumber}: ${(e as Error).message}`,
+        ),
+      );
+
+    try {
+      await this.emitOrderCreatedEvents(result, session.customerId);
+    } catch (evErr) {
+      this.logger.error(
+        `emitOrderCreatedEvents failed for materialized order ${result.orderNumber}: ${(evErr as Error).message}`,
+      );
+    }
+
+    // Payment shadow rows — payment-ops parity with the legacy path.
+    if (session.razorpayOrderId) {
+      try {
+        await this.paymentLifecycle.recordOnlinePaymentCreated({
+          masterOrderId: result.masterOrderId,
+          amountInPaise: BigInt(session.gatewayAmountInPaise),
+          providerOrderId: session.razorpayOrderId,
+          idempotencyKey: `materialize-${session.id}`,
+          expiresAt: session.expiresAt,
+        });
+        await this.paymentLifecycle.markCaptured({
+          providerOrderId: session.razorpayOrderId,
+          providerPaymentId: razorpayPaymentId,
+        });
+      } catch (payErr) {
+        this.logger.error(
+          `payment shadow-row update failed for materialized order ${result.orderNumber}: ${(payErr as Error).message}`,
+        );
+      }
+    }
+
+    // Drive downstream (commission lock, confirmation email, loyalty).
+    this.eventBus
+      .publish({
+        eventName: 'payments.payment.captured',
+        aggregate: 'MasterOrder',
+        aggregateId: result.masterOrderId,
+        occurredAt: new Date(),
+        payload: {
+          masterOrderId: result.masterOrderId,
+          orderNumber: result.orderNumber,
+          customerId: session.customerId,
+          paymentId: razorpayPaymentId,
+          amount: result.totalAmount,
+        },
+      })
+      .catch((pubErr) =>
+        this.logger.error(
+          `captured-event publish failed for materialized order ${result.orderNumber}: ${(pubErr as Error).message}`,
+        ),
+      );
+
+    this.logger.log(
+      `Materialized order ${result.orderNumber} from checkout session ${session.id} (payment ${razorpayPaymentId}).`,
+    );
+    return {
+      masterOrderId: result.masterOrderId,
+      orderNumber: result.orderNumber,
+    };
+  }
+
   async retryPayment(userId: string, orderNumber: string) {
     const order = await this.prisma.masterOrder.findFirst({
       where: {
@@ -2391,10 +3299,16 @@ export class CheckoutService {
     });
     const idempotencyKey = `checkout-order-${order.id}-retry-${retryIndex}`;
 
+    // Charge the PAYABLE (total − wallet), NOT the full total. The wallet
+    // portion was already debited at place-order; re-charging the full amount
+    // on retry would over-collect and then fail verification.
+    // resolveExpectedGatewayPaise returns the original gatewayAmountInPaise
+    // (or the net fallback for rows predating that column).
+    const gatewayChargeInPaise = resolveExpectedGatewayPaise(order);
+
     // Create a new Razorpay order (previous one may have expired on Razorpay side).
-    // Phase 0 (PR 0.5) — pass paise from the order's BigInt column directly.
     const razorpayOrder = await this.razorpayAdapter.createOrder({
-      amountInPaise: BigInt(order.totalAmountInPaise),
+      amountInPaise: gatewayChargeInPaise,
       receipt: order.orderNumber,
       notes: {
         masterOrderId: order.id,
@@ -2414,6 +3328,8 @@ export class CheckoutService {
       data: this.moneyDualWrite.applyPaise('masterOrder', {
         razorpayOrderId: razorpayOrder.providerOrderId,
         paymentExpiresAt: newExpiry,
+        // Keep the authoritative gateway charge in sync with the new order.
+        gatewayAmountInPaise: gatewayChargeInPaise,
       }),
     });
 
@@ -2424,7 +3340,9 @@ export class CheckoutService {
     // (previously invisible — a real money-loss blind spot).
     await this.paymentLifecycle.recordOnlinePaymentCreated({
       masterOrderId: order.id,
-      amountInPaise: BigInt(order.totalAmountInPaise),
+      // Payment.amountInPaise is the amount sent to the gateway (payable),
+      // so orphan-recovery can match it against the captured amount.
+      amountInPaise: gatewayChargeInPaise,
       providerOrderId: razorpayOrder.providerOrderId,
       idempotencyKey,
       expiresAt: newExpiry,
@@ -2436,7 +3354,7 @@ export class CheckoutService {
         kind: 'CREATE_ORDER',
         status: 'SUCCESS',
         providerOrderId: razorpayOrder.providerOrderId,
-        amountInPaise: BigInt(order.totalAmountInPaise),
+        amountInPaise: gatewayChargeInPaise,
       })
       .catch(() => undefined);
 

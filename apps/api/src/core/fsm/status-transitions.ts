@@ -147,15 +147,30 @@ const FULFILLMENT_STATUS_TRANSITIONS: Record<
 
 // ── OrderPaymentStatus ────────────────────────────────────────────────────
 
-export type OrderPaymentStatus = 'PENDING' | 'PAID' | 'VOIDED' | 'CANCELLED';
+export type OrderPaymentStatus =
+  | 'CREATED'
+  | 'PENDING'
+  | 'PAID'
+  | 'EXPIRED'
+  | 'VOIDED'
+  | 'CANCELLED';
 
 const PAYMENT_STATUS_TRANSITIONS: Record<
   OrderPaymentStatus,
   readonly OrderPaymentStatus[]
 > = {
-  PENDING: ['PAID', 'VOIDED', 'CANCELLED'],
+  // ONLINE orders mint a Razorpay intent and start at CREATED ("intent minted,
+  // modal unopened" — Phase 66). Happy path is CREATED → PAID on a successful
+  // capture; PENDING is the explicit "modal opened / attempt in flight" state;
+  // the payment-expiry sweep cron routes never-paid intents to EXPIRED.
+  // CREATED + EXPIRED have been in the Prisma enum since Phase 66 but were never
+  // added to this map, so verifyPayment's CREATED → PAID (and the cron's
+  // → EXPIRED) threw "Illegal OrderPaymentStatus transition".
+  CREATED: ['PENDING', 'PAID', 'EXPIRED', 'CANCELLED'],
+  PENDING: ['PAID', 'EXPIRED', 'VOIDED', 'CANCELLED'],
   PAID: ['VOIDED'], // Refunds go through Returns; voids are admin-only
   // Terminal
+  EXPIRED: [],
   VOIDED: [],
   CANCELLED: [],
 };

@@ -107,8 +107,47 @@ export default function AccessHistoryPage() {
         )}
 
         {!loading && !error && items.length > 0 && (
-          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-            <table className="w-full text-sm">
+          <>
+          {/* Mobile: stacked cards — a 4-column table can't fit a phone
+              without clipping columns or forcing page-level horizontal scroll. */}
+          <ul className="space-y-3 sm:hidden">
+            {items.map((it) => (
+              <li key={it.id} className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+                <div className="flex items-center justify-between gap-2">
+                  <span
+                    className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium"
+                    style={{ background: KIND_COLOR[it.kind] + '15', color: KIND_COLOR[it.kind] }}
+                  >
+                    {KIND_LABEL[it.kind] ?? it.kind}
+                  </span>
+                  <span className="shrink-0 text-xs text-gray-500">{timeAgo(it.createdAt)}</span>
+                </div>
+                {it.newDevice && (
+                  <span className="mt-2 inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700">
+                    New device
+                  </span>
+                )}
+                {!it.succeeded && (
+                  <p className="mt-1 text-xs text-gray-500">This sign-in attempt did not succeed.</p>
+                )}
+                <div className="mt-3 flex flex-col gap-1.5 text-sm text-gray-700">
+                  <div className="flex items-center gap-1.5">
+                    <Monitor className="h-3.5 w-3.5 text-gray-400" />
+                    {browserOf(it.userAgent)}
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <MapPin className="h-3.5 w-3.5 text-gray-400" />
+                    <code className="text-xs">{maskIp(it.ipAddress)}</code>
+                  </div>
+                </div>
+              </li>
+            ))}
+          </ul>
+
+          {/* sm+ : the full table, scroll-wrapped so wide content scrolls
+              instead of clipping. */}
+          <div className="hidden sm:block overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
+            <table className="w-full min-w-[640px] text-sm">
               <thead className="bg-gray-50 text-xs uppercase tracking-wider text-gray-600">
                 <tr>
                   <th className="px-4 py-3 text-left">Event</th>
@@ -164,6 +203,7 @@ export default function AccessHistoryPage() {
               </tbody>
             </table>
           </div>
+          </>
         )}
       </div>
     </StorefrontShell>

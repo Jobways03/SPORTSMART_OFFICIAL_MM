@@ -79,6 +79,13 @@ function calcPasswordStrength(pwd: string): { score: number; label: string; tone
   return { score: capped, label, tone };
 }
 
+function formatMemberSince(iso?: string): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.toLocaleDateString('en-IN', { month: 'short', year: 'numeric' });
+}
+
 export default function ProfilePage() {
   const { notify } = useModal();
   const router = useRouter();
@@ -258,6 +265,7 @@ export default function ProfilePage() {
   }
 
   const strength = calcPasswordStrength(newPassword);
+  const memberSince = formatMemberSince(profile?.createdAt);
 
   return (
     <StorefrontShell>
@@ -274,6 +282,38 @@ export default function ProfilePage() {
             Update your personal information and password
           </p>
         </div>
+
+        {profile && (
+          <div className="account-hero">
+            <div className="account-hero-avatar">
+              {profile.firstName.charAt(0).toUpperCase()}
+              {profile.lastName.charAt(0).toUpperCase()}
+            </div>
+            <div className="account-hero-info">
+              <div className="account-hero-name">
+                {profile.firstName} {profile.lastName}
+              </div>
+              <div className="account-hero-meta">
+                <span className="account-hero-email">{profile.email}</span>
+                {profile.emailVerified && (
+                  <span className="account-hero-badge account-hero-badge-verified">
+                    <span className="account-hero-badge-icon">{ICONS.check}</span>
+                    Verified
+                  </span>
+                )}
+              </div>
+              {(profile.phone || memberSince) && (
+                <div className="account-hero-secondary">
+                  {profile.phone && <span>{profile.phone}</span>}
+                  {profile.phone && memberSince && (
+                    <span className="account-hero-dot">•</span>
+                  )}
+                  {memberSince && <span>Member since {memberSince}</span>}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <section className="profile-section">
           <div className="profile-section-header">

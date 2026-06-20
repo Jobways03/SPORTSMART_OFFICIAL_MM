@@ -30,6 +30,15 @@ export interface AllocatedSeller {
   // candidate with no resolvable distance is represented as `null`
   // and excluded from distance-based ranking.
   distanceKm: number | null;
+  // True when distanceKm was computed from an APPROXIMATED coordinate — the
+  // customer pincode or the node's pickup/warehouse pincode exists in the
+  // post-office master but has no coordinates of its own, so a postal-region
+  // centroid stood in (see PostOfficeCacheService.approximateByRegion). Such a
+  // distance is a coarse zone-to-zone estimate, NOT measured to the node's real
+  // location, so it can read misleadingly small. Surfaced so admin UIs can flag
+  // it and not over-trust the ranking. Absent/false ⇒ both endpoints had exact
+  // coordinates. Never set when distanceKm is null.
+  distanceApproximate?: boolean;
   dispatchSla: number;
   availableStock: number;
   estimatedDeliveryDays: number;
@@ -269,6 +278,9 @@ export class SellerAllocationService {
     const customerCoords = await this.postOfficeCache.lookup(customerPincode);
     const customerLat = customerCoords?.latitude ?? null;
     const customerLon = customerCoords?.longitude ?? null;
+    // A distance is approximate if EITHER endpoint's coords were approximated;
+    // an approximated customer pincode taints every node's distance.
+    const customerApprox = customerCoords?.approximate === true;
 
     // Phase 64 (audit Gap #19) — if PostOffice has no coords for
     // the supplied pincode, surface PINCODE_UNKNOWN. Pre-Phase-64
@@ -433,11 +445,15 @@ export class SellerAllocationService {
       let distance: number | null = null;
       let sellerLat = mapping.latitude ? Number(mapping.latitude) : null;
       let sellerLon = mapping.longitude ? Number(mapping.longitude) : null;
+      // Tracks whether the seller's coords came from a region-approximated
+      // pickup pincode (the mapping had no exact lat/long of its own).
+      let sellerApprox = false;
       if ((sellerLat == null || sellerLon == null) && mapping.pickupPincode) {
         const sellerCoords = pincodeCoords.get(mapping.pickupPincode);
         if (sellerCoords?.latitude != null && sellerCoords?.longitude != null) {
           sellerLat = sellerCoords.latitude;
           sellerLon = sellerCoords.longitude;
+          sellerApprox = sellerCoords.approximate === true;
         }
       }
       // Explicit null checks (not truthiness): a valid coordinate of exactly 0
@@ -459,6 +475,8 @@ export class SellerAllocationService {
       // Phase 230 — operationalPriority ("manual preferred seller"); >0 only.
       const priority =
         mapping.operationalPriority > 0 ? mapping.operationalPriority : undefined;
+      const distanceApproximate =
+        distance !== null && (customerApprox || sellerApprox);
       return {
         nodeType: 'SELLER' as const,
         tier,
@@ -466,6 +484,7 @@ export class SellerAllocationService {
         sellerName: mapping.seller.sellerShopName || mapping.seller.sellerName,
         mappingId: mapping.id,
         distanceKm: distance !== null ? Math.round(distance * 100) / 100 : null,
+        distanceApproximate,
         dispatchSla: mapping.dispatchSla,
         availableStock: avail,
         estimatedDeliveryDays: this.estimateDeliveryDays(distance ?? 0, mapping.dispatchSla),
@@ -480,7 +499,7 @@ export class SellerAllocationService {
             : 'distance-coverage',
           `stock-ok (${avail} avail)`,
           distance !== null
-            ? `distance ${Math.round(distance * 100) / 100}km`
+            ? `distance ${Math.round(distance * 100) / 100}km${distanceApproximate ? ' (approx)' : ''}`
             : 'distance-unknown',
           ...(priority !== undefined ? [`priority ${priority}`] : []),
         ],
@@ -519,6 +538,7 @@ export class SellerAllocationService {
       quantity,
       customerLat,
       customerLon,
+      customerApprox,
       paymentMethod,
     });
 
@@ -1323,6 +1343,9 @@ export class SellerAllocationService {
     quantity: number;
     customerLat: number | null;
     customerLon: number | null;
+    // True when the customer pincode's coords were region-approximated — taints
+    // every franchise's distance as approximate too.
+    customerApprox: boolean;
     // Phase 231 — when 'COD', exclude franchises with codEnabled=false.
     paymentMethod?: 'COD' | 'ONLINE';
   }): Promise<AllocatedSeller[]> {
@@ -1332,6 +1355,7 @@ export class SellerAllocationService {
       quantity,
       customerLat,
       customerLon,
+      customerApprox,
       customerPincode,
       paymentMethod,
     } = input;
@@ -1466,7 +1490,7 @@ export class SellerAllocationService {
     );
     const warehouseCoordsMap = new Map<
       string,
-      { latitude: number | null; longitude: number | null }
+      { latitude: number | null; longitude: number | null; approximate: boolean }
     >();
     await Promise.all(
       warehousePincodes.map(async (p) => {
@@ -1474,6 +1498,7 @@ export class SellerAllocationService {
         warehouseCoordsMap.set(p, {
           latitude: coords?.latitude ?? null,
           longitude: coords?.longitude ?? null,
+          approximate: coords?.approximate === true,
         });
       }),
     );
@@ -1488,6 +1513,7 @@ export class SellerAllocationService {
       // (franchise is nationwide so this only affects the distance score, but we
       // keep it consistent with the seller path).
       let distance: number | null = null;
+      let warehouseApprox = false;
       if (customerLat != null && customerLon != null && franchise.warehousePincode) {
         const coords = warehouseCoordsMap.get(franchise.warehousePincode);
         if (coords?.latitude != null && coords?.longitude != null) {
@@ -1497,8 +1523,11 @@ export class SellerAllocationService {
             coords.latitude,
             coords.longitude,
           );
+          warehouseApprox = coords.approximate === true;
         }
       }
+      const distanceApproximate =
+        distance !== null && (customerApprox || warehouseApprox);
 
       // Tiered cascade (2026-06-16) — Franchises ship NATIONWIDE: no distance
       // cap. (Pre-cascade this mirrored the seller 1500km cap.) Distance is
@@ -1519,6 +1548,7 @@ export class SellerAllocationService {
         franchiseId: franchise.id,
         mappingId: mapping.id,
         distanceKm: distance !== null ? Math.round(distance * 100) / 100 : null,
+        distanceApproximate,
         dispatchSla,
         availableStock: stock.availableQty,
         estimatedDeliveryDays: this.estimateDeliveryDays(distance ?? 0, dispatchSla),
@@ -1535,7 +1565,7 @@ export class SellerAllocationService {
             : 'distance-coverage',
           `stock-ok (${stock.availableQty} avail)`,
           distance !== null
-            ? `distance ${Math.round(distance * 100) / 100}km`
+            ? `distance ${Math.round(distance * 100) / 100}km${distanceApproximate ? ' (approx)' : ''}`
             : 'distance-unknown',
           `dispatch-sla ${dispatchSla}d`,
         ],

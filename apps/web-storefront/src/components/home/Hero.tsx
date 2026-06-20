@@ -118,6 +118,7 @@ export function Hero({ content = {}, slots = [] }: HeroProps) {
             slotName={slotKey}
             imageSrc={imageSrc}
             aspect="5/2"
+            aspectClassName="aspect-[4/5] sm:aspect-[16/9] md:aspect-[5/2]"
             tone="dark"
             align="bottom-left"
             headline={headline}

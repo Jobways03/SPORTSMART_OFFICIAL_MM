@@ -49,11 +49,28 @@ export class LogisticsFacadeClient {
   ) {}
 
   get baseUrl(): string {
-    return this.config.apiUrl.replace(/\/$/, '');
+    return this.requireConfigured().apiUrl.replace(/\/$/, '');
   }
 
   private get authHeader(): string {
-    return `ApiKey ${this.config.apiKey}`;
+    return `ApiKey ${this.requireConfigured().apiKey}`;
+  }
+
+  /**
+   * `apiUrl`/`apiKey` are optional at boot (unset = facade disabled, so
+   * apps/api still starts). Any real request needs them — surface a clear,
+   * actionable error here rather than a cryptic "cannot read 'replace' of
+   * undefined" deeper in the fetch path. Only reached on an actual request.
+   */
+  private requireConfigured(): { apiUrl: string; apiKey: string } {
+    const { apiUrl, apiKey } = this.config;
+    if (!apiUrl || !apiKey) {
+      throw new Error(
+        'Logistics facade is not configured: set LOGISTICS_FACADE_URL and ' +
+          'LOGISTICS_FACADE_API_KEY to use logistics-partner features.',
+      );
+    }
+    return { apiUrl, apiKey };
   }
 
   async get<T>(path: string): Promise<FacadeHttpResponse<T>> {

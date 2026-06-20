@@ -21,6 +21,11 @@ export enum CustomerOrderStatusBucket {
   ACTIVE = 'active',
   DELIVERED = 'delivered',
   CANCELLED = 'cancelled',
+  // Online-payment audit — in-flight unpaid ONLINE orders (orderStatus
+  // PENDING_PAYMENT, payment still PENDING/CREATED). Kept out of `all`/`active`
+  // so a failed/abandoned gateway payment never shows as a real "Processing"
+  // order; surfaced only in the storefront's "Complete your payment" strip.
+  AWAITING_PAYMENT = 'awaiting_payment',
 }
 
 export class ListCustomerOrdersDto {
@@ -39,7 +44,8 @@ export class ListCustomerOrdersDto {
 
   @IsOptional()
   @IsEnum(CustomerOrderStatusBucket, {
-    message: 'status must be one of: all, active, delivered, cancelled',
+    message:
+      'status must be one of: all, active, delivered, cancelled, awaiting_payment',
   })
   status?: CustomerOrderStatusBucket;
 }

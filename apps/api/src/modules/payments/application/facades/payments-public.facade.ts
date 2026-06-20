@@ -5,7 +5,10 @@ import {
   BadRequestAppException,
   NotFoundAppException,
 } from '../../../../core/exceptions';
-import { assertGatewayPaymentMatchesOrder } from '../../../../core/money/gateway-amount-verifier';
+import {
+  assertGatewayPaymentMatchesOrder,
+  resolveExpectedGatewayPaise,
+} from '../../../../core/money/gateway-amount-verifier';
 import { OrdersPublicFacade } from '../../../orders/application/facades/orders-public.facade';
 import { PaymentOpsFacade } from '../../../payments-ops/application/facades/payment-ops.facade';
 
@@ -105,7 +108,10 @@ export class PaymentsPublicFacade {
       }
       try {
         assertGatewayPaymentMatchesOrder(params.gatewaySnapshot, {
-          totalAmountInPaise: BigInt(order.totalAmountInPaise),
+          // Wallet-assisted orders are charged the PAYABLE (total − wallet) at
+          // the gateway; compare against that, not the full order total, or
+          // every part-wallet online payment fails verification.
+          expectedAmountInPaise: resolveExpectedGatewayPaise(order),
           razorpayOrderId: order.razorpayOrderId,
         });
       } catch (err: any) {
@@ -123,8 +129,8 @@ export class PaymentsPublicFacade {
             // Pass paise as BigInt directly — the facade now accepts
             // number | bigint | string, so we avoid the lossy Number()
             // coercion that previously masked the last digits of any
-            // amount > ₹9 lakh.
-            expectedInPaise: order.totalAmountInPaise,
+            // amount > ₹9 lakh. Report the GATEWAY-expected (payable) amount.
+            expectedInPaise: resolveExpectedGatewayPaise(order),
             actualInPaise: BigInt(params.gatewaySnapshot.amount),
             severity: 95, // top of the queue — money safety
             description:
@@ -231,11 +237,13 @@ export class PaymentsPublicFacade {
       },
     );
     if (!flipped) {
-      // A concurrent caller already moved it out of PENDING/FAILED (e.g. a
-      // captured event won the race). Don't emit a duplicate failed event.
+      // Either this exact declined attempt was already recorded (idempotent
+      // redelivery) or the order is no longer in a pre-paid state (a captured
+      // event won the race, or it expired / was cancelled). Either way, don't
+      // emit a duplicate failed event.
       this.logger.warn(
-        `Order ${order.orderNumber}: payment.failed arrived but order is no longer ` +
-          `PENDING/FAILED (now ${order.paymentStatus}) — skipping.`,
+        `Order ${order.orderNumber}: payment.failed not recorded — already ` +
+          `recorded or order no longer pending (now ${order.paymentStatus}) — skipping.`,
       );
       return order;
     }

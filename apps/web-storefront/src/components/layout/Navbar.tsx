@@ -20,6 +20,7 @@ import { fetchMenuClient } from '@/lib/menu';
 import { type MenuNode, type MenuTree, nodeHref } from '@/data/menuTypes';
 import { MegaMenu } from './MegaMenu';
 import { CartDrawer } from '@/components/cart/CartDrawer';
+import { MobileNavDrawer } from './MobileNavDrawer';
 import { useSession, broadcastAuthChange } from '@/lib/auth-context';
 import { authService } from '@/services/auth.service';
 // Phase 202 (#15) — wishlist count badge. Reads the shared client store
@@ -52,6 +53,7 @@ export function Navbar() {
 
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const [search, setSearch] = useState('');
   const [suggestions, setSuggestions] = useState<SearchSuggestion[]>([]);
 
@@ -141,6 +143,17 @@ export function Navbar() {
     return () => document.removeEventListener('keydown', onKey);
   }, []);
 
+  // Lock body scroll while the full-screen search overlay is open (mirrors
+  // the cart + mobile-nav drawers, which lock scroll themselves).
+  useEffect(() => {
+    if (!searchOpen) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [searchOpen]);
+
   // Mega-menu hover handlers — small delay on close so cursor can travel
   // diagonally from the trigger to the panel without flicker.
   const handleEnter = (label: string) => {
@@ -223,14 +236,14 @@ export function Navbar() {
         className="sticky top-0 z-40 bg-white border-b border-ink-200"
         onMouseLeave={handleLeave}
       >
-        <div className="w-full px-4 sm:px-6 lg:px-10 flex items-center gap-8 h-20">
+        <div className="w-full px-4 sm:px-6 lg:px-10 flex items-center gap-3 lg:gap-8 h-16 lg:h-20">
           {/* Logo */}
           <Link href="/" aria-label="Sportsmart home" className="shrink-0">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src="/SportsMart_Web_Banner.avif"
               alt="SportsMart"
-              className="h-12 w-auto"
+              className="h-9 lg:h-12 w-auto"
             />
           </Link>
 
@@ -358,7 +371,7 @@ export function Navbar() {
             <Link
               href="/account/wishlist"
               aria-label={`Wishlist with ${wishlistCount} items`}
-              className="relative size-10 grid place-items-center hover:bg-ink-100 rounded-full transition-colors"
+              className="relative size-10 hidden sm:grid place-items-center hover:bg-ink-100 rounded-full transition-colors"
             >
               <Heart className="size-5" strokeWidth={1.75} />
               {wishlistCount > 0 && (
@@ -392,6 +405,7 @@ export function Navbar() {
             <button
               type="button"
               aria-label="Open menu"
+              onClick={() => setMobileNavOpen(true)}
               className="lg:hidden size-10 grid place-items-center hover:bg-ink-100 rounded-full"
             >
               <MenuIcon className="size-5" strokeWidth={1.75} />
@@ -404,7 +418,7 @@ export function Navbar() {
           <div
             onMouseEnter={() => handleEnter(openMenu)}
             onMouseLeave={handleLeave}
-            className="absolute left-0 right-0 top-full bg-white border-t border-ink-200 shadow-lg animate-fade-up rounded-b-3xl overflow-hidden"
+            className="hidden lg:block absolute left-0 right-0 top-full bg-white border-t border-ink-200 shadow-lg animate-fade-up rounded-b-3xl overflow-hidden"
           >
             <div className="w-full max-w-[1440px] mx-auto">
               <MegaMenu node={activeNav} onClose={() => setOpenMenu(null)} />
@@ -420,7 +434,7 @@ export function Navbar() {
             className="bg-white border-b border-ink-200"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="w-full px-4 sm:px-6 lg:px-10 py-6 flex items-center gap-4">
+            <div className="w-full px-4 sm:px-6 lg:px-10 py-4 sm:py-6 flex items-center gap-4">
               <form onSubmit={onSearchSubmit} className="flex-1 relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-5 text-ink-500 pointer-events-none" />
                 <input
@@ -442,7 +456,7 @@ export function Navbar() {
               </button>
             </div>
             {suggestions.length > 0 && (
-              <div className="w-full px-4 sm:px-6 lg:px-10 pb-6 max-h-80 overflow-y-auto">
+              <div className="w-full px-4 sm:px-6 lg:px-10 pb-6 max-h-80 overflow-y-auto overscroll-contain">
                 <div className="text-caption uppercase tracking-wider text-ink-500 font-semibold mb-2">
                   Suggestions
                 </div>
@@ -471,6 +485,15 @@ export function Navbar() {
       {/* Phase 196 (#2) — global slide-out cart. Opens on `cart-open`
           (Navbar cart button + PDP add-to-cart success). */}
       <CartDrawer />
+
+      {/* Mobile / tablet primary navigation — the desktop nav + mega-menu are
+          `hidden lg:flex`, so this drawer is the only catalog nav below lg. */}
+      <MobileNavDrawer
+        open={mobileNavOpen}
+        onClose={() => setMobileNavOpen(false)}
+        items={topItems}
+        isAuthed={!!user}
+      />
     </>
   );
 }

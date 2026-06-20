@@ -1,6 +1,7 @@
 import { BadRequestAppException } from '../exceptions';
 import {
   assertGatewayPaymentMatchesOrder,
+  resolveExpectedGatewayPaise,
   GatewayPaymentSnapshot,
   ExpectedOrder,
 } from './gateway-amount-verifier';
@@ -13,7 +14,7 @@ const validPayment: GatewayPaymentSnapshot = {
 };
 
 const validExpected: ExpectedOrder = {
-  totalAmountInPaise: 1_000_000n,
+  expectedAmountInPaise: 1_000_000n,
   razorpayOrderId: 'order_test123',
 };
 
@@ -126,7 +127,7 @@ describe('assertGatewayPaymentMatchesOrder', () => {
     expect(() =>
       assertGatewayPaymentMatchesOrder(
         { ...validPayment, amount: huge },
-        { ...validExpected, totalAmountInPaise: huge },
+        { ...validExpected, expectedAmountInPaise: huge },
       ),
     ).not.toThrow();
   });
@@ -138,5 +139,66 @@ describe('assertGatewayPaymentMatchesOrder', () => {
         validExpected,
       ),
     ).toThrow(/AMOUNT_MISMATCH|amount mismatch/i);
+  });
+
+  // ── wallet-assisted: the headline defect ───────────────────────────────
+  it('accepts a wallet-assisted capture when expected = payable (total − wallet)', () => {
+    // ₹10,000 order, ₹4,000 paid from wallet → gateway captured ₹6,000.
+    expect(() =>
+      assertGatewayPaymentMatchesOrder(
+        { ...validPayment, amount: 600_000 },
+        { ...validExpected, expectedAmountInPaise: 600_000n },
+      ),
+    ).not.toThrow();
+  });
+});
+
+describe('resolveExpectedGatewayPaise', () => {
+  it('prefers the directly-stamped gatewayAmountInPaise', () => {
+    expect(
+      resolveExpectedGatewayPaise({
+        gatewayAmountInPaise: 600_000n,
+        totalAmountInPaise: 1_000_000n,
+        walletAmountUsedInPaise: 400_000n,
+      }),
+    ).toBe(600_000n);
+  });
+
+  it('falls back to total − wallet when gatewayAmountInPaise is 0 (pre-migration row)', () => {
+    expect(
+      resolveExpectedGatewayPaise({
+        gatewayAmountInPaise: 0n,
+        totalAmountInPaise: 1_000_000n,
+        walletAmountUsedInPaise: 400_000n,
+      }),
+    ).toBe(600_000n);
+  });
+
+  it('returns the full total for a no-wallet order', () => {
+    expect(
+      resolveExpectedGatewayPaise({
+        gatewayAmountInPaise: 0n,
+        totalAmountInPaise: 1_000_000n,
+        walletAmountUsedInPaise: 0n,
+      }),
+    ).toBe(1_000_000n);
+  });
+
+  it('handles number/null inputs and never returns a non-positive expected (fails closed)', () => {
+    // Dual-write off would leave total=0; net would be ≤0 → fall back to total
+    // so the comparison fails CLOSED rather than accepting an arbitrary amount.
+    expect(
+      resolveExpectedGatewayPaise({
+        gatewayAmountInPaise: null,
+        totalAmountInPaise: 0,
+        walletAmountUsedInPaise: null,
+      }),
+    ).toBe(0n);
+    expect(
+      resolveExpectedGatewayPaise({
+        totalAmountInPaise: 1_000_000,
+        walletAmountUsedInPaise: 2_000_000, // wallet > total (corrupt) → fall back to total
+      }),
+    ).toBe(1_000_000n);
   });
 });

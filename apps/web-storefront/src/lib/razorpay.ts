@@ -69,19 +69,32 @@ export interface RazorpayHandoffOptions {
   razorpayOrderId: string;
   amountInPaise: number;
   currency: string;
-  orderNumber: string;
+  // Optional: for Option B (deferred order creation) there is NO order number
+  // yet at modal-open time — verify materializes the order and returns it.
+  orderNumber?: string | null;
   customerName?: string | null;
   customerEmail?: string | null;
   customerPhone?: string | null;
 }
 
 export interface RazorpayHandoffResult {
-  status: 'success' | 'dismissed' | 'error';
+  // 'success'        — verify confirmed; orderNumber is the materialized order.
+  // 'order_pending'  — payment captured, but the order is still being created
+  //                    asynchronously (a concurrent webhook); show "being
+  //                    created" and send the customer to My Orders.
+  // 'dismissed'      — customer closed the modal before paying.
+  // 'error'          — declined / verify rejected (error carries the message,
+  //                    which for the deferred refund case already reads
+  //                    "payment succeeded but the order could not be created…").
+  status: 'success' | 'order_pending' | 'dismissed' | 'error';
+  orderNumber?: string;
   razorpayPaymentId?: string;
   razorpayOrderId?: string;
   razorpaySignature?: string;
   error?: string;
 }
+
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /**
  * Open the Razorpay checkout modal and resolve when the customer
@@ -107,15 +120,20 @@ export async function openRazorpayCheckout(
 
   try {
     await loadRazorpayScript();
-  } catch (e: any) {
+  } catch {
     return {
       status: 'error',
-      error: e?.message || 'Razorpay failed to load',
+      error:
+        "Couldn't load the secure payment window — please check your connection " +
+        'and try again, or choose Cash on Delivery.',
     };
   }
 
   return new Promise<RazorpayHandoffResult>((resolve) => {
     let resolved = false;
+    // Guards the verify call from running twice if Razorpay fires the success
+    // handler more than once for a single capture.
+    let verifying = false;
     const finish = (r: RazorpayHandoffResult) => {
       if (resolved) return;
       resolved = true;
@@ -127,7 +145,7 @@ export async function openRazorpayCheckout(
       amount: opts.amountInPaise,
       currency: opts.currency || 'INR',
       name: 'SPORTSMART',
-      description: `Order ${opts.orderNumber}`,
+      description: opts.orderNumber ? `Order ${opts.orderNumber}` : 'SPORTSMART order',
       order_id: opts.razorpayOrderId,
       // Pre-fill what we know so the customer doesn't have to retype.
       prefill: {
@@ -137,10 +155,10 @@ export async function openRazorpayCheckout(
       },
       theme: { color: '#3FA1AE' },
       modal: {
-        // Customer hit ✕ — treat as dismissed (not an error). The
-        // order shell already exists on the server in PENDING_VERIFICATION;
-        // the order detail page's "Retry payment" button is the recovery
-        // path.
+        // Customer hit ✕ — treat as dismissed (not an error). The caller
+        // decides recovery by flow: legacy create-first leaves a PENDING_PAYMENT
+        // order whose detail page has "Retry payment"; Option B (deferred) has
+        // NO order yet (created only on capture), so the caller offers a retry.
         ondismiss: () => finish({ status: 'dismissed' }),
         confirm_close: true,
       },
@@ -149,26 +167,69 @@ export async function openRazorpayCheckout(
         razorpay_order_id: string;
         razorpay_signature: string;
       }) => {
-        try {
-          await apiClient('/customer/checkout/payment/verify', {
-            method: 'POST',
-            body: JSON.stringify({
-              razorpayOrderId: resp.razorpay_order_id,
-              razorpayPaymentId: resp.razorpay_payment_id,
-              razorpaySignature: resp.razorpay_signature,
-            }),
-          });
-          finish({
-            status: 'success',
-            razorpayOrderId: resp.razorpay_order_id,
-            razorpayPaymentId: resp.razorpay_payment_id,
-            razorpaySignature: resp.razorpay_signature,
-          });
-        } catch (e: any) {
-          finish({
-            status: 'error',
-            error: e?.body?.message || e?.message || 'Payment verification failed',
-          });
+        // The Razorpay SDK can fire this handler more than once for a single
+        // capture (flaky network, duplicate events). Run verify at most once.
+        if (verifying) return;
+        verifying = true;
+        const ids = {
+          razorpayOrderId: resp.razorpay_order_id,
+          razorpayPaymentId: resp.razorpay_payment_id,
+          razorpaySignature: resp.razorpay_signature,
+        };
+        const callVerify = () =>
+          apiClient<{ orderNumber?: string }>(
+            '/customer/checkout/payment/verify',
+            {
+              method: 'POST',
+              // The verify endpoint is @Idempotent(): when idempotency is enabled
+              // it REQUIRES this header (a missing key is a 400, which would break
+              // every online payment). Key off the unique razorpay_payment_id so a
+              // retried verify replays the original result instead of
+              // double-processing the capture (duplicate events / loyalty / audit).
+              // A THROWN verify (409/400) releases the idempotency claim server-
+              // side, so polling with the SAME key safely re-executes until the
+              // order materializes (then the 2xx result is what gets cached).
+              headers: {
+                'X-Idempotency-Key': `verify-${resp.razorpay_payment_id}`,
+              },
+              body: JSON.stringify({
+                razorpayOrderId: resp.razorpay_order_id,
+                razorpayPaymentId: resp.razorpay_payment_id,
+                razorpaySignature: resp.razorpay_signature,
+              }),
+            },
+          );
+
+        // Option B — verify may 409 ("payment received, your order is being
+        // created") while a concurrent webhook materializes the order. Poll the
+        // SAME verify (its fast-path returns success once the order exists) with
+        // backoff. Legacy (order already exists) succeeds on the first attempt.
+        const MAX_ATTEMPTS = 8;
+        for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+          try {
+            const res = await callVerify();
+            finish({ status: 'success', orderNumber: res?.data?.orderNumber, ...ids });
+            return;
+          } catch (e: any) {
+            if (e?.status === 409) {
+              if (attempt < MAX_ATTEMPTS - 1) {
+                await sleep(Math.min(800 * Math.pow(1.5, attempt), 4000));
+                continue;
+              }
+              // Still being created after polling — payment is safe; the webhook/
+              // reconciler will finish it. Route the customer to My Orders.
+              finish({ status: 'order_pending', ...ids });
+              return;
+            }
+            // 400 (incl. the deferred "refund will be issued" case) or any other
+            // non-2xx — surface the backend's customer-facing message as-is.
+            finish({
+              status: 'error',
+              error: e?.body?.message || e?.message || 'Payment verification failed',
+              ...ids,
+            });
+            return;
+          }
         }
       },
     };

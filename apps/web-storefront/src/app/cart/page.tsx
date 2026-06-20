@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Minus, Plus, Trash2, ShoppingBag, Lock, ArrowRight } from 'lucide-react';
+import { StickyActionBar } from '@/components/ui/StickyActionBar';
 import { StorefrontShell } from '@/components/layout/StorefrontShell';
 import { apiClient } from '@/lib/api-client';
 import { useAuthGuard } from '@/lib/useAuthGuard';
@@ -205,14 +206,14 @@ export default function CartPage() {
 
   return (
     <StorefrontShell>
-      <div className="container-x py-8 sm:py-12">
+      <div className="container-x pt-8 sm:pt-12 pb-28 lg:pb-12">
         <div className="text-caption uppercase tracking-wider text-ink-600 mb-3">
           <Link href="/" className="hover:text-ink-900">Home</Link>
           {' / '}
           <span>Cart</span>
         </div>
 
-        <h1 className="font-display text-h1 sm:text-5xl text-ink-900 leading-none">Your cart</h1>
+        <h1 className="font-display text-2xl sm:text-3xl text-ink-900 leading-tight">Your cart</h1>
         {!isEmpty && (
           <p className="mt-2 text-body text-ink-600">
             {totalItems} {totalItems === 1 ? 'item' : 'items'}
@@ -457,6 +458,26 @@ export default function CartPage() {
           </div>
         )}
       </div>
+
+      {/* Mobile sticky checkout bar — on mobile the summary + CTA reflow below
+          the full item list, so keep the total + Proceed action in reach. */}
+      {!isEmpty && cart && (
+        <StickyActionBar className="flex items-center gap-4">
+          <div className="min-w-0">
+            <div className="text-caption text-ink-600 leading-none">Total</div>
+            <div className="font-display text-xl text-ink-900 tabular leading-tight">
+              {formatINR(cart.totalAmount)}
+            </div>
+          </div>
+          <button
+            onClick={() => router.push('/checkout')}
+            className="flex-1 h-12 bg-ink-900 text-white font-semibold hover:bg-ink-800 inline-flex items-center justify-center gap-2 rounded-full"
+          >
+            Proceed to checkout
+            <ArrowRight className="size-4" />
+          </button>
+        </StickyActionBar>
+      )}
     </StorefrontShell>
   );
 }

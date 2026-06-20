@@ -98,6 +98,32 @@ describe('Status FSM — OrderPaymentStatus', () => {
   it('allows PAID → VOIDED (admin-only override)', () => {
     expect(isTransitionAllowed('OrderPaymentStatus', 'PAID', 'VOIDED')).toBe(true);
   });
+
+  // Regression (online checkout): an ONLINE order starts at CREATED (Razorpay
+  // intent minted) and must reach PAID on a successful capture. CREATED +
+  // EXPIRED were missing from the FSM map, so a real payment threw
+  // "Illegal OrderPaymentStatus transition: CREATED → PAID".
+  it('allows CREATED → PAID (online capture happy path)', () => {
+    expect(isTransitionAllowed('OrderPaymentStatus', 'CREATED', 'PAID')).toBe(true);
+  });
+
+  it('allows CREATED → PENDING / EXPIRED / CANCELLED', () => {
+    expect(isTransitionAllowed('OrderPaymentStatus', 'CREATED', 'PENDING')).toBe(true);
+    expect(isTransitionAllowed('OrderPaymentStatus', 'CREATED', 'EXPIRED')).toBe(true);
+    expect(isTransitionAllowed('OrderPaymentStatus', 'CREATED', 'CANCELLED')).toBe(true);
+  });
+
+  it('allows PENDING → EXPIRED (payment-expiry sweep cron)', () => {
+    expect(isTransitionAllowed('OrderPaymentStatus', 'PENDING', 'EXPIRED')).toBe(true);
+  });
+
+  it('blocks CREATED → VOIDED (nothing captured to void)', () => {
+    expect(isTransitionAllowed('OrderPaymentStatus', 'CREATED', 'VOIDED')).toBe(false);
+  });
+
+  it('keeps EXPIRED terminal (no EXPIRED → PAID revival)', () => {
+    expect(isTransitionAllowed('OrderPaymentStatus', 'EXPIRED', 'PAID')).toBe(false);
+  });
 });
 
 describe('Status FSM — ReturnStatus', () => {

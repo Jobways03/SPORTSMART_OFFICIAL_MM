@@ -228,7 +228,22 @@ export class OrdersService {
     // PLACED + PENDING and must stay visible. Paid-but-stuck online orders are
     // still recovered by PaymentStatusPollerService, independent of this view.
     if (!orderStatus && !paymentStatus) {
-      where.orderStatus = { not: 'PENDING_PAYMENT' } as any;
+      // Hide never-captured online checkouts from the default admin list — not
+      // just PENDING_PAYMENT (awaiting), but also the CANCELLED/EXPIRED dead
+      // ones (a Razorpay order minted, payment never captured, never PAID).
+      // They were never real orders. razorpayOrderId-not-null keeps a
+      // wallet-fully-paid (no gateway leg) cancelled order visible. Explicit
+      // status/payment filters bypass this so ops can still recover them.
+      where.NOT = {
+        OR: [
+          { orderStatus: 'PENDING_PAYMENT' as any },
+          {
+            razorpayOrderId: { not: null },
+            razorpayPaymentId: null,
+            paymentStatus: { not: 'PAID' as any },
+          },
+        ],
+      } as any;
     }
     if (search) {
       where.OR = [
@@ -2639,6 +2654,10 @@ export class OrdersService {
       name: string;
       // Phase 64 — nullable (audit Gap #9).
       distanceKm: number | null;
+      // True when distanceKm was computed from an approximated pincode centroid
+      // (the customer's or the node's pincode lacks exact coords) — the UI flags
+      // it so a misleadingly-small estimate isn't read as a measured distance.
+      distanceApproximate: boolean;
       dispatchSla: number;
       availableStock: number;
       score: number;
@@ -2686,6 +2705,7 @@ export class OrdersService {
                 nodeId,
                 name: node.sellerName,
                 distanceKm: node.distanceKm,
+                distanceApproximate: node.distanceApproximate === true,
                 dispatchSla: node.dispatchSla,
                 availableStock: node.availableStock,
                 score: node.score,
@@ -3672,6 +3692,17 @@ export class OrdersService {
       sellerId,
       masterOrder: {
         orderStatus: { notIn: [...preRoutingStatuses] },
+        // Online-payment defense-in-depth — never expose an ONLINE order to the
+        // seller until its gateway payment is captured. In the normal flow an
+        // ONLINE order only leaves PENDING_PAYMENT by flipping to PLACED + PAID
+        // atomically (verify/webhook/orphan-recovery), so a routed ONLINE order
+        // is already PAID; this is belt-and-suspenders against any future path
+        // that advances orderStatus without capture. COD is intentionally
+        // exempt — it is legitimately unpaid (PENDING) until cash-on-delivery.
+        NOT: {
+          paymentMethod: 'ONLINE' as any,
+          paymentStatus: { not: 'PAID' as any },
+        },
       },
     };
 
@@ -4734,7 +4765,12 @@ export class OrdersService {
     page: number,
     limit: number,
     // Phase 197 (My-Orders audit #7) — server-side status bucket.
-    bucket: 'all' | 'active' | 'delivered' | 'cancelled' = 'all',
+    bucket:
+      | 'all'
+      | 'active'
+      | 'delivered'
+      | 'cancelled'
+      | 'awaiting_payment' = 'all',
   ) {
     const [orders, total, bucketCounts] = await Promise.all([
       this.orderRepo.findCustomerOrders(

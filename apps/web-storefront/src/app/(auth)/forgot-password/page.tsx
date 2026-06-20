@@ -3,7 +3,8 @@
 import { useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { AlertCircle, ArrowRight, Loader2 } from 'lucide-react';
+import { AuthMobileHeader } from '@/components/auth/AuthMobileHeader';
+import { AlertCircle, ArrowRight, Clock, KeyRound, LifeBuoy, Loader2, ShieldCheck } from 'lucide-react';
 import { authService } from '@/services/auth.service';
 import { ApiError } from '@/lib/api-client';
 import { validateLoginEmail } from '@/lib/validators';
@@ -58,29 +59,72 @@ export default function ForgotPasswordPage() {
   };
 
   return (
-    <div className="min-h-screen bg-ink-50 flex flex-col">
-      <header className="flex items-center justify-between px-6 lg:px-10 py-6">
-        <Link
-          href="/"
-          className="font-display text-2xl tracking-wide italic leading-none"
+    <div className="min-h-screen bg-ink-50 flex justify-center">
+      <div className="w-full max-w-[1320px] min-h-screen grid lg:grid-cols-2">
+        {/* Branded panel — mirrors the login/register split-screen so the whole
+            auth flow looks consistent (was a bare single-column form before). */}
+        <div
+          className="hidden lg:block relative overflow-hidden bg-ink-100"
+          style={{
+            backgroundImage:
+              'radial-gradient(ellipse 80% 60% at 85% 15%, rgba(63, 161, 174, 0.45), transparent 60%), radial-gradient(ellipse 70% 50% at 15% 85%, rgba(220, 38, 38, 0.22), transparent 60%), radial-gradient(ellipse 50% 40% at 50% 50%, rgba(250, 204, 21, 0.18), transparent 60%)',
+          }}
         >
-          <span className="text-sale">SPORTSMART</span>
-          <span className="text-ink-900">.com</span>
-        </Link>
-        <span className="ml-auto text-caption text-ink-600">
-          Remember it?{' '}
-          <Link
-            href="/login"
-            className="text-accent-dark font-semibold hover:text-ink-900 hover:underline underline-offset-2"
-          >
-            Sign in
-          </Link>
-        </span>
-      </header>
+          <div
+            aria-hidden
+            className="absolute inset-0 pointer-events-none opacity-[0.04] mix-blend-multiply"
+            style={{
+              backgroundImage:
+                'repeating-linear-gradient(135deg, rgba(26,26,26,1) 0, rgba(26,26,26,1) 1px, transparent 1px, transparent 28px)',
+            }}
+          />
 
-      <main className="flex-1 px-6 lg:px-10 py-8 flex items-start sm:items-center justify-center">
-        <div className="w-full max-w-md">
-          <h1 className="font-display text-h1 text-ink-900 leading-none">
+          <div className="relative h-full flex flex-col p-12 xl:p-16">
+            <Link href="/" aria-label="Sportsmart home" className="inline-block w-fit">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/SportsMart_Web_Banner.avif" alt="SportsMart" className="h-14 w-auto" />
+            </Link>
+
+            <div className="flex-1 flex flex-col justify-center max-w-xl">
+              <h2 className="font-display text-[clamp(56px,6vw,96px)] leading-[0.92] tracking-tight text-ink-900">
+                Back in the
+                <br />
+                <span className="font-brush text-sale text-[0.85em] tracking-normal">
+                  game.
+                </span>
+              </h2>
+              <p className="mt-6 text-body-lg text-ink-700 max-w-md">
+                Reset your password in two quick steps and pick up right where
+                you left off.
+              </p>
+
+              <ul className="mt-10 grid sm:grid-cols-2 gap-3 max-w-lg">
+                {[
+                  { icon: ShieldCheck, title: 'Secure reset', desc: '6-digit code to your email' },
+                  { icon: KeyRound, title: 'New password', desc: 'Set it in seconds' },
+                  { icon: Clock, title: 'Quick & easy', desc: 'Done in under a minute' },
+                  { icon: LifeBuoy, title: 'Need a hand?', desc: 'Support is one click away' },
+                ].map(({ icon: Icon, title, desc }) => (
+                  <li key={title} className="bg-white border border-ink-900/10 p-3">
+                    <Icon className="size-4 text-accent-dark" strokeWidth={1.75} />
+                    <div className="mt-2 text-body font-semibold text-ink-900">
+                      {title}
+                    </div>
+                    <div className="text-caption text-ink-600">{desc}</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        {/* Form panel */}
+        <div className="flex flex-col">
+          <AuthMobileHeader switchPrompt="Remember it?" switchLabel="Sign in" switchHref="/login" />
+
+          <main className="flex-1 px-6 lg:px-10 pt-6 lg:pt-10 pb-10 flex items-start sm:items-center">
+            <div className="w-full max-w-md mx-auto">
+          <h1 className="font-display text-2xl sm:text-3xl text-ink-900 leading-tight">
             Forgot password?
           </h1>
           <p className="mt-3 text-body-lg text-ink-600">
@@ -162,12 +206,10 @@ export default function ForgotPasswordPage() {
               Sign in
             </Link>
           </p>
+            </div>
+          </main>
         </div>
-      </main>
-
-      <footer className="px-6 py-5 border-t border-ink-200 text-caption text-ink-500 text-center">
-        &copy; {new Date().getFullYear()} Sportsmart. All rights reserved.
-      </footer>
+      </div>
     </div>
   );
 }

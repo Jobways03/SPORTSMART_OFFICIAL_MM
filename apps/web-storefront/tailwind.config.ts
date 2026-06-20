@@ -66,7 +66,12 @@ const config: Config = {
         danger:  '#DC2626',
       },
       fontFamily: {
-        display: ['var(--font-display)', 'Impact', 'sans-serif'],
+        // `display` intentionally resolves to the clean sans (Inter): the
+        // condensed Bebas Neue brand display font was dropped app-wide. The
+        // token name is kept so existing `font-display` usages need no churn —
+        // they now render Inter, and heading sizes carry their own weight via
+        // the fontSize tokens below (h1=700, h2=600), so headings stay bold.
+        display: ['var(--font-sans)', 'system-ui', 'sans-serif'],
         sans:    ['var(--font-sans)', 'system-ui', 'sans-serif'],
         // Brush-style hand-drawn font for high-energy hero callouts.
         // Used sparingly — REVAMP YOUR GAME, DOMINATE THE GAME, etc.

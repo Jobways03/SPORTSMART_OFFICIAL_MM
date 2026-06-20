@@ -96,9 +96,14 @@ export class PaymentExpirySweepCron {
         if (updated.count === 0) continue;
 
         expired++;
+        // Emit the event the OrderExpiredHandler actually consumes
+        // (`payments.payment.expired`) — the previous `orders.master.payment_expired`
+        // had NO subscriber, so sweep-cancelled orders got no wallet refund,
+        // notification, or audit row. The poller's cancel path already uses
+        // this name; both now converge on the same idempotent handler.
         this.eventBus
           .publish({
-            eventName: 'orders.master.payment_expired',
+            eventName: 'payments.payment.expired',
             aggregate: 'MasterOrder',
             aggregateId: order.id,
             occurredAt: new Date(),
@@ -106,6 +111,7 @@ export class PaymentExpirySweepCron {
               masterOrderId: order.id,
               orderNumber: order.orderNumber,
               customerId: order.customerId,
+              reason: 'Payment window expired (expiry sweep)',
             },
           })
           .catch(() => {

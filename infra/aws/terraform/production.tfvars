@@ -21,7 +21,8 @@ auth_cookie_domain = ".sportsmart.com"
 # Actions deploy fails at AssumeRole.
 github_repo = "Jobways03/SPORTSMART_OFFICIAL_MM"
 
-image_tag = "production-latest"
+image_tag                  = "production-latest"
+logistics_facade_image_tag = "production-latest"
 
 # COST-LEAN production sizing (~$210/mo). Provisioned for a low-traffic MVP,
 # NOT an uptime SLA. Every resilience buy-back (Multi-AZ, Redis HA, per-AZ NAT,
@@ -90,22 +91,22 @@ log_retention_days = 14
 # outbox/money pair in order ENABLED -> DUAL_WRITE -> AUTHORITATIVE per the
 # money-paise cutover runbook before treating prod as authoritative.
 api_extra_environment = {
-  CRON_HEARTBEAT_ENABLED      = "true"
-  SLA_BREACH_DETECTOR_ENABLED = "true"
-  AUDIT_CHAIN_ANCHOR_ENABLED  = "true"
-  IDEMPOTENCY_ENABLED         = "true"
-  INTEGRITY_VERIFIER_ENABLED  = "true"
-  ERASURE_PROCESSOR_ENABLED   = "true"
-  WALLET_LEDGER_RECON_ENABLED = "true"
-  EVENT_DEDUP_ENABLED         = "true"
-  OUTBOX_ENABLED              = "true"
-  OUTBOX_DUAL_WRITE           = "true"
+  CRON_HEARTBEAT_ENABLED       = "true"
+  SLA_BREACH_DETECTOR_ENABLED  = "true"
+  AUDIT_CHAIN_ANCHOR_ENABLED   = "true"
+  IDEMPOTENCY_ENABLED          = "true"
+  INTEGRITY_VERIFIER_ENABLED   = "true"
+  ERASURE_PROCESSOR_ENABLED    = "true"
+  WALLET_LEDGER_RECON_ENABLED  = "true"
+  EVENT_DEDUP_ENABLED          = "true"
+  OUTBOX_ENABLED               = "true"
+  OUTBOX_DUAL_WRITE            = "true"
   REFUND_GATEWAY_RECON_ENABLED = "true"
-  RETENTION_ENFORCER_ENABLED  = "true"
-  ABAC_ENABLED                = "true"
-  REFUND_SAGA_ENABLED         = "true"
-  COD_REFUND_PENDING_ENABLED  = "true"
-  MONEY_DUAL_WRITE_ENABLED    = "true"
-  PERMISSIONS_GUARD_STRICT    = "true"
-  RBAC_ORPHAN_SWEEP_ENABLED   = "true"
+  RETENTION_ENFORCER_ENABLED   = "true"
+  ABAC_ENABLED                 = "true"
+  REFUND_SAGA_ENABLED          = "true"
+  COD_REFUND_PENDING_ENABLED   = "true"
+  MONEY_DUAL_WRITE_ENABLED     = "true"
+  PERMISSIONS_GUARD_STRICT     = "true"
+  RBAC_ORPHAN_SWEEP_ENABLED    = "true"
 }

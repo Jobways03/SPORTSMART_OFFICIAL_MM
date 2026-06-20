@@ -295,34 +295,50 @@ function ProductsContent({ initialData }: { initialData?: InitialData }) {
           <aside
             className={
               filtersOpen
-                ? 'fixed inset-0 z-50 bg-white p-6 overflow-y-auto'
+                ? 'fixed inset-0 z-50 bg-white flex flex-col'
                 : 'hidden lg:block w-64 shrink-0 lg:sticky lg:top-24 lg:max-h-[calc(100vh-7rem)] lg:overflow-y-auto lg:pr-2 [scrollbar-width:thin]'
             }
           >
             {filtersOpen && (
-              <div className="flex items-center justify-between mb-4 lg:hidden">
+              <div className="flex items-center justify-between px-6 h-14 border-b border-ink-200 shrink-0 lg:hidden">
                 <h2 className="font-semibold text-h3">Filters</h2>
                 <button
                   onClick={() => setFiltersOpen(false)}
-                  className="size-10 grid place-items-center hover:bg-ink-100"
+                  className="size-10 grid place-items-center hover:bg-ink-100 rounded-full"
                   aria-label="Close filters"
                 >
                   <X className="size-5" />
                 </button>
               </div>
             )}
-            <FilterSidebar
-              categoryId={categoryId || undefined}
-              search={searchQuery || undefined}
-              activeFilters={activeFilters}
-              minPrice={minPrice || undefined}
-              maxPrice={maxPrice || undefined}
-              brandId={brandId || undefined}
-              onFilterChange={handleFilterChange}
-              onPriceChange={handlePriceChange}
-              onClearAll={handleClearAll}
-              onLabelsChange={setFilterLabels}
-            />
+            {/* On mobile the panel is a flex column: this is the scrollable
+                middle so the header above and the Apply footer below stay
+                pinned. On desktop the wrapper is inert (no flex parent). */}
+            <div className={filtersOpen ? 'flex-1 overflow-y-auto overscroll-contain px-6 py-4' : ''}>
+              <FilterSidebar
+                categoryId={categoryId || undefined}
+                search={searchQuery || undefined}
+                activeFilters={activeFilters}
+                minPrice={minPrice || undefined}
+                maxPrice={maxPrice || undefined}
+                brandId={brandId || undefined}
+                onFilterChange={handleFilterChange}
+                onPriceChange={handlePriceChange}
+                onClearAll={handleClearAll}
+                onLabelsChange={setFilterLabels}
+              />
+            </div>
+            {filtersOpen && (
+              <div className="shrink-0 border-t border-ink-200 p-4 [padding-bottom:max(1rem,env(safe-area-inset-bottom))] lg:hidden">
+                <button
+                  type="button"
+                  onClick={() => setFiltersOpen(false)}
+                  className="w-full h-12 grid place-items-center bg-ink-900 text-white text-body font-semibold rounded-full hover:bg-ink-800 transition-colors"
+                >
+                  View {pagination.total.toLocaleString('en-IN')} result{pagination.total !== 1 ? 's' : ''}
+                </button>
+              </div>
+            )}
           </aside>
 
           <div className="flex-1 min-w-0">
