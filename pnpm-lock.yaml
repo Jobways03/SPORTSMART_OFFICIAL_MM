@@ -754,6 +754,9 @@ importers:
       '@sportsmart/shared-utils':
         specifier: workspace:*
         version: link:../../packages/shared-utils
+      isomorphic-dompurify:
+        specifier: ^3.9.0
+        version: 3.9.0(@noble/hashes@1.8.0)
       next:
         specifier: ^15.5.14
         version: 15.5.14(@opentelemetry/api@1.9.1)(@playwright/test@1.60.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -763,6 +766,9 @@ importers:
       react-dom:
         specifier: ^19.2.4
         version: 19.2.4(react@19.2.4)
+      react-quill-new:
+        specifier: ^3.8.3
+        version: 3.8.3(quill-delta@5.1.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
     devDependencies:
       '@sportsmart/eslint-config':
         specifier: workspace:*
@@ -926,6 +932,9 @@ importers:
       react-dom:
         specifier: ^19.2.4
         version: 19.2.4(react@19.2.4)
+      react-quill-new:
+        specifier: ^3.8.3
+        version: 3.8.3(quill-delta@5.1.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
     devDependencies:
       '@playwright/test':
         specifier: ^1.49.1
