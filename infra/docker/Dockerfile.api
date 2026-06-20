@@ -86,7 +86,11 @@ RUN pnpm --filter @sportsmart/api run build
 # resolves workspace links and prunes devDependencies — much safer than
 # hand-copying node_modules across stages (pnpm's symlink layout does
 # not survive a naive COPY).
-RUN pnpm deploy --filter=@sportsmart/api --prod --legacy /out
+# pnpm 10's legacy `pnpm deploy` refuses unless inject-workspace-packages=true.
+# Set it here (Docker-only; the repo .npmrc keeps the symlinked dev layout),
+# after the build, so it only governs pruning the prod tree into /out.
+RUN echo 'inject-workspace-packages=true' >> .npmrc \
+ && pnpm deploy --filter=@sportsmart/api --prod --legacy /out
 
 
 # ─── runtime: lean image, non-root, healthcheck ─────────────────────

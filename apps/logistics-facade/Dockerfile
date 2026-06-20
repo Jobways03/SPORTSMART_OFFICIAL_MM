@@ -45,7 +45,11 @@ COPY packages/logistics-contracts packages/logistics-contracts
 RUN pnpm --filter @sportsmart/logistics-facade exec prisma generate
 RUN pnpm --filter @sportsmart/logistics-facade run build
 
-RUN pnpm deploy --filter=@sportsmart/logistics-facade --prod --legacy /out
+# pnpm 10's legacy `pnpm deploy` refuses unless inject-workspace-packages=true.
+# Set it here (Docker-only; the repo .npmrc keeps the symlinked dev layout),
+# after the build, so it only governs pruning the prod tree into /out.
+RUN echo 'inject-workspace-packages=true' >> .npmrc \
+ && pnpm deploy --filter=@sportsmart/logistics-facade --prod --legacy /out
 
 
 # ─── runtime: lean image, non-root, healthcheck ─────────────────────
