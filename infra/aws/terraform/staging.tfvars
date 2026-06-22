@@ -45,19 +45,22 @@ enable_vpc_endpoints        = false
 secret_recovery_window_days = 0
 log_retention_days          = 3
 
-# Run staging lean: 1 task each, and spin the seldom-tested portals to 0
-# (scale to 1 on demand: aws ecs update-service --desired-count 1). The api
-# and storefront still autoscale from 1.
+# Run staging with 1 task per service. Only the affiliate portals stay off
+# (not yet exercised in staging); scale on demand with:
+#   aws ecs update-service --cluster sportsmart-staging --service <name> --desired-count 1
+# NOTE: ecs.tf sets `ignore_changes = [desired_count]`, so edits here take effect
+# only when a service is first CREATED — scaling a LIVE service is the CLI command
+# above, not `terraform apply`. This block is the source-of-truth for re-creates.
 service_desired_count = {
   api                     = 1
   web-storefront          = 1
   web-admin-storefront    = 1
-  web-d2c-seller          = 0
-  web-d2c-seller-admin    = 0
-  web-retail-seller       = 0
-  web-retail-seller-admin = 0
-  web-franchise           = 0
-  web-franchise-admin     = 0
+  web-d2c-seller          = 1
+  web-d2c-seller-admin    = 1
+  web-retail-seller       = 1
+  web-retail-seller-admin = 1
+  web-franchise           = 1
+  web-franchise-admin     = 1
   web-affiliate           = 0
   web-affiliate-admin     = 0
 }
