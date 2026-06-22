@@ -48,8 +48,12 @@ RUN pnpm --filter @sportsmart/logistics-facade run build
 # pnpm 10's legacy `pnpm deploy` refuses unless inject-workspace-packages=true.
 # Set it here (Docker-only; the repo .npmrc keeps the symlinked dev layout),
 # after the build, so it only governs pruning the prod tree into /out.
+# Then regenerate the Prisma client INSIDE /out: pnpm deploy re-copies
+# @prisma/client's UNgenerated stub from the store, so without this the facade
+# throws "@prisma/client did not initialize yet" at runtime.
 RUN echo 'inject-workspace-packages=true' >> .npmrc \
- && pnpm deploy --filter=@sportsmart/logistics-facade --prod --legacy /out
+ && pnpm deploy --filter=@sportsmart/logistics-facade --prod --legacy /out \
+ && cd /out && node_modules/.bin/prisma generate
 
 
 # ─── runtime: lean image, non-root, healthcheck ─────────────────────
