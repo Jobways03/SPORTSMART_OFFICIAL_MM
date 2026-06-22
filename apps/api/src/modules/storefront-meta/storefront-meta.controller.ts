@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Controller, Get, HttpCode, HttpStatus, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { StorefrontMetaService } from './storefront-meta.service';
@@ -8,6 +9,7 @@ import { StorefrontMetaService } from './storefront-meta.service';
 // {success, message, data} envelope to match the rest of the
 // storefront API.
 @ApiTags('Storefront Meta')
+@Public()
 @Controller('storefront')
 export class StorefrontMetaController {
   constructor(private readonly service: StorefrontMetaService) {}

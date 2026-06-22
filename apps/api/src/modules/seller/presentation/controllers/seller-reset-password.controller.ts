@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -6,6 +7,7 @@ import { ResetPasswordSellerUseCase } from '../../application/use-cases/reset-pa
 import { UnauthorizedAppException } from '../../../../core/exceptions';
 
 @ApiTags('Seller Auth')
+@Public()
 @Controller('seller/auth')
 export class SellerResetPasswordController {
   constructor(

@@ -15,6 +15,36 @@ import { validateBusinessName } from '@/lib/validators';
 const filterRoleName = (v: string) =>
   v.replace(/[^A-Za-z0-9 &.,\-/()']/g, '').slice(0, 150);
 
+// Friendlier labels for the access-area chips. Anything not listed falls back
+// to its raw module prefix (the part before the first dot in a permission key).
+const AREA_LABELS: Record<string, string> = {
+  cod: 'COD',
+  paymentOps: 'Payment Ops',
+  liability_ledger: 'Liability Ledger',
+  sellerReversals: 'Seller Reversals',
+  internalNotes: 'Internal Notes',
+  tax: 'Tax / GST',
+  recon: 'Reconciliation',
+  authz: 'Authz',
+  admin: 'Admin Activity',
+};
+
+const prettyArea = (mod: string) =>
+  AREA_LABELS[mod] ?? mod.charAt(0).toUpperCase() + mod.slice(1);
+
+// Distinct top-level access areas a role touches, derived from its permission
+// keys (e.g. ["shipment.evidence.read","cod.read"] → ["shipment","cod"]).
+// This is what lets the Roles list show WHAT a role grants at a glance instead
+// of just a permission count.
+const roleAreas = (permissions: string[]): string[] => {
+  const seen = new Set<string>();
+  for (const key of permissions) {
+    const mod = key.split('.')[0];
+    if (mod) seen.add(mod);
+  }
+  return Array.from(seen).sort();
+};
+
 export default function RolesPage() {
   return (
     <RequirePermission superAdminOnly fallback={<div style={{ padding: 24 }}>Loading…</div>}>
@@ -220,6 +250,7 @@ function RolesPageInner() {
                 <tr>
                   <th style={styles.th}>Role</th>
                   <th style={styles.th}>Description</th>
+                  <th style={styles.th}>Access areas</th>
                   <th style={{ ...styles.th, textAlign: 'right' }}>Permissions</th>
                   <th style={styles.th}>Status</th>
                   <th style={{ ...styles.th, width: 36 }} aria-hidden="true" />
@@ -243,8 +274,26 @@ function RolesPageInner() {
                         {r.isSystem ? 'System role' : 'Custom role'}
                       </div>
                     </td>
-                    <td style={{ ...styles.td, color: '#475569', maxWidth: 480 }}>
+                    <td style={{ ...styles.td, color: '#475569', maxWidth: 360 }}>
                       {r.description ?? '—'}
+                    </td>
+                    <td style={{ ...styles.td, maxWidth: 320 }}>
+                      {r.permissions.length === 0 ? (
+                        <span style={{ color: '#94a3b8', fontSize: 12 }}>No access</span>
+                      ) : (
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                          {roleAreas(r.permissions).slice(0, 6).map((area) => (
+                            <span key={area} style={styles.areaChip}>
+                              {prettyArea(area)}
+                            </span>
+                          ))}
+                          {roleAreas(r.permissions).length > 6 && (
+                            <span style={{ ...styles.areaChip, background: '#fff', color: '#64748b' }}>
+                              +{roleAreas(r.permissions).length - 6}
+                            </span>
+                          )}
+                        </div>
+                      )}
                     </td>
                     <td style={{ ...styles.td, textAlign: 'right' }}>
                       <span style={styles.permsCount}>
@@ -630,6 +679,17 @@ const styles: Record<string, React.CSSProperties> = {
     borderRadius: 999,
     minWidth: 26,
     textAlign: 'center',
+  },
+  areaChip: {
+    display: 'inline-block',
+    fontSize: 11,
+    fontWeight: 600,
+    color: '#334155',
+    padding: '2px 8px',
+    background: '#eef2ff',
+    border: '1px solid #e0e7ff',
+    borderRadius: 999,
+    whiteSpace: 'nowrap',
   },
   menuTrigger: {
     display: 'inline-flex',

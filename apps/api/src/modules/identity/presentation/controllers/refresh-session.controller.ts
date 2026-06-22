@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Request, Response } from 'express';
@@ -10,6 +11,7 @@ import {
 } from '../../../../core/auth/auth-cookie.helper';
 
 @ApiTags('Auth')
+@Public()
 @Controller('auth')
 export class RefreshSessionController {
   constructor(

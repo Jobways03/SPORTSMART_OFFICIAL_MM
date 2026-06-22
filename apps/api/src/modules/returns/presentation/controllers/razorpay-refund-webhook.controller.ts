@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Body,
   Controller,
@@ -33,6 +34,7 @@ import { RazorpayRefundWebhookService } from '../../application/services/razorpa
 // the exact bytes Razorpay sent.
 
 @ApiTags('Razorpay Refund Webhook')
+@Public()
 @Controller('webhooks/razorpay/refunds')
 export class RazorpayRefundWebhookController {
   private readonly logger = new Logger(RazorpayRefundWebhookController.name);

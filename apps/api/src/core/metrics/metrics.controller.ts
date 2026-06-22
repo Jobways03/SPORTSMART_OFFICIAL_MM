@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Controller,
   Get,
@@ -23,6 +24,7 @@ import { MetricsRegistry } from './metrics.registry';
  * not a re-auth flow. The token defaults to empty (endpoint disabled).
  */
 @ApiTags('Metrics')
+@Public()
 @Controller('metrics')
 export class MetricsController {
   constructor(

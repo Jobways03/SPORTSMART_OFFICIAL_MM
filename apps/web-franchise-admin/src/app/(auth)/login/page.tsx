@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, FormEvent } from 'react';
+import { useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { adminAuthService, isMfaChallenge } from '@/services/admin-auth.service';
 import {
@@ -34,14 +34,9 @@ export default function FranchiseAdminLoginPage() {
   const [emailOtpSending, setEmailOtpSending] = useState(false);
   const [emailOtpInfo, setEmailOtpInfo] = useState('');
 
-  // Email-first MFA: auto-email the code as soon as the challenge appears so no
-  // authenticator app is needed. The authenticator path stays in the backend.
-  useEffect(() => {
-    if (challengeToken && !emailOtpMode && !emailOtpInfo && !emailOtpSending) {
-      void handleRequestEmailOtp();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [challengeToken]);
+  // Authenticator-first MFA: the challenge opens on the authenticator-code
+  // entry by default. The email OTP is sent ONLY when the user clicks
+  // "Email me a code instead" (handleRequestEmailOtp) — no auto-send.
 
   const persistSession = (data: {
     accessToken: string;

@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Controller, Get, Header, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -16,6 +17,7 @@ import { isKnownEventClass, isLockedEventClass } from '../../domain/notification
  * page. A locked (security/account) class is never unsubscribable.
  */
 @ApiTags('Notifications — Public')
+@Public()
 @Controller('notifications')
 export class NotificationUnsubscribeController {
   constructor(

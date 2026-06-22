@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Controller,
   Get,
@@ -20,6 +21,7 @@ const STOREFRONT_COLLECTIONS_CACHE_PREFIX = 'storefront:collections:list';
 const STOREFRONT_COLLECTIONS_CACHE_TTL = 60;
 
 @ApiTags('Storefront Collections')
+@Public()
 @Controller('catalog/collections')
 export class StorefrontCollectionsController {
   constructor(

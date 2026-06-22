@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Body, Controller, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -11,6 +12,7 @@ import { ResendResetOtpUseCase } from '../../application/use-cases/resend-reset-
 import { CaptchaVerifierService } from '../../../../integrations/captcha/captcha-verifier.service';
 
 @ApiTags('Auth')
+@Public()
 @Controller('auth')
 export class ForgotPasswordController {
   constructor(

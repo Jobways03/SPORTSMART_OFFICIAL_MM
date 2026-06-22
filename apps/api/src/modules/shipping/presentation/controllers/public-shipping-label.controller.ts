@@ -8,6 +8,7 @@
 // Serves OUR custom 4x6 PDF; if our generation fails, it REDIRECTS to
 // Delhivery's own label so a label is always available (the fallback).
 
+import { Public } from '@core/decorators';
 import { Controller, Get, Logger, Param, Res } from '@nestjs/common';
 import type { Response } from 'express';
 
@@ -15,6 +16,7 @@ import { verifyLabelToken } from '../../application/label-token.util';
 import { ShippingLabelPdfService } from '../../application/services/shipping-label-pdf.service';
 import { ShippingPublicFacade } from '../../application/facades/shipping-public.facade';
 
+@Public()
 @Controller('public/shipping/labels')
 export class PublicShippingLabelController {
   private readonly logger = new Logger(PublicShippingLabelController.name);

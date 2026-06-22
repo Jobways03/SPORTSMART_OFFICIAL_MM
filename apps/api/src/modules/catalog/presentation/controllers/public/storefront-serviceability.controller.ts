@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Controller,
   Get,
@@ -34,6 +35,7 @@ import { CheckServiceabilityQueryDto } from '../../dtos/storefront-allocation.dt
  *     pipe layer.
  */
 @ApiTags('Storefront')
+@Public()
 @Controller('storefront/serviceability')
 export class StorefrontServiceabilityController {
   constructor(

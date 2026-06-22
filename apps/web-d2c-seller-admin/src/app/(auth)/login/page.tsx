@@ -61,15 +61,9 @@ export default function AdminLoginPage() {
     }
   }, [mfa]);
 
-  useEffect(() => {
-    // Email-first MFA: auto-email the code as soon as the challenge appears so
-    // no authenticator app is needed. The authenticator path stays in the
-    // backend; this just stops surfacing it at login.
-    if (mfa && !emailMode && !emailInfo && !emailRequesting) {
-      void handleRequestEmailOtp();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mfa]);
+  // Authenticator-first MFA: the challenge opens on the authenticator-code
+  // entry by default. The email OTP is sent ONLY when the user clicks
+  // "Email me a code instead" (handleRequestEmailOtp) — no auto-send.
 
   const validate = (): boolean => {
     const newErrors: FormErrors = {};

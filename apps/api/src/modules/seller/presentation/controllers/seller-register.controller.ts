@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   BadRequestException,
   Body,
@@ -38,6 +39,7 @@ import { CaptchaVerifierService } from '../../../../integrations/captcha/captcha
  * controller trusts.
  */
 @ApiTags('Seller Auth')
+@Public()
 @Controller('seller/auth')
 export class SellerRegisterController {
   constructor(

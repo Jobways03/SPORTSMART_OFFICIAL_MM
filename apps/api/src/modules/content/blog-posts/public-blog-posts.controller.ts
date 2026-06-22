@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Controller, Get, Header, Param, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { BlogPostsService } from './blog-posts.service';
@@ -13,6 +14,7 @@ import { BlogPostsService } from './blog-posts.service';
  *   - Service filters soft-deleted posts (post-Phase-50 schema).
  */
 @ApiTags('Storefront Blog Posts')
+@Public()
 @Controller('storefront/blog-posts')
 export class PublicBlogPostsController {
   constructor(private readonly service: BlogPostsService) {}

@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Controller,
   Get,
@@ -15,6 +16,7 @@ import { ProductReviewsService } from './product-reviews.service';
 // slug doesn't exist so the mobile hook can distinguish "no product"
 // from "no reviews".
 @ApiTags('Storefront Product Reviews')
+@Public()
 @Controller('storefront/products/:slug/reviews')
 export class PublicProductReviewsController {
   constructor(private readonly service: ProductReviewsService) {}
