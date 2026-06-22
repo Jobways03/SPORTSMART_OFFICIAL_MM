@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useModal } from '@sportsmart/ui';
 import { apiClient } from '@/lib/api-client';
+import { STATUS } from './status';
 
 interface Discount {
   id: string; code: string | null; title: string | null;
@@ -31,20 +32,6 @@ const TYPE_ICON_NAME: Record<string, TypeIconName> = {
   AMOUNT_OFF_ORDER: 'bag',
   BUY_X_GET_Y: 'gift',
   FREE_SHIPPING: 'truck',
-};
-
-// Phase 243 — single source of truth for status → badge colors. Exported so
-// the create/edit form sidebar badge and the detail-page lifecycle controls
-// render identical colors (the form previously hardcoded green for every
-// status). Covers the operator-settable states plus the abuse-suspend state.
-export const STATUS: Record<string, { bg: string; fg: string; dot: string }> = {
-  ACTIVE:    { bg: '#dcfce7', fg: '#15803d', dot: '#22c55e' },
-  SCHEDULED: { bg: '#fef9c3', fg: '#854d0e', dot: '#eab308' },
-  EXPIRED:   { bg: '#f3f4f6', fg: '#6b7280', dot: '#9ca3af' },
-  DRAFT:     { bg: '#f3f4f6', fg: '#6b7280', dot: '#9ca3af' },
-  PAUSED:    { bg: '#fef3c7', fg: '#92400e', dot: '#f59e0b' },
-  ARCHIVED:  { bg: '#e5e7eb', fg: '#4b5563', dot: '#6b7280' },
-  SUSPENDED_FOR_ABUSE: { bg: '#fee2e2', fg: '#991b1b', dot: '#ef4444' },
 };
 
 const DISCOUNT_TYPES: { type: string; label: string; desc: string; icon: TypeIconName }[] = [

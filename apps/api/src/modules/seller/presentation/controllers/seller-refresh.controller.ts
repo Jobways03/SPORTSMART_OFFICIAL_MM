@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -11,6 +12,7 @@ import {
 } from '../../../../core/auth/auth-cookie.helper';
 
 @ApiTags('Seller Auth')
+@Public()
 @Controller('seller/auth')
 export class SellerRefreshController {
   constructor(

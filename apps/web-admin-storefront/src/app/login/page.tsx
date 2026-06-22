@@ -56,6 +56,9 @@ function LoginInner() {
   // (handleRequestEmailOtp). The authenticator code is the default; email is an
   // on-demand fallback. Auto-send-on-challenge was removed (2026-06-22) so a
   // code goes out only on an explicit user action.
+  // Authenticator-first MFA: the challenge opens on the authenticator-code
+  // entry by default. The email OTP is sent ONLY when the user clicks
+  // "Email me a code instead" (handleRequestEmailOtp) — no auto-send.
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -229,7 +232,7 @@ function LoginInner() {
             src="/SportsMart_Web_Banner.avif"
             alt="SportsMart"
             className="login-brand"
-            style={{ height: 56, width: 'auto', display: 'block' }}
+            style={{ height: 56, width: 'auto', display: 'block', margin: '0 auto' }}
           />
           <p className="login-subtitle" id="login-title">
             {mfa

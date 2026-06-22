@@ -11,6 +11,7 @@ import {
 
 const ADMIN_ROLES = [
   'SUPER_ADMIN',
+  'STAFF',
   'SELLER_SUPPORT',
   'SELLER_OPERATIONS',
   'SELLER_OPS',

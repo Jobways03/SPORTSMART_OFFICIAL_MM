@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Body, Controller, Headers, Post } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -26,6 +27,7 @@ import { NotificationsPublicFacade } from '../../application/facades/notificatio
  * compared in constant time, and fails CLOSED when the secret is unset.
  */
 @ApiTags('Notifications — Webhooks')
+@Public()
 @Controller('webhooks/notifications')
 @Throttle({ default: { limit: 1200, ttl: 60_000 } })
 export class NotificationDeliveryReceiptController {

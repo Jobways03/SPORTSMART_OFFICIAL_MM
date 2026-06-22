@@ -76,7 +76,7 @@ export default function AdminForgotPasswordPage() {
             src="/SportsMart_Web_Banner.avif"
             alt="SportsMart"
             className="login-brand"
-            style={{ height: 56, width: 'auto', display: 'block' }}
+            style={{ height: 56, width: 'auto', display: 'block', margin: '0 auto' }}
           />
           <p className="login-subtitle" id="forgot-title">
             Enter your admin email to receive a reset code.

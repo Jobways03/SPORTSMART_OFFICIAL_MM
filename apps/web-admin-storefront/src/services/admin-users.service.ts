@@ -2,6 +2,7 @@ import { apiClient, ApiResponse } from '@/lib/api-client';
 
 export type AdminPrimaryRole =
   | 'SUPER_ADMIN'
+  | 'STAFF'
   | 'SELLER_SUPPORT'
   | 'SELLER_OPERATIONS'
   | 'SELLER_OPS'
@@ -132,6 +133,7 @@ export interface MfaInviteResult {
 
 export const ADMIN_PRIMARY_ROLES: { value: AdminPrimaryRole; label: string }[] = [
   { value: 'SUPER_ADMIN', label: 'Super Admin' },
+  { value: 'STAFF', label: 'Staff (no access — assign a custom role)' },
   { value: 'SELLER_OPERATIONS', label: 'Seller Operations (Finance/Money-ops)' },
   { value: 'SELLER_OPS', label: 'Seller Ops (Seller features only)' },
   { value: 'SELLER_SUPPORT', label: 'Seller Support' },

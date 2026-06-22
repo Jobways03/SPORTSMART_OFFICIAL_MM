@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Body,
   Controller,
@@ -29,6 +30,7 @@ import { CaptchaVerifierService } from '../../../../integrations/captcha/captcha
  *     affiliate.registered audit row has provenance.
  */
 @ApiTags('Affiliate')
+@Public()
 @Controller('affiliate')
 export class AffiliateRegistrationController {
   constructor(

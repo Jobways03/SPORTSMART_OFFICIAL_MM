@@ -38,6 +38,9 @@ export default function FranchiseAdminLoginPage() {
   // (handleRequestEmailOtp). The authenticator code is the default; email is an
   // on-demand fallback. Auto-send-on-challenge was removed (2026-06-22) so a
   // code goes out only on an explicit user action.
+  // Authenticator-first MFA: the challenge opens on the authenticator-code
+  // entry by default. The email OTP is sent ONLY when the user clicks
+  // "Email me a code instead" (handleRequestEmailOtp) — no auto-send.
 
   const persistSession = (data: {
     accessToken: string;
@@ -206,7 +209,7 @@ export default function FranchiseAdminLoginPage() {
             src="/SportsMart_Web_Banner.avif"
             alt="SportsMart"
             className="auth-logo"
-            style={{ height: 56, width: 'auto', display: 'block' }}
+            style={{ height: 56, width: 'auto', display: 'block', margin: '0 auto' }}
           />
           <h2 className="auth-title">Sign in to manage franchise operations.</h2>
         </header>

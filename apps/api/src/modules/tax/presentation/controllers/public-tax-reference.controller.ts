@@ -9,11 +9,13 @@
 // 2-digit GST code at write time (column `customer_addresses.state_code`)
 // instead of relying on the runtime name-match fallback.
 
+import { Public } from '@core/decorators';
 import { Controller, Get, HttpCode, HttpStatus } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 
 @ApiTags('Tax / Public Reference')
+@Public()
 @Controller('tax')
 export class PublicTaxReferenceController {
   constructor(private readonly prisma: PrismaService) {}

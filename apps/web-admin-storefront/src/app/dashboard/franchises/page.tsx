@@ -22,7 +22,7 @@ const STATUS_COLOR: Record<string, string> = {
   DEACTIVATED: '#b91c1c',
 };
 
-export function Pill({ value }: { value?: string }) {
+function Pill({ value }: { value?: string }) {
   const color = STATUS_COLOR[value ?? ''] ?? '#525A65';
   return (
     <span

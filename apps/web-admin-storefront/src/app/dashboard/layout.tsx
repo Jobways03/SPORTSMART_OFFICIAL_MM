@@ -40,6 +40,16 @@ interface NavItem {
    * than loosening the anyOf here — that way backend + UI stay in sync.
    */
   anyOf?: string[];
+  /**
+   * Permission-GROUP gate. The item is shown if the admin holds ANY
+   * permission whose key equals one of these prefixes or starts with
+   * `<prefix>.`. This is what makes a granular custom role (e.g. one built
+   * from just `inventory.alerts.read` or `cod.write`) actually light up the
+   * matching page — without it, a role assembled from the granular
+   * permission picker reveals nothing and the dashboard looks empty.
+   * `anyOf` and `anyPrefix` are OR'd together.
+   */
+  anyPrefix?: string[];
 }
 
 // Sidebar groups, ordered by how often an admin uses them during a
@@ -63,16 +73,21 @@ const navItems: (NavItem & { section?: NavSection })[] = [
   { label: 'Home', href: '/dashboard', icon: 'home' },
 
   // Operations — day-to-day order/catalog work, highest priority.
-  { label: 'Orders', href: '/dashboard/orders', icon: 'orders', hasPendingBadge: true, anyOf: ['orders.read'], section: 'operations' },
-  { label: 'Products', href: '/dashboard/products', icon: 'package', anyOf: ['products.read', 'catalog.read'], section: 'operations' },
+  // anyPrefix opens each page to ANY granular permission in its group, so a
+  // custom role built from e.g. orders.verify or inventory.alerts.read still
+  // reveals the right page instead of an empty sidebar.
+  { label: 'Orders', href: '/dashboard/orders', icon: 'orders', hasPendingBadge: true, anyOf: ['orders.read'], anyPrefix: ['orders'], section: 'operations' },
+  { label: 'Verification', href: '/dashboard/verification', icon: 'shield', anyOf: ['orders.verify', 'orders.verify.bulk'], section: 'operations' },
+  { label: 'Products', href: '/dashboard/products', icon: 'package', anyOf: ['products.read', 'catalog.read'], anyPrefix: ['products', 'catalog'], section: 'operations' },
   { label: 'Seller Mappings', href: '/dashboard/products/seller-mappings', icon: 'users', anyOf: ['products.read', 'catalog.read'], section: 'operations' },
+  // Sellers — onboarding/approvals, profile, seller-type scope. Reachable to
+  // any sellers.* holder (sellers.read, sellers.approve, sellers.suspend, …).
+  { label: 'Sellers', href: '/dashboard/sellers', icon: 'users', anyPrefix: ['sellers'], section: 'operations' },
   // Phase (franchise-admin) — franchise management section: list + detail with
-  // KYC/status/hold actions and Inventory/Pincodes/Catalog/POS tabs. Gated on
-  // franchise.read so FRANCHISE_ADMIN (and SUPER_ADMIN) see it.
-  { label: 'Franchises', href: '/dashboard/franchises', icon: 'inventory', anyOf: ['franchise.read'], section: 'operations' },
-  // Inventory has no dedicated permission key today — falls under products.
-  { label: 'Inventory', href: '/dashboard/inventory', icon: 'inventory', anyOf: ['products.read'], section: 'operations' },
-  { label: 'Low-stock alerts', href: '/dashboard/inventory/alerts', icon: 'alert-triangle', anyOf: ['products.read'], section: 'operations' },
+  // KYC/status/hold actions and Inventory/Pincodes/Catalog/POS tabs.
+  { label: 'Franchises', href: '/dashboard/franchises', icon: 'inventory', anyOf: ['franchise.read'], anyPrefix: ['franchise'], section: 'operations' },
+  { label: 'Inventory', href: '/dashboard/inventory', icon: 'inventory', anyOf: ['products.read'], anyPrefix: ['inventory'], section: 'operations' },
+  { label: 'Low-stock alerts', href: '/dashboard/inventory/alerts', icon: 'alert-triangle', anyOf: ['products.read'], anyPrefix: ['inventory.alerts'], section: 'operations' },
   // Delhivery Tools console hidden (2026-06-02, product decision) — Delhivery
   // actions live contextually (order Shipping panel), not a standalone console.
   // Page kept at /dashboard/delhivery-tools; re-enable by uncommenting.
@@ -80,57 +95,58 @@ const navItems: (NavItem & { section?: NavSection })[] = [
 
   // Customer Care — escalations and people-facing queues.
   { label: 'Queues', href: '/dashboard/queues', icon: 'inbox', anyOf: ['audit.read'], section: 'care' },
-  { label: 'Returns', href: '/dashboard/returns', icon: 'returns', anyOf: ['returns.read'], section: 'care' },
-  { label: 'Seller Reversals', href: '/dashboard/seller-reversals', icon: 'returns', anyOf: ['sellerReversals.read'], section: 'care' },
-  { label: 'Disputes', href: '/dashboard/disputes', icon: 'scale', anyOf: ['disputes.read'], section: 'care' },
-  { label: 'Support', href: '/dashboard/support', icon: 'message', anyOf: ['support.read'], section: 'care' },
-  { label: 'Customers', href: '/dashboard/customers', icon: 'users', anyOf: ['customers.read'], section: 'care' },
+  // Returns also hosts the shipment-evidence viewer (packing photos / POD),
+  // so a shipment.evidence.* role lands here.
+  { label: 'Returns', href: '/dashboard/returns', icon: 'returns', anyOf: ['returns.read'], anyPrefix: ['returns', 'shipment.evidence'], section: 'care' },
+  { label: 'Seller Reversals', href: '/dashboard/seller-reversals', icon: 'returns', anyOf: ['sellerReversals.read'], anyPrefix: ['sellerReversals'], section: 'care' },
+  { label: 'Disputes', href: '/dashboard/disputes', icon: 'scale', anyOf: ['disputes.read'], anyPrefix: ['disputes'], section: 'care' },
+  { label: 'Support', href: '/dashboard/support', icon: 'message', anyOf: ['support.read'], anyPrefix: ['support'], section: 'care' },
+  { label: 'Customers', href: '/dashboard/customers', icon: 'users', anyOf: ['customers.read'], anyPrefix: ['customers'], section: 'care' },
 
   // Finance — money flow. Approvals first because they block payouts.
-  { label: 'Finance Approvals', href: '/dashboard/finance/refund-approvals', icon: 'banknote', anyOf: ['refunds.approve', 'refunds.read'], section: 'finance' },
+  { label: 'Finance Approvals', href: '/dashboard/finance/refund-approvals', icon: 'banknote', anyOf: ['refunds.approve', 'refunds.read'], anyPrefix: ['refunds'], section: 'finance' },
   { label: 'Commission', href: '/dashboard/commission', icon: 'percent', anyOf: ['settlements.read'], section: 'finance' },
-  { label: 'Settlements', href: '/dashboard/finance/settlements', icon: 'banknote', anyOf: ['settlements.read'], section: 'finance' },
-  { label: 'Settlement Charge Rules', href: '/dashboard/finance/settlement-charge-rules', icon: 'percent', anyOf: ['settlements.read'], section: 'finance' },
-  { label: 'Wallets', href: '/dashboard/wallets', icon: 'wallet', anyOf: ['wallets.read'], section: 'finance' },
-  { label: 'Payment Ops', href: '/dashboard/payment-ops', icon: 'shield', anyOf: ['paymentOps.read'], section: 'finance' },
-  { label: 'Reconciliation', href: '/dashboard/reconciliation', icon: 'recon', anyOf: ['recon.read'], section: 'finance' },
+  { label: 'Settlements', href: '/dashboard/finance/settlements', icon: 'banknote', anyOf: ['settlements.read'], anyPrefix: ['settlements'], section: 'finance' },
+  { label: 'Settlement Charge Rules', href: '/dashboard/finance/settlement-charge-rules', icon: 'percent', anyOf: ['settlements.charges.read', 'settlements.read'], section: 'finance' },
+  { label: 'Wallets', href: '/dashboard/wallets', icon: 'wallet', anyOf: ['wallets.read'], anyPrefix: ['wallets'], section: 'finance' },
+  { label: 'Wallet Adjustments', href: '/dashboard/tax/wallet-adjustments', icon: 'wallet', anyPrefix: ['wallet.adjustment', 'wallet.goodwill'], section: 'finance' },
+  { label: 'Payment Ops', href: '/dashboard/payment-ops', icon: 'shield', anyOf: ['paymentOps.read'], anyPrefix: ['paymentOps', 'payments'], section: 'finance' },
+  // COD Rules — money/payment ops decide when COD is offered. Backend lives at
+  // /admin/cod/rules; cod.read views, cod.write edits.
+  { label: 'COD Rules', href: '/dashboard/cod', icon: 'banknote', anyPrefix: ['cod'], section: 'finance' },
+  { label: 'Payouts', href: '/dashboard/payouts', icon: 'banknote', anyPrefix: ['payouts'], section: 'finance' },
+  { label: 'Reconciliation', href: '/dashboard/reconciliation', icon: 'recon', anyOf: ['recon.read'], anyPrefix: ['recon'], section: 'finance' },
   // Phase 175/177 — accounts overview + per-franchise finance dashboards.
-  { label: 'Accounts', href: '/dashboard/accounts', icon: 'banknote', anyOf: ['accounts.read'], section: 'finance' },
-  { label: 'Payables aging', href: '/dashboard/accounts/payables', icon: 'recon', anyOf: ['accounts.read'], section: 'finance' },
+  { label: 'Accounts', href: '/dashboard/accounts', icon: 'banknote', anyOf: ['accounts.read'], anyPrefix: ['accounts'], section: 'finance' },
+  { label: 'Payables aging', href: '/dashboard/accounts/payables', icon: 'recon', anyOf: ['accounts.read', 'accounts.payable.hold', 'accounts.payable.recordPayment'], section: 'finance' },
   { label: 'Top performers', href: '/dashboard/accounts/top-performers', icon: 'percent', anyOf: ['accounts.read'], section: 'finance' },
   { label: 'Finance reports', href: '/dashboard/accounts/reports', icon: 'recon', anyOf: ['settlements.read'], section: 'finance' },
-  { label: 'Penalty approvals', href: '/dashboard/accounts/penalty-approvals', icon: 'percent', anyOf: ['franchise.finance'], section: 'finance' },
-  { label: 'Franchise finances', href: '/dashboard/accounts/franchises', icon: 'percent', anyOf: ['accounts.read'], section: 'finance' },
-  // Refund Saga Console — observability into the refund-execution state
-  // machine. Surfaces stuck/failed sagas so finance ops can step in
-  // before they breach SLA. Gated on the same permissions as Payment
-  // Ops and refund visibility.
+  { label: 'Penalty approvals', href: '/dashboard/accounts/penalty-approvals', icon: 'percent', anyOf: ['franchise.finance', 'franchise.penalty.approve'], section: 'finance' },
+  { label: 'Franchise finances', href: '/dashboard/accounts/franchises', icon: 'percent', anyOf: ['accounts.read', 'accounts.franchise.adjust', 'franchise.finance.read'], section: 'finance' },
+  // Refund Saga Console — observability into the refund-execution state machine.
   { label: 'Refund Sagas', href: '/dashboard/finance/refund-sagas', icon: 'recon', anyOf: ['paymentOps.read', 'refunds.read'], section: 'finance' },
-  // Liability Ledger is finance ops — `refunds.approve` already gates the
-  // backend list endpoint, mirror that here.
-  { label: 'Liability Ledger', href: '/dashboard/liability-ledger', icon: 'book', anyOf: ['refunds.approve'], section: 'finance' },
-  // Phase 25 GST — admin tax dashboard (mode badge + audit readiness +
-  // GSTR-1/3B/8 exports + TCS lifecycle transitions). Gated on the
-  // broadest tax.* read key so any finance / tax-ops admin can land
-  // on it; per-endpoint gating happens at the backend.
-  { label: 'Tax / GST', href: '/dashboard/tax', icon: 'receipt', anyOf: ['tax.reports.read', 'tax.tcs.read'], section: 'finance' },
+  // Liability Ledger — seller-debit claw-back queue.
+  { label: 'Liability Ledger', href: '/dashboard/liability-ledger', icon: 'book', anyOf: ['liability_ledger.read', 'refunds.approve'], anyPrefix: ['liability_ledger'], section: 'finance' },
+  // Phase 25 GST — admin tax dashboard. Opened to any tax.* permission.
+  { label: 'Tax / GST', href: '/dashboard/tax', icon: 'receipt', anyOf: ['tax.reports.read', 'tax.tcs.read'], anyPrefix: ['tax'], section: 'finance' },
 
   // Risk — fraud / abuse review, occasional but high-stakes.
-  // The Risk Review page reads the returns risk queue, so its data
-  // endpoint (GET /admin/returns) is gated on `returns.read`, not
-  // `risk.review`. Show the entry to EITHER permission so a returns-ops
-  // admin sees a page that actually loads, and a risk.review-only admin
-  // isn't pointed at a page that 403s. (Deeper risk.review-specific API
-  // enforcement is a separate backend follow-up.)
-  { label: 'Risk Review', href: '/dashboard/risk-review', icon: 'alert-octagon', anyOf: ['risk.review', 'returns.read'], section: 'risk' },
+  { label: 'Risk Review', href: '/dashboard/risk-review', icon: 'alert-octagon', anyOf: ['risk.review', 'returns.read'], anyPrefix: ['risk'], section: 'risk' },
 
   // Growth — campaigns and reporting, used less frequently.
-  { label: 'Discounts', href: '/dashboard/discounts', icon: 'tag', anyOf: ['discounts.read'], section: 'growth' },
+  { label: 'Discounts', href: '/dashboard/discounts', icon: 'tag', anyOf: ['discounts.read'], anyPrefix: ['discounts'], section: 'growth' },
   { label: 'Marketing', href: '/dashboard/marketing', icon: 'megaphone', anyOf: ['discounts.read'], section: 'growth' },
-  { label: 'Analytics', href: '/dashboard/analytics', icon: 'chart', anyOf: ['analytics.read'], section: 'growth' },
+  { label: 'Analytics', href: '/dashboard/analytics', icon: 'chart', anyOf: ['analytics.read'], anyPrefix: ['analytics'], section: 'growth' },
 
   // System — integrity / observability tools used by admins, not customer-facing.
   { label: 'Data Validation', href: '/dashboard/system/data-validation', icon: 'shield', anyOf: ['audit.read'], section: 'system' },
+  { label: 'Notifications', href: '/dashboard/notifications', icon: 'message', anyPrefix: ['notifications'], section: 'system' },
+  { label: 'Content', href: '/dashboard/content', icon: 'book', anyPrefix: ['content'], section: 'system' },
+  { label: 'Audit Logs', href: '/dashboard/audit-logs', icon: 'book', anyOf: ['audit.read'], anyPrefix: ['audit'], section: 'system' },
+  { label: 'Sessions', href: '/dashboard/sessions', icon: 'shield', anyPrefix: ['sessions'], section: 'system' },
+  { label: 'Access Logs', href: '/dashboard/access-logs', icon: 'shield', anyPrefix: ['security'], section: 'system' },
+  { label: 'Admin Activity', href: '/dashboard/admin-activity', icon: 'book', anyPrefix: ['admin.activity'], section: 'system' },
+  { label: 'Affiliates', href: '/dashboard/affiliates/applications', icon: 'users', anyPrefix: ['affiliates'], section: 'system' },
 
   // Post-MVP1 features — parked behind env flags. The pages themselves
   // also guard with notFound() so direct-URL access is blocked when the
@@ -183,6 +199,7 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
   const { loading: permsLoading, hasAnyPermission, me } = usePermissions();
   const ROLE_LABELS: Record<string, string> = {
     SUPER_ADMIN: 'Super Admin',
+    STAFF: 'Staff',
     SELLER_ADMIN: 'Seller Admin',
     SELLER_OPERATIONS: 'Seller Operations',
     SELLER_OPS: 'Seller Ops',
@@ -195,8 +212,26 @@ function DashboardLayoutInner({ children }: { children: React.ReactNode }) {
   const roleLabel = me?.role ? ROLE_LABELS[me.role] ?? me.role : 'Admin';
   const visibleNavItems = useMemo(() => {
     if (permsLoading) return null;
-    return navItems.filter((item) => !item.anyOf || hasAnyPermission(item.anyOf));
-  }, [permsLoading, hasAnyPermission]);
+    const perms = me?.permissions ?? [];
+    const isSuper = me?.isSuperAdmin ?? false;
+    // Group-prefix match: the admin holds a permission that equals `pre` or
+    // starts with `pre.` (so `cod` matches cod.read/cod.write, `inventory`
+    // matches inventory.alerts.read, etc.). SUPER_ADMIN sees everything.
+    const hasAnyGroup = (prefixes?: string[]) =>
+      !!prefixes &&
+      (isSuper ||
+        perms.some((p) =>
+          prefixes.some((pre) => p === pre || p.startsWith(pre + '.')),
+        ));
+    return navItems.filter((item) => {
+      // Ungated items (Home) are always visible.
+      if (!item.anyOf && !item.anyPrefix) return true;
+      return (
+        (item.anyOf ? hasAnyPermission(item.anyOf) : false) ||
+        hasAnyGroup(item.anyPrefix)
+      );
+    });
+  }, [permsLoading, hasAnyPermission, me]);
 
   const fetchPendingOrderCount = useCallback(async () => {
     try {

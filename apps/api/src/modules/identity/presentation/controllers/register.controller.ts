@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Body,
   Controller,
@@ -36,6 +37,7 @@ import { CaptchaVerifierService } from '../../../../integrations/captcha/captcha
  * PENDING_VERIFICATION rows).
  */
 @ApiTags('Auth')
+@Public()
 @Controller('auth')
 export class RegisterController {
   constructor(

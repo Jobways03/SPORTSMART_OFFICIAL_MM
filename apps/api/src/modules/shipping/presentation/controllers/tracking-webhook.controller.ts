@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Body,
   Controller,
@@ -277,6 +278,7 @@ function parseDelhiveryTimestamp(p: DelhiveryWebhookPayload): Date {
 }
 
 @ApiTags('Shipping Webhooks')
+@Public()
 @Controller('shipping/webhooks')
 export class TrackingWebhookController {
   private readonly logger = new Logger(TrackingWebhookController.name);

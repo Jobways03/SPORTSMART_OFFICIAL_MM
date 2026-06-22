@@ -138,7 +138,7 @@ function LoginPageInner() {
         <img
           src="/SportsMart_Web_Banner.avif"
           alt="SportsMart"
-          style={{ height: 48, width: 'auto', display: 'block', marginBottom: 16 }}
+          style={{ height: 48, width: 'auto', display: 'block', margin: '0 auto 16px' }}
         />
         <h1 style={{ fontSize: 24, fontWeight: 700, margin: '0 0 4px', letterSpacing: '-0.3px' }}>
           Affiliate sign in

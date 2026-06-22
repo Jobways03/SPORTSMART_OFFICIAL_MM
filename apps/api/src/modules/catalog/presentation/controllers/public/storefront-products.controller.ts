@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Body,
   Controller,
@@ -47,6 +48,7 @@ import { STOREFRONT_REPOSITORY, IStorefrontRepository } from '../../../domain/re
 import { PrismaService } from '../../../../../bootstrap/database/prisma.service';
 
 @ApiTags('Storefront')
+@Public()
 @Controller('storefront/products')
 // Phase 192 (#3) — public scraping guard. Cache shields the DB; this caps
 // the request rate per IP. Tighter on the cheap autocomplete endpoint.

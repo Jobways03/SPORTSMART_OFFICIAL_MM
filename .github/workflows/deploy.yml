@@ -51,6 +51,7 @@ jobs:
     outputs:
       image_tag: ${{ steps.tag.outputs.tag }}
       api_url: ${{ steps.cfg.outputs.api_url }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,6 +66,42 @@ jobs:
       - name: Compute image tag
         id: tag
         run: echo "tag=${{ inputs.target }}-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      # Build the matrix here (filtered by the services input) and hand it to the
+      # build job. A job-level `if` cannot reference `matrix`, so the old
+      # per-job filter made the whole workflow file invalid (startup failure).
+      - name: Compute build matrix
+        id: matrix
+        env:
+          SERVICES: ${{ inputs.services }}
+        run: |
+          cat > /tmp/catalog.json <<'JSON'
+          [
+          {"name":"api","dockerfile":"infra/docker/Dockerfile.api","app":""},
+          {"name":"web-storefront","dockerfile":"infra/docker/Dockerfile.web","app":"web-storefront"},
+          {"name":"web-admin-storefront","dockerfile":"infra/docker/Dockerfile.web","app":"web-admin-storefront"},
+          {"name":"web-d2c-seller","dockerfile":"infra/docker/Dockerfile.web","app":"web-d2c-seller"},
+          {"name":"web-d2c-seller-admin","dockerfile":"infra/docker/Dockerfile.web","app":"web-d2c-seller-admin"},
+          {"name":"web-retail-seller","dockerfile":"infra/docker/Dockerfile.web","app":"web-retail-seller"},
+          {"name":"web-retail-seller-admin","dockerfile":"infra/docker/Dockerfile.web","app":"web-retail-seller-admin"},
+          {"name":"web-franchise","dockerfile":"infra/docker/Dockerfile.web","app":"web-franchise"},
+          {"name":"web-franchise-admin","dockerfile":"infra/docker/Dockerfile.web","app":"web-franchise-admin"},
+          {"name":"web-affiliate","dockerfile":"infra/docker/Dockerfile.web","app":"web-affiliate"},
+          {"name":"web-affiliate-admin","dockerfile":"infra/docker/Dockerfile.web","app":"web-affiliate-admin"},
+          {"name":"logistics-facade","dockerfile":"apps/logistics-facade/Dockerfile","app":""}
+          ]
+          JSON
+          if [ "$SERVICES" = "all" ]; then
+            include="$(jq -c . /tmp/catalog.json)"
+          else
+            # Exact (comma-delimited) match so "web-d2c-seller" doesn't also
+            # select "web-d2c-seller-admin".
+            include="$(jq -c --arg list "$SERVICES" '[.[] | select(.name as $n | ($list | split(",")) | index($n))]' /tmp/catalog.json)"
+          fi
+          if [ "$(echo "$include" | jq 'length')" -eq 0 ]; then
+            echo "::error::No services matched '$SERVICES'"; exit 1
+          fi
+          echo "matrix={\"include\":$include}" >> "$GITHUB_OUTPUT"
 
       - name: Configure AWS credentials (OIDC)
         uses: aws-actions/configure-aws-credentials@v4
@@ -95,23 +132,9 @@ jobs:
       id-token: write
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { name: api, dockerfile: infra/docker/Dockerfile.api, app: "" }
-          - { name: web-storefront, dockerfile: infra/docker/Dockerfile.web, app: web-storefront }
-          - { name: web-admin-storefront, dockerfile: infra/docker/Dockerfile.web, app: web-admin-storefront }
-          - { name: web-d2c-seller, dockerfile: infra/docker/Dockerfile.web, app: web-d2c-seller }
-          - { name: web-d2c-seller-admin, dockerfile: infra/docker/Dockerfile.web, app: web-d2c-seller-admin }
-          - { name: web-retail-seller, dockerfile: infra/docker/Dockerfile.web, app: web-retail-seller }
-          - { name: web-retail-seller-admin, dockerfile: infra/docker/Dockerfile.web, app: web-retail-seller-admin }
-          - { name: web-franchise, dockerfile: infra/docker/Dockerfile.web, app: web-franchise }
-          - { name: web-franchise-admin, dockerfile: infra/docker/Dockerfile.web, app: web-franchise-admin }
-          - { name: web-affiliate, dockerfile: infra/docker/Dockerfile.web, app: web-affiliate }
-          - { name: web-affiliate-admin, dockerfile: infra/docker/Dockerfile.web, app: web-affiliate-admin }
-          - { name: logistics-facade, dockerfile: apps/logistics-facade/Dockerfile, app: "" }
-    # Exact (comma-delimited) match so "web-d2c-seller" doesn't also select
-    # "web-d2c-seller-admin".
-    if: ${{ inputs.services == 'all' || contains(format(',{0},', inputs.services), format(',{0},', matrix.name)) }}
+      # Matrix is computed (and filtered by inputs.services) in the prep job —
+      # a job-level `if` cannot reference `matrix`.
+      matrix: ${{ fromJson(needs.prep.outputs.matrix) }}
     steps:
       - uses: actions/checkout@v4
 

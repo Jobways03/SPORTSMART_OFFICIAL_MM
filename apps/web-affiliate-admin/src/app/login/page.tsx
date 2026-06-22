@@ -63,6 +63,9 @@ export default function LoginPage() {
   // (handleRequestEmailOtp). The authenticator code is the default; email is an
   // on-demand fallback. Auto-send-on-challenge was removed (2026-06-22) so a
   // code goes out only on an explicit user action.
+  // Authenticator-first MFA: the challenge opens on the authenticator-code
+  // entry by default. The email OTP is sent ONLY when the user clicks
+  // "Email me a code instead" (handleRequestEmailOtp) — no auto-send.
 
   const completeLogin = (data: any) => {
     const token = extractToken(data);
@@ -234,7 +237,7 @@ export default function LoginPage() {
         <img
           src="/SportsMart_Web_Banner.avif"
           alt="SportsMart"
-          style={{ height: 48, width: 'auto', display: 'block', marginBottom: 16 }}
+          style={{ height: 48, width: 'auto', display: 'block', margin: '0 auto 16px' }}
         />
         <span
           style={{

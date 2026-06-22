@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Body, Controller, HttpCode, HttpStatus, Post, Req, Res } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -10,6 +11,7 @@ import { setAuthCookies } from '../../../../core/auth/auth-cookie.helper';
 import { CaptchaVerifierService } from '../../../../integrations/captcha/captcha-verifier.service';
 
 @ApiTags('Seller Auth')
+@Public()
 @Controller('seller/auth')
 export class SellerLoginController {
   constructor(

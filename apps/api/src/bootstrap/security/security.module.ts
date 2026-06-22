@@ -4,6 +4,7 @@ import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { ThrottlerStorageRedisService } from '@nest-lab/throttler-storage-redis';
 import { RedisService } from '../cache/redis.service';
 import { throttlingConfig } from './throttling.config';
+import { GlobalAuthGuard } from '../../core/guards/global-auth.guard';
 
 @Global()
 @Module({
@@ -31,6 +32,13 @@ import { throttlingConfig } from './throttling.config';
     {
       provide: APP_GUARD,
       useClass: ThrottlerGuard,
+    },
+    // Global auth safety net. Registered AFTER the throttler so floods are
+    // shed first. Fails closed (strict) / warns (soak) on any route with no
+    // auth guard and no @Public() — see GlobalAuthGuard.
+    {
+      provide: APP_GUARD,
+      useClass: GlobalAuthGuard,
     },
   ],
 })

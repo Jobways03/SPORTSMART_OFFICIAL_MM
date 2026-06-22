@@ -806,19 +806,33 @@ const { id } = useParams<{ id: string }>();
               </span>
             </div>
 
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <div>
+              {/* tableLayout:fixed + a colgroup makes the 9 columns share the
+                  container width and wrap, so the table never overflows
+                  horizontally (no sideways scroll). */}
+              <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 13 }}>
+                <colgroup>
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '23%' }} />
+                  <col style={{ width: '11%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '6%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '11%' }} />
+                </colgroup>
                 <thead>
                   <tr style={{ borderBottom: '2px solid #e5e7eb', background: '#f9fafb' }}>
-                    <th style={thStyle}>PRODUCT ID</th>
-                    <th style={thStyle}>IMAGE</th>
-                    <th style={thStyle}>PRODUCT NAME</th>
-                    <th style={thStyle}>PRICE PER UNIT</th>
-                    <th style={thStyle}>SKU</th>
-                    <th style={thStyle}>QTY</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>Avl. QTY<br />For Fulfill</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>QTY<br />Fulfilled</th>
-                    <th style={thStyle}>TOTAL</th>
+                    <th style={thWrapStyle}>PRODUCT ID</th>
+                    <th style={thWrapStyle}>IMAGE</th>
+                    <th style={thWrapStyle}>PRODUCT NAME</th>
+                    <th style={thWrapStyle}>PRICE PER UNIT</th>
+                    <th style={thWrapStyle}>SKU</th>
+                    <th style={{ ...thWrapStyle, textAlign: 'center' }}>QTY</th>
+                    <th style={{ ...thWrapStyle, textAlign: 'center' }}>Avl. QTY<br />For Fulfill</th>
+                    <th style={{ ...thWrapStyle, textAlign: 'center' }}>QTY<br />Fulfilled</th>
+                    <th style={{ ...thWrapStyle, textAlign: 'right' }}>TOTAL</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -863,7 +877,7 @@ const { id } = useParams<{ id: string }>();
                       <td style={{ ...tdStyle, textAlign: 'center' }}>
                         {['SHIPPED', 'FULFILLED', 'DELIVERED'].includes(order.fulfillmentStatus) ? item.quantity : 0}
                       </td>
-                      <td style={{ ...tdStyle, fontWeight: 600 }}>{fmt(Number(item.totalPrice))}</td>
+                      <td style={{ ...tdStyle, fontWeight: 600, textAlign: 'right' }}>{fmt(Number(item.totalPrice))}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -871,7 +885,24 @@ const { id } = useParams<{ id: string }>();
             </div>
 
             {/* -- Action buttons -- */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 10, marginTop: 20, paddingTop: 16, borderTop: '1px solid #f3f4f6' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10, marginTop: 20, paddingTop: 16, borderTop: '1px solid #f3f4f6' }}>
+              {/* Left: Delhivery self-service (pickup + label) — sits parallel to
+                  the status badge on the right. The (possibly empty) div keeps
+                  the right-side group pinned right in non-Delhivery states. */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 10 }}>
+                {isDelhivery &&
+                  (order.fulfillmentStatus === 'PACKED' ||
+                    order.fulfillmentStatus === 'SHIPPED') && (
+                    <>
+                      <RequestPickupButton subOrderId={order.id} onChanged={() => fetchOrder()} />
+                      {!!order.trackingNumber && (
+                        <DownloadLabelButton subOrderId={order.id} />
+                      )}
+                    </>
+                  )}
+              </div>
+              {/* Right: state-dependent action buttons + fulfillment status */}
+              <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'flex-end', gap: 10 }}>
               {order.acceptStatus === 'OPEN' && (
                 <>
                   <button
@@ -975,6 +1006,7 @@ const { id } = useParams<{ id: string }>();
               {order.acceptStatus === 'CANCELLED' && (
                 <span style={{ fontSize: 14, color: '#dc2626', fontWeight: 600 }}>Order Cancelled</span>
               )}
+              </div>
             </div>
           </div>
 
@@ -1323,8 +1355,22 @@ const { id } = useParams<{ id: string }>();
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <tbody>
                 <SideRow label="ORDERED ON" value={fmtDateTime(mo.createdAt)} />
-                <SideRow label="DELIVERY METHOD" value="Free Shipping" />
-                <SideRow label="SHIPPING APPLIED BY" value="Merchant Shipping" />
+                <SideRow
+                  label="DELIVERY METHOD"
+                  value={
+                    order.deliveryMethod === 'DELHIVERY'
+                      ? 'Delhivery (automatic)'
+                      : order.deliveryMethod === 'SELF_DELIVERY'
+                        ? 'Self / Merchant shipping'
+                        : 'Not chosen yet'
+                  }
+                />
+                {order.deliveryMethod === 'DELHIVERY' && order.courierName && (
+                  <SideRow label="COURIER" value={order.courierName} />
+                )}
+                {order.trackingNumber && (
+                  <SideRow label="TRACKING NO." value={order.trackingNumber} />
+                )}
                 <SideRow
                   label="ORDER STATUS"
                   value={
@@ -2533,9 +2579,25 @@ const thStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
+// Header style for the fixed-layout Shipped Products table: same as thStyle but
+// allows wrapping so headers fit their fixed column width instead of forcing
+// the table wider (which caused the horizontal slide).
+const thWrapStyle: React.CSSProperties = {
+  textAlign: 'left',
+  padding: '8px 8px',
+  fontWeight: 600,
+  fontSize: 11,
+  color: '#6b7280',
+  textTransform: 'uppercase',
+  whiteSpace: 'normal',
+  wordBreak: 'break-word',
+};
+
 const tdStyle: React.CSSProperties = {
   padding: '10px',
   verticalAlign: 'middle',
+  wordBreak: 'break-word',
+  overflowWrap: 'anywhere',
 };
 
 const btnBlue: React.CSSProperties = {
@@ -2607,23 +2669,9 @@ function DeliverySection({
         />
       )}
 
-      {/* Delhivery: self-service pickup + label so the seller schedules their
-          own pickup and prints the label themselves, instead of asking an admin
-          (and risking it being forgotten). */}
-      {(order.deliveryMethod as string | null) === 'DELHIVERY' &&
-        (order.fulfillmentStatus === 'PACKED' ||
-          order.fulfillmentStatus === 'SHIPPED') && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-            <RequestPickupButton subOrderId={order.id} onChanged={onChanged} />
-            {/* Label is built from the booked AWB, attached a few seconds AFTER
-                "Mark as Packed" by the auto-book handler. Only show the button
-                once the AWB exists so it never dead-clicks into a "not ready"
-                toast (pickup, above, has no such dependency). */}
-            {!!order.trackingNumber && (
-              <DownloadLabelButton subOrderId={order.id} />
-            )}
-          </div>
-        )}
+      {/* Delhivery pickup + label buttons live in the fulfillment card's action
+          row (parallel to the Shipped status), not in this top panel — per
+          seller feedback. */}
     </div>
   );
 }
@@ -2671,18 +2719,19 @@ function RequestPickupButton({
         onClick={onClick}
         disabled={loading}
         style={{
-          padding: '10px 16px',
-          fontSize: 13,
+          padding: '6px 12px',
+          fontSize: 12,
           fontWeight: 600,
+          whiteSpace: 'nowrap',
           background: loading ? '#93c5fd' : '#2563eb',
           color: '#fff',
           border: 'none',
-          borderRadius: 8,
+          borderRadius: 7,
           cursor: loading ? 'not-allowed' : 'pointer',
           alignSelf: 'flex-start',
         }}
       >
-        {loading ? 'Requesting pickup…' : '\u{1F69A} Request Delhivery pickup'}
+        {loading ? 'Requesting…' : '\u{1F69A} Request pickup'}
       </button>
       {msg && <span style={{ fontSize: 12, color: '#065f46' }}>{msg}</span>}
       {err && <span style={{ fontSize: 12, color: '#b91c1c' }}>{err}</span>}
@@ -2729,18 +2778,19 @@ function DownloadLabelButton({ subOrderId }: { subOrderId: string }) {
         onClick={onClick}
         disabled={loading}
         style={{
-          padding: '10px 16px',
-          fontSize: 13,
+          padding: '6px 12px',
+          fontSize: 12,
           fontWeight: 600,
+          whiteSpace: 'nowrap',
           background: '#fff',
           color: '#2563eb',
           border: '1px solid #2563eb',
-          borderRadius: 8,
+          borderRadius: 7,
           cursor: loading ? 'not-allowed' : 'pointer',
           alignSelf: 'flex-start',
         }}
       >
-        {loading ? 'Fetching label…' : '\u{1F3F7}\u{FE0F} Download shipping label'}
+        {loading ? 'Fetching…' : '\u{1F3F7}\u{FE0F} Download label'}
       </button>
       {err && <span style={{ fontSize: 12, color: '#b91c1c' }}>{err}</span>}
     </div>

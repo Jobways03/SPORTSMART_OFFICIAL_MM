@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { apiClient, ApiError } from '@/lib/api-client';
-import { STATUS } from '../page';
+import { STATUS } from '../status';
 
 interface SelectedProduct { id: string; title: string; imageUrl: string | null; }
 interface SelectedCollection { id: string; name: string; productCount: number; imageUrl: string | null; }

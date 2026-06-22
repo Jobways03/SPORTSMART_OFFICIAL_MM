@@ -32,8 +32,22 @@ variable "node_env" {
 }
 
 variable "hosted_zone_name" {
-  description = "Existing Route53 public hosted zone (e.g. sportsmart.com). Hostnames are created as <subdomain>.<env_domain>."
+  description = "Route53 public hosted zone the service hostnames live under (e.g. staging.sportsmart.com). Looked up when create_hosted_zone=false, or created by this module when true. Service records are <subdomain>.<env_domain> inside it."
   type        = string
+}
+
+variable "create_hosted_zone" {
+  description = <<-EOT
+    true  → Terraform creates the Route53 public zone named hosted_zone_name.
+            Use for a DELEGATED SUBDOMAIN (e.g. staging.sportsmart.com): after
+            the first apply, add its `route53_name_servers` output as an NS
+            record in the parent corporate zone to delegate it — the apex zone
+            (corporate website, email/MX) is never touched.
+    false → the zone already exists and is only looked up (data source);
+            registrar/parent delegation was done out-of-band (production apex).
+  EOT
+  type        = bool
+  default     = false
 }
 
 variable "env_domain" {
@@ -125,6 +139,34 @@ variable "nat_per_az" {
   description = "One NAT gateway per AZ (true) vs a single shared NAT (false). Single NAT is a cheaper staging choice but a whole-environment egress SPOF; production should be true."
   type        = bool
   default     = false
+}
+
+variable "use_nat_instance" {
+  description = "Use a low-cost NAT instance (~$3-4/mo) instead of the managed NAT gateway (~$40/mo) for private-subnet egress. Non-prod cost saving; a single instance has no managed failover, so production should keep this false. Reverting is a one-flag apply (the managed gateway comes back). Ignores nat_per_az when true."
+  type        = bool
+  default     = false
+}
+
+variable "nat_instance_type" {
+  description = "EC2 instance type for the NAT instance when use_nat_instance=true (fck-nat arm64 image)."
+  type        = string
+  default     = "t4g.nano"
+}
+
+variable "nat_instance_az_index" {
+  description = "Which AZ (index into the AZ list) to place the NAT instance in when use_nat_instance=true. Use this to avoid an AZ that lacks capacity for the instance type (e.g. ap-south-1a had no t4g.nano capacity). Clamped to the available AZ range."
+  type        = number
+  default     = 0
+}
+
+variable "nat_instance_arch" {
+  description = "CPU architecture for the NAT instance AMI (fck-nat). MUST match nat_instance_type's architecture: 'arm64' for t4g.*, 'x86_64' for t3.*. Default arm64 matches the t4g.nano default."
+  type        = string
+  default     = "arm64"
+  validation {
+    condition     = contains(["arm64", "x86_64"], var.nat_instance_arch)
+    error_message = "nat_instance_arch must be 'arm64' or 'x86_64'."
+  }
 }
 
 variable "enable_vpc_endpoints" {

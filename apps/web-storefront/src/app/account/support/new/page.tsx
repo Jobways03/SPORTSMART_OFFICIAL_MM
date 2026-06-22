@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { ArrowLeft, AlertCircle, Loader2 } from 'lucide-react';
@@ -14,7 +14,7 @@ import {
 } from '@/services/support.service';
 import { validateText } from '@/lib/validators';
 
-export default function NewTicketPage() {
+function NewTicketContent() {
   const router = useRouter();
   const params = useSearchParams();
   const orderId = params.get('orderId') ?? undefined;
@@ -247,5 +247,13 @@ export default function NewTicketPage() {
         </form>
       </div>
     </StorefrontShell>
+  );
+}
+
+export default function NewTicketPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-sm opacity-70">Loading…</div>}>
+      <NewTicketContent />
+    </Suspense>
   );
 }

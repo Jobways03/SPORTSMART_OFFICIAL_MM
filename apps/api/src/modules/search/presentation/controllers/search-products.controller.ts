@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Controller, Get, Query } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -7,6 +8,7 @@ import { SearchPublicFacade } from '../../application/facades/search-public.faca
  * Search controller — delegates to SearchPublicFacade (no direct Prisma).
  */
 @ApiTags('Search')
+@Public()
 @Controller('search')
 // Phase 195 (#5) — public search is an ILIKE fan-out; rate-limit per IP to
 // deter scraping / enumeration DoS.

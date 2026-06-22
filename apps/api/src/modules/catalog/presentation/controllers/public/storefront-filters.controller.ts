@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Controller,
   Get,
@@ -47,6 +48,7 @@ import { CATEGORY_REPOSITORY, ICategoryRepository } from '../../../domain/reposi
  */
 
 @ApiTags('Storefront - Filters')
+@Public()
 @Controller({ path: 'storefront/filters', version: '1' })
 // Phase 192 (#3) — public facets endpoint; rate-limit to deter scraping.
 @Throttle({ default: { limit: 120, ttl: 60_000 } })

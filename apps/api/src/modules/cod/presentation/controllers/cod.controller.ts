@@ -27,7 +27,10 @@ interface CreateRuleDto {
 @ApiTags('COD — Admin')
 @Controller('admin/cod/rules')
 @UseGuards(AdminAuthGuard, PermissionsGuard)
-@Permissions('cod.write')
+// Class default is the view tier (cod.read) so a read-only COD role can list
+// rules + decisions. Mutating endpoints below raise the bar to cod.write
+// (method @Permissions overrides the class default via getAllAndOverride).
+@Permissions('cod.read')
 export class AdminCodRulesController {
   constructor(private readonly engine: CodRuleEngine) {}
 
@@ -38,6 +41,7 @@ export class AdminCodRulesController {
   }
 
   @Post()
+  @Permissions('cod.write')
   async create(@Body() body: CreateRuleDto) {
     if (!body?.kind || !body?.conditions) {
       throw new BadRequestAppException('kind and conditions are required');
@@ -47,12 +51,14 @@ export class AdminCodRulesController {
   }
 
   @Patch(':id')
+  @Permissions('cod.write')
   async update(@Param('id') id: string, @Body() body: Partial<CreateRuleDto>) {
     const data = await this.engine.updateRule(id, body);
     return { success: true, message: 'Rule updated', data };
   }
 
   @Delete(':id')
+  @Permissions('cod.write')
   async remove(@Param('id') id: string) {
     await this.engine.deleteRule(id);
     return { success: true, message: 'Rule deleted' };

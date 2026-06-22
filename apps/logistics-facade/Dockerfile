@@ -28,7 +28,10 @@ WORKDIR /workspace
 
 # Copy only the manifests first so `pnpm install` is cached between
 # rebuilds whenever source changes but deps don't.
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+# .npmrc carries `shamefully-hoist=true` — without it the strict install can't
+# resolve directly-imported deps (express) or the @sportsmart/logistics-contracts
+# workspace package at build time, even though it builds locally.
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc ./
 COPY apps/logistics-facade/package.json apps/logistics-facade/package.json
 COPY packages/logistics-contracts/package.json packages/logistics-contracts/package.json
 
@@ -40,9 +43,25 @@ COPY apps/logistics-facade apps/logistics-facade
 COPY packages/logistics-contracts packages/logistics-contracts
 
 RUN pnpm --filter @sportsmart/logistics-facade exec prisma generate
+# Compile the logistics-contracts workspace package to ./dist BEFORE the facade
+# build. Its package.json main/types point at ./dist, so the facade's bundled
+# runtime require('@sportsmart/logistics-contracts') (webpack externalizes the
+# workspace pkg) resolves to compiled JS — Node refuses to type-strip raw .ts
+# under node_modules (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING). dist is
+# .gitignore'd / .dockerignore'd, so it must be built inside the image; the
+# subsequent `pnpm deploy` then ships the built dist/ into /out.
+RUN pnpm --filter @sportsmart/logistics-contracts run build
 RUN pnpm --filter @sportsmart/logistics-facade run build
 
-RUN pnpm deploy --filter=@sportsmart/logistics-facade --prod --legacy /out
+# pnpm 10's legacy `pnpm deploy` refuses unless inject-workspace-packages=true.
+# Set it here (Docker-only; the repo .npmrc keeps the symlinked dev layout),
+# after the build, so it only governs pruning the prod tree into /out.
+# Then regenerate the Prisma client INSIDE /out: pnpm deploy re-copies
+# @prisma/client's UNgenerated stub from the store, so without this the facade
+# throws "@prisma/client did not initialize yet" at runtime.
+RUN echo 'inject-workspace-packages=true' >> .npmrc \
+ && pnpm deploy --filter=@sportsmart/logistics-facade --prod --legacy /out \
+ && cd /out && node_modules/.bin/prisma generate
 
 
 # ─── runtime: lean image, non-root, healthcheck ─────────────────────

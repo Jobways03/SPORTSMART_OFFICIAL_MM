@@ -119,7 +119,7 @@ function ResetInner() {
             src="/SportsMart_Web_Banner.avif"
             alt="SportsMart"
             className="login-brand"
-            style={{ height: 56, width: 'auto', display: 'block' }}
+            style={{ height: 56, width: 'auto', display: 'block', margin: '0 auto' }}
           />
           <p className="login-subtitle" id="reset-title">
             Set a new password for your admin account.

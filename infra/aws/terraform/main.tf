@@ -42,9 +42,31 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
-# The public DNS zone the environment's hostnames live under. Must already
-# exist in Route53 (registrar delegation done out-of-band).
+# The public DNS zone the environment's hostnames live under.
+#
+#   create_hosted_zone = true  (staging): Terraform CREATES this zone. Use it
+#     for a delegated subdomain (e.g. staging.sportsmart.com): after the first
+#     apply, read the `route53_name_servers` output and add a matching NS
+#     record in the PARENT zone (corporate sportsmart.com DNS). That delegates
+#     only the subdomain — the corporate apex zone (website, MX/email) is never
+#     touched.
+#   create_hosted_zone = false (production): the zone already exists in Route53
+#     and is only looked up here (registrar/parent delegation done out-of-band).
+#
+# Everything downstream references local.hosted_zone_id (not either resource
+# directly), so the rest of the module is identical in both modes.
+resource "aws_route53_zone" "primary" {
+  count = var.create_hosted_zone ? 1 : 0
+  name  = var.hosted_zone_name
+  tags  = { Name = var.hosted_zone_name }
+}
+
 data "aws_route53_zone" "primary" {
+  count        = var.create_hosted_zone ? 0 : 1
   name         = var.hosted_zone_name
   private_zone = false
+}
+
+locals {
+  hosted_zone_id = var.create_hosted_zone ? aws_route53_zone.primary[0].zone_id : data.aws_route53_zone.primary[0].zone_id
 }

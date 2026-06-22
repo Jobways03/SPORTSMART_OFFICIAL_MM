@@ -1,0 +1,63 @@
+# SPORTSMART API — HorizontalPodAutoscaler.
+#
+# Elastic scaling for the API Deployment (api.deployment.yaml, which pins a
+# static replicas: 2 baseline). The HPA owns the replica count at runtime, so
+# keep the Deployment's `replicas` equal to minReplicas here to avoid a
+# scale-to-baseline flap on every `kubectl apply`.
+#
+# Scaling signal: average CPU + memory utilisation across pods. The API is
+# I/O-bound (DB/Redis/HTTP), so CPU is the primary signal; memory is a backstop
+# against slow leaks pinning a pod hot. Crons are leader-elected
+# (LeaderElectedCron), so adding replicas never duplicates scheduled work.
+#
+# autoscaling/v2 requires metrics-server in the cluster.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: sportsmart-api
+  labels:
+    app.kubernetes.io/name: sportsmart-api
+    app.kubernetes.io/component: backend
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: sportsmart-api
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          # Scale out when sustained CPU crosses 70% of the request (250m),
+          # leaving headroom up to the 1500m limit for in-flight bursts.
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: 80
+  behavior:
+    scaleUp:
+      # React quickly to load — 60s window, allow doubling or +4 pods/min.
+      stabilizationWindowSeconds: 60
+      policies:
+        - type: Percent
+          value: 100
+          periodSeconds: 60
+        - type: Pods
+          value: 4
+          periodSeconds: 60
+      selectPolicy: Max
+    scaleDown:
+      # Scale in conservatively so a brief lull doesn't drop capacity we'll
+      # need again — 5min stabilisation, at most 1 pod removed per minute.
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+      selectPolicy: Min

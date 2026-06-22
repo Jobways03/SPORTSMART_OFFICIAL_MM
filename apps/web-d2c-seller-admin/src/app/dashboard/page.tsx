@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { apiClient } from '@/lib/api-client';
+import { adminSellersService } from '@/services/admin-sellers.service';
 
 /* ── Types ──────────────────────────────────────────────────── */
 
@@ -109,6 +110,7 @@ export default function AdminDashboardPage() {
   const [adminName, setAdminName] = useState('');
   const [kpis, setKpis] = useState<KpiData | null>(null);
   const [recentOrders, setRecentOrders] = useState<RecentOrder[]>([]);
+  const [pendingSellerReview, setPendingSellerReview] = useState(0);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -125,9 +127,16 @@ export default function AdminDashboardPage() {
       apiClient<{ orders: RecentOrder[] }>('/admin/orders?limit=5').catch(
         () => null,
       ),
-    ]).then(([kpiRes, ordersRes]) => {
+      // Count of sellers awaiting review (status PENDING_APPROVAL) — drives the
+      // "Pending seller review" KPI. limit:1 so we only need pagination.total.
+      adminSellersService
+        .listSellers({ status: 'PENDING_APPROVAL', limit: 1 })
+        .catch(() => null),
+    ]).then(([kpiRes, ordersRes, pendingRes]) => {
       if (kpiRes?.data) setKpis(kpiRes.data);
       if (ordersRes?.data?.orders) setRecentOrders(ordersRes.data.orders);
+      if (pendingRes?.data?.pagination)
+        setPendingSellerReview(pendingRes.data.pagination.total);
       setLoading(false);
     });
   }, []);
@@ -240,9 +249,10 @@ export default function AdminDashboardPage() {
               href="/dashboard/sellers"
             />
             <KpiInline
-              label="Customers"
-              value={num(kpis.totalCustomers)}
-              href="/dashboard/customers"
+              label="Pending seller review"
+              value={num(pendingSellerReview)}
+              actionable={pendingSellerReview > 0}
+              href="/dashboard/sellers?status=PENDING_APPROVAL"
             />
           </div>
 

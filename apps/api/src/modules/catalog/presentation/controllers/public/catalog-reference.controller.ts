@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Controller,
   Get,
@@ -42,6 +43,7 @@ const STOREFRONT_METAFIELDS_CACHE_PREFIX = 'storefront:metafields:list';
 const STOREFRONT_METAFIELDS_CACHE_TTL = 60;
 
 @ApiTags('Catalog')
+@Public()
 @Controller('catalog')
 // Phase 192 (#3) — public reference data (categories/brands/options) is
 // cache-fronted but still rate-limited to deter scraping.

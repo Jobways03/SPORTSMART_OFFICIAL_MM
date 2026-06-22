@@ -8,6 +8,11 @@ output "alb_dns_name" {
   value       = aws_lb.main.dns_name
 }
 
+output "route53_name_servers" {
+  description = "Nameservers of the Terraform-created hosted zone. Delegate the subdomain by adding these as an NS record (name = the subdomain label, e.g. 'staging') in the PARENT corporate DNS zone. Empty when create_hosted_zone=false (zone looked up, not created)."
+  value       = var.create_hosted_zone ? aws_route53_zone.primary[0].name_servers : []
+}
+
 output "service_urls" {
   description = "Public https URL per service."
   value       = { for k, v in local.service_hosts : k => "https://${v}" }

@@ -61,7 +61,10 @@ WORKDIR /workspace
 
 # Copy only the manifests first so `pnpm install` is cached between
 # rebuilds whenever source changes but deps don't.
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+# .npmrc carries `shamefully-hoist=true` — without it the install uses pnpm's
+# strict layout and directly-imported-but-undeclared deps (express, undici)
+# fail to resolve at build time, even though they build locally.
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc ./
 COPY apps/api/package.json apps/api/package.json
 COPY packages/shared-utils/package.json packages/shared-utils/package.json
 COPY packages/ui/package.json packages/ui/package.json
@@ -83,7 +86,15 @@ RUN pnpm --filter @sportsmart/api run build
 # resolves workspace links and prunes devDependencies — much safer than
 # hand-copying node_modules across stages (pnpm's symlink layout does
 # not survive a naive COPY).
-RUN pnpm deploy --filter=@sportsmart/api --prod --legacy /out
+# pnpm 10's legacy `pnpm deploy` refuses unless inject-workspace-packages=true.
+# Set it here (Docker-only; the repo .npmrc keeps the symlinked dev layout),
+# after the build, so it only governs pruning the prod tree into /out.
+# Then regenerate the Prisma client INSIDE /out: pnpm deploy re-copies
+# @prisma/client's UNgenerated stub from the store, so without this both the
+# API and the seed throw "@prisma/client did not initialize yet" at runtime.
+RUN echo 'inject-workspace-packages=true' >> .npmrc \
+ && pnpm deploy --filter=@sportsmart/api --prod --legacy /out \
+ && cd /out && node_modules/.bin/prisma generate
 
 
 # ─── runtime: lean image, non-root, healthcheck ─────────────────────
@@ -115,4 +126,7 @@ EXPOSE 4000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:' + (process.env.PORT || 4000) + '/api/v1/health/live').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"
 
-CMD ["node", "dist/main.js"]
+# Boot via the cluster wrapper. With CLUSTER_WORKERS unset/1 (the default)
+# this is byte-for-byte equivalent to `node dist/main.js`; set CLUSTER_WORKERS
+# to fan out across CPU cores within the container.
+CMD ["node", "dist/cluster.js"]

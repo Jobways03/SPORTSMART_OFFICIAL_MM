@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Controller, Get, HttpCode, HttpStatus, Query, Res } from '@nestjs/common';
 import { ApiQuery, ApiTags } from '@nestjs/swagger';
 import { Response } from 'express';
@@ -7,6 +8,7 @@ import { EnvService } from '../../bootstrap/env/env.service';
 import { ExternalDepsProbeService } from './external-deps-probe.service';
 
 @ApiTags('Health')
+@Public()
 @Controller('health')
 export class HealthController {
   constructor(

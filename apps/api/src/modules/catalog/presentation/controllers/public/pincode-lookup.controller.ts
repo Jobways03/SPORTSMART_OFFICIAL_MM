@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Controller,
   Get,
@@ -17,6 +18,7 @@ import {
 } from '../../../domain/repositories/storefront.repository.interface';
 
 @ApiTags('Pincode')
+@Public()
 @Controller('pincodes')
 export class PincodeLookupController {
   constructor(

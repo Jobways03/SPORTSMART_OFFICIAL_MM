@@ -45,7 +45,12 @@ resource "aws_ecs_task_definition" "seed" {
       command = ["node_modules/.bin/ts-node", "--transpile-only", "prisma/seed/seed-prod.ts"]
 
       environment = [
-        { name = "NODE_ENV", value = var.node_env }
+        { name = "NODE_ENV", value = var.node_env },
+        # seed-metafields refuses on NODE_ENV=production without this. The seed
+        # task IS the intentional bootstrap path, and the seed is idempotent
+        # (Phase 39: upsert + mark-inactive, never deletes), so force it on here
+        # while the standalone guard still protects ad-hoc manual runs.
+        { name = "FORCE_METAFIELD_SEED", value = "true" },
       ]
 
       secrets = [

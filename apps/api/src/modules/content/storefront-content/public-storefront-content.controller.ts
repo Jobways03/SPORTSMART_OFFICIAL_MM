@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Controller, Get } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { StorefrontContentService } from './storefront-content.service';
@@ -12,6 +13,7 @@ import { StorefrontContentService } from './storefront-content.service';
  * and marketing copy that's already public on the homepage).
  */
 @ApiTags('Storefront Content')
+@Public()
 @Controller('storefront/content')
 export class PublicStorefrontContentController {
   constructor(private readonly service: StorefrontContentService) {}

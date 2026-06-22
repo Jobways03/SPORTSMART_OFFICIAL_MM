@@ -56,6 +56,16 @@ export default function SellersPage() {
     }
   }, []);
 
+  // Pre-filter from the URL (?status=PENDING_APPROVAL) so the dashboard's
+  // "Pending seller review" KPI lands directly on the pending list. Read on
+  // the client only (window is undefined during SSR); setting statusFilter
+  // triggers the fetch effect below.
+  useEffect(() => {
+    const s = new URLSearchParams(window.location.search).get('status');
+    if (s) setStatusFilter(s);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const fetchSellers = useCallback(async (params: ListSellersParams = {}) => {
     setLoading(true);
     setError('');

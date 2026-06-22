@@ -45,7 +45,10 @@ WORKDIR /workspace
 
 # Copy manifests first for Docker layer caching — only re-runs install
 # when a package.json or the lockfile changes, not on every source edit.
-COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+# .npmrc carries `shamefully-hoist=true` — without it the strict install can't
+# resolve packages/ui's transitive deps (react-quill-new, isomorphic-dompurify)
+# during the app build, even though it builds locally.
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml .npmrc ./
 COPY apps/${APP}/package.json apps/${APP}/package.json
 COPY packages/shared-utils/package.json packages/shared-utils/package.json
 COPY packages/ui/package.json packages/ui/package.json

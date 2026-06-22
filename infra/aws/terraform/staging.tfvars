@@ -10,7 +10,13 @@ region   = "ap-south-1"
 env      = "staging"
 node_env = "staging"
 
-hosted_zone_name   = "sportsmart.com"
+# Staging runs under a DELEGATED SUBDOMAIN zone. Terraform CREATES the
+# staging.sportsmart.com hosted zone (create_hosted_zone=true); after the first
+# apply, add its nameservers (the `route53_name_servers` output) as an NS record
+# for `staging` in the corporate sportsmart.com DNS. The corporate apex zone
+# (website, email/MX) is never touched.
+hosted_zone_name   = "staging.sportsmart.com"
+create_hosted_zone = true
 env_domain         = "staging.sportsmart.com"
 auth_cookie_domain = ".staging.sportsmart.com"
 
@@ -30,28 +36,38 @@ rds_backup_retention_days = 7
 rds_deletion_protection   = false
 elasticache_node_type     = "cache.t4g.micro"
 
-# Single NAT + single-node Redis + immediate secret deletion = cheap staging.
+# NAT instance (not a managed gateway) + single-node Redis + immediate secret
+# deletion = cheap staging. The NAT instance is ~$3-4/mo vs ~$40/mo for the
+# managed gateway; it's a single egress SPOF with no managed failover, which is
+# fine for a parked-when-idle staging env (production keeps the gateway).
 # VPC interface endpoints off (their ~$95/mo dwarfs the NAT data they'd save at
 # staging traffic); 3-day log retention.
 redis_ha                    = false
 nat_per_az                  = false
+use_nat_instance            = true
+nat_instance_az_index       = 1          # 1a was capacity-constrained; place in 1b
+nat_instance_type           = "t3.nano"  # t4g.nano had no capacity in ap-south-1; t3.nano (x86) does
+nat_instance_arch           = "x86_64"   # must match nat_instance_type
 enable_vpc_endpoints        = false
 secret_recovery_window_days = 0
 log_retention_days          = 3
 
-# Run staging lean: 1 task each, and spin the seldom-tested portals to 0
-# (scale to 1 on demand: aws ecs update-service --desired-count 1). The api
-# and storefront still autoscale from 1.
+# Run staging with 1 task per service. Only the affiliate portals stay off
+# (not yet exercised in staging); scale on demand with:
+#   aws ecs update-service --cluster sportsmart-staging --service <name> --desired-count 1
+# NOTE: ecs.tf sets `ignore_changes = [desired_count]`, so edits here take effect
+# only when a service is first CREATED — scaling a LIVE service is the CLI command
+# above, not `terraform apply`. This block is the source-of-truth for re-creates.
 service_desired_count = {
   api                     = 1
   web-storefront          = 1
   web-admin-storefront    = 1
-  web-d2c-seller          = 0
-  web-d2c-seller-admin    = 0
-  web-retail-seller       = 0
-  web-retail-seller-admin = 0
-  web-franchise           = 0
-  web-franchise-admin     = 0
+  web-d2c-seller          = 1
+  web-d2c-seller-admin    = 1
+  web-retail-seller       = 1
+  web-retail-seller-admin = 1
+  web-franchise           = 1
+  web-franchise-admin     = 1
   web-affiliate           = 0
   web-affiliate-admin     = 0
 }
