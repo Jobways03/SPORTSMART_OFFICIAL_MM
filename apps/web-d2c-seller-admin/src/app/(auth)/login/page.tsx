@@ -291,7 +291,7 @@ export default function AdminLoginPage() {
             src="/SportsMart_Web_Banner.avif"
             alt="SportsMart"
             className="auth-logo"
-            style={{ height: 56, width: 'auto', display: 'block' }}
+            style={{ height: 56, width: 'auto', display: 'block', margin: '0 auto' }}
           />
           <h2 className="auth-title">Sign in to manage your storefront.</h2>
         </header>

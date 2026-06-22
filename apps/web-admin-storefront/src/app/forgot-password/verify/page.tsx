@@ -110,7 +110,7 @@ function VerifyInner() {
             src="/SportsMart_Web_Banner.avif"
             alt="SportsMart"
             className="login-brand"
-            style={{ height: 56, width: 'auto', display: 'block' }}
+            style={{ height: 56, width: 'auto', display: 'block', margin: '0 auto' }}
           />
           <p className="login-subtitle" id="verify-title">
             Enter the 6-digit code we sent to <strong>{email}</strong>.

@@ -239,7 +239,7 @@ export default function LoginPage() {
         <img
           src="/SportsMart_Web_Banner.avif"
           alt="SportsMart"
-          style={{ height: 48, width: 'auto', display: 'block', marginBottom: 16 }}
+          style={{ height: 48, width: 'auto', display: 'block', margin: '0 auto 16px' }}
         />
         <span
           style={{
