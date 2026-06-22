@@ -61,18 +61,21 @@ resource "aws_route_table_association" "public" {
 # nat_per_az=false → one shared NAT (cheap staging; egress SPOF).
 # nat_per_az=true  → one NAT per AZ (prod HA; each private subnet egresses
 #                    via its same-AZ NAT).
+# use_nat_instance=true → skip the managed gateway entirely and egress via a
+#                    cheap NAT instance (nat-instance.tf). The EIP + gateway
+#                    below count to zero in that mode.
 locals {
   nat_azs = var.nat_per_az ? local.azs : [local.azs[0]]
 }
 
 resource "aws_eip" "nat" {
-  for_each = toset(local.nat_azs)
+  for_each = var.use_nat_instance ? toset([]) : toset(local.nat_azs)
   domain   = "vpc"
   tags     = { Name = "${local.name}-nat-${each.key}" }
 }
 
 resource "aws_nat_gateway" "main" {
-  for_each      = toset(local.nat_azs)
+  for_each      = var.use_nat_instance ? toset([]) : toset(local.nat_azs)
   allocation_id = aws_eip.nat[each.key].id
   subnet_id     = aws_subnet.public[each.key].id
   tags          = { Name = "${local.name}-nat-${each.key}" }
@@ -93,7 +96,15 @@ resource "aws_route" "private_nat" {
   for_each               = aws_subnet.private
   route_table_id         = aws_route_table.private[each.key].id
   destination_cidr_block = "0.0.0.0/0"
-  nat_gateway_id         = var.nat_per_az ? aws_nat_gateway.main[each.key].id : aws_nat_gateway.main[local.azs[0]].id
+
+  # Managed NAT gateway (default). try() yields null when use_nat_instance=true
+  # gates the gateways to zero, so this branch never faults on the empty map.
+  nat_gateway_id = var.use_nat_instance ? null : try(
+    var.nat_per_az ? aws_nat_gateway.main[each.key].id : aws_nat_gateway.main[local.azs[0]].id,
+    null
+  )
+  # NAT instance ENI when use_nat_instance=true; null in gateway mode.
+  network_interface_id = var.use_nat_instance ? try(aws_instance.nat[0].primary_network_interface_id, null) : null
 }
 
 resource "aws_route_table_association" "private" {

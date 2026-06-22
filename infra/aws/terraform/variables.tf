@@ -141,6 +141,18 @@ variable "nat_per_az" {
   default     = false
 }
 
+variable "use_nat_instance" {
+  description = "Use a low-cost NAT instance (~$3-4/mo) instead of the managed NAT gateway (~$40/mo) for private-subnet egress. Non-prod cost saving; a single instance has no managed failover, so production should keep this false. Reverting is a one-flag apply (the managed gateway comes back). Ignores nat_per_az when true."
+  type        = bool
+  default     = false
+}
+
+variable "nat_instance_type" {
+  description = "EC2 instance type for the NAT instance when use_nat_instance=true (fck-nat arm64 image)."
+  type        = string
+  default     = "t4g.nano"
+}
+
 variable "enable_vpc_endpoints" {
   description = "Create VPC endpoints (S3 gateway + ECR/Secrets Manager/KMS/Logs interface endpoints) so task-startup AWS-API traffic skips the NAT (lower cost + removes NAT from the image-pull/secret-read critical path)."
   type        = bool

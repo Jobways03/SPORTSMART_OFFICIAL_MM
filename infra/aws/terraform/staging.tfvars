@@ -36,11 +36,15 @@ rds_backup_retention_days = 7
 rds_deletion_protection   = false
 elasticache_node_type     = "cache.t4g.micro"
 
-# Single NAT + single-node Redis + immediate secret deletion = cheap staging.
+# NAT instance (not a managed gateway) + single-node Redis + immediate secret
+# deletion = cheap staging. The NAT instance is ~$3-4/mo vs ~$40/mo for the
+# managed gateway; it's a single egress SPOF with no managed failover, which is
+# fine for a parked-when-idle staging env (production keeps the gateway).
 # VPC interface endpoints off (their ~$95/mo dwarfs the NAT data they'd save at
 # staging traffic); 3-day log retention.
 redis_ha                    = false
 nat_per_az                  = false
+use_nat_instance            = true
 enable_vpc_endpoints        = false
 secret_recovery_window_days = 0
 log_retention_days          = 3
