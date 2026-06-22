@@ -43,6 +43,14 @@ COPY apps/logistics-facade apps/logistics-facade
 COPY packages/logistics-contracts packages/logistics-contracts
 
 RUN pnpm --filter @sportsmart/logistics-facade exec prisma generate
+# Compile the logistics-contracts workspace package to ./dist BEFORE the facade
+# build. Its package.json main/types point at ./dist, so the facade's bundled
+# runtime require('@sportsmart/logistics-contracts') (webpack externalizes the
+# workspace pkg) resolves to compiled JS — Node refuses to type-strip raw .ts
+# under node_modules (ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING). dist is
+# .gitignore'd / .dockerignore'd, so it must be built inside the image; the
+# subsequent `pnpm deploy` then ships the built dist/ into /out.
+RUN pnpm --filter @sportsmart/logistics-contracts run build
 RUN pnpm --filter @sportsmart/logistics-facade run build
 
 # pnpm 10's legacy `pnpm deploy` refuses unless inject-workspace-packages=true.
