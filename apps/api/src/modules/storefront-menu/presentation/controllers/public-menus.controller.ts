@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Controller, Get, Param } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { StorefrontMenuService } from '../../services/menu.service';
@@ -15,6 +16,7 @@ import { StorefrontMenuService } from '../../services/menu.service';
  *     out at the service layer.
  */
 @ApiTags('Storefront — Menus')
+@Public()
 @Controller('storefront/menus')
 export class PublicMenusController {
   constructor(private readonly service: StorefrontMenuService) {}

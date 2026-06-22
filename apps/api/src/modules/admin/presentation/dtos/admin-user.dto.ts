@@ -30,6 +30,7 @@ import { Transform } from 'class-transformer';
 
 export enum AdminRoleDto {
   SUPER_ADMIN = 'SUPER_ADMIN',
+  STAFF = 'STAFF',
   SELLER_SUPPORT = 'SELLER_SUPPORT',
   SELLER_OPERATIONS = 'SELLER_OPERATIONS',
   SELLER_OPS = 'SELLER_OPS',

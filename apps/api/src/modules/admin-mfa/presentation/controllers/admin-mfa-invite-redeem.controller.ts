@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Body,
   Controller,
@@ -25,6 +26,7 @@ import { CompleteMfaEnrollmentDto } from '../dtos/complete-enrollment.dto';
  * secret so it must never be cached.
  */
 @ApiTags('Admin MFA')
+@Public()
 @Controller('admin/mfa/enroll-invite')
 export class AdminMfaInviteRedeemController {
   constructor(private readonly mfaService: AdminMfaService) {}

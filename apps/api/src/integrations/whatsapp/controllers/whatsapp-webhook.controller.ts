@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Body,
   Controller,
@@ -103,6 +104,7 @@ function mapMetaError(code?: number): string {
  * processed (Phase 191 closed the statuses[] gap).
  */
 @ApiTags('WhatsApp Webhooks')
+@Public()
 @Controller('integrations/whatsapp/webhook')
 // Phase 191 (#7) — allow Meta's legitimate retry burst, cap abuse.
 @Throttle({ default: { limit: 300, ttl: 60_000 } })

@@ -52,15 +52,9 @@ function LoginInner() {
     if (mfa && mfaInputRef.current) mfaInputRef.current.focus();
   }, [mfa]);
 
-  useEffect(() => {
-    // Email-first MFA: auto-email the code as soon as the challenge appears so
-    // no authenticator app is needed. The authenticator path stays in the
-    // backend; this just stops surfacing it at login.
-    if (mfa && !emailMode && !emailInfo && !emailRequesting) {
-      void handleRequestEmailOtp();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mfa]);
+  // Authenticator-first MFA: the challenge opens on the authenticator-code
+  // entry by default. The email OTP is sent ONLY when the user clicks
+  // "Email me a code instead" (handleRequestEmailOtp) — no auto-send.
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -234,7 +228,7 @@ function LoginInner() {
             src="/SportsMart_Web_Banner.avif"
             alt="SportsMart"
             className="login-brand"
-            style={{ height: 56, width: 'auto', display: 'block' }}
+            style={{ height: 56, width: 'auto', display: 'block', margin: '0 auto' }}
           />
           <p className="login-subtitle" id="login-title">
             {mfa

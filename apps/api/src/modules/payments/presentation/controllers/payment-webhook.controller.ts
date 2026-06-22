@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Body,
   Controller,
@@ -154,6 +155,7 @@ interface RazorpayWebhookPayload {
 }
 
 @ApiTags('Payment Webhooks')
+@Public()
 @Controller('payments/webhooks')
 export class PaymentWebhookController {
   private readonly logger = new Logger(PaymentWebhookController.name);

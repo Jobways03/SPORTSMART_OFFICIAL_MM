@@ -62,15 +62,9 @@ export default function AdminLoginPage() {
     }
   }, [mfa]);
 
-  useEffect(() => {
-    // Email-first MFA: auto-email the code as soon as the challenge appears so
-    // no authenticator app is needed. The authenticator path stays in the
-    // backend; this just stops surfacing it at login.
-    if (mfa && !emailMode && !emailInfo && !emailRequesting) {
-      void handleRequestEmailOtp();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mfa]);
+  // Authenticator-first MFA: the challenge opens on the authenticator-code
+  // entry by default. The email OTP is sent ONLY when the user clicks
+  // "Email me a code instead" (handleRequestEmailOtp) — no auto-send.
 
   const validate = (): boolean => {
     const newErrors: FormErrors = {};
@@ -295,7 +289,7 @@ export default function AdminLoginPage() {
             src="/SportsMart_Web_Banner.avif"
             alt="SportsMart"
             className="auth-logo"
-            style={{ height: 56, width: 'auto', display: 'block' }}
+            style={{ height: 56, width: 'auto', display: 'block', margin: '0 auto' }}
           />
           <h2 className="auth-title">Sign in to manage your storefront.</h2>
         </header>

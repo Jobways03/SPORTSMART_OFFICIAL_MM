@@ -209,7 +209,7 @@ function VerifyRegistrationOtpForm() {
             src="/SportsMart_Web_Banner.avif"
             alt="SportsMart"
             className="auth-logo"
-            style={{ height: 56, width: 'auto', display: 'block' }}
+            style={{ height: 56, width: 'auto', display: 'block', margin: '0 auto' }}
           />
           <p className="auth-badge">Retail Seller Portal</p>
           <h2 className="auth-title">Verify your email</h2>

@@ -861,19 +861,33 @@ const { id } = useParams<{ id: string }>();
               </span>
             </div>
 
-            <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+            <div>
+              {/* tableLayout:fixed + a colgroup makes the 9 columns share the
+                  container width and wrap, so the table never overflows
+                  horizontally (no sideways scroll). */}
+              <table style={{ width: '100%', tableLayout: 'fixed', borderCollapse: 'collapse', fontSize: 13 }}>
+                <colgroup>
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '8%' }} />
+                  <col style={{ width: '23%' }} />
+                  <col style={{ width: '11%' }} />
+                  <col style={{ width: '13%' }} />
+                  <col style={{ width: '6%' }} />
+                  <col style={{ width: '10%' }} />
+                  <col style={{ width: '9%' }} />
+                  <col style={{ width: '11%' }} />
+                </colgroup>
                 <thead>
                   <tr style={{ borderBottom: '2px solid #e5e7eb', background: '#f9fafb' }}>
-                    <th style={thStyle}>PRODUCT ID</th>
-                    <th style={thStyle}>IMAGE</th>
-                    <th style={thStyle}>PRODUCT NAME</th>
-                    <th style={thStyle}>PRICE PER UNIT</th>
-                    <th style={thStyle}>SKU</th>
-                    <th style={thStyle}>QTY</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>Avl. QTY<br />For Fulfill</th>
-                    <th style={{ ...thStyle, textAlign: 'center' }}>QTY<br />Fulfilled</th>
-                    <th style={thStyle}>TOTAL</th>
+                    <th style={thWrapStyle}>PRODUCT ID</th>
+                    <th style={thWrapStyle}>IMAGE</th>
+                    <th style={thWrapStyle}>PRODUCT NAME</th>
+                    <th style={thWrapStyle}>PRICE PER UNIT</th>
+                    <th style={thWrapStyle}>SKU</th>
+                    <th style={{ ...thWrapStyle, textAlign: 'center' }}>QTY</th>
+                    <th style={{ ...thWrapStyle, textAlign: 'center' }}>Avl. QTY<br />For Fulfill</th>
+                    <th style={{ ...thWrapStyle, textAlign: 'center' }}>QTY<br />Fulfilled</th>
+                    <th style={{ ...thWrapStyle, textAlign: 'right' }}>TOTAL</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -918,7 +932,7 @@ const { id } = useParams<{ id: string }>();
                       <td style={{ ...tdStyle, textAlign: 'center' }}>
                         {['SHIPPED', 'FULFILLED', 'DELIVERED'].includes(order.fulfillmentStatus) ? item.quantity : 0}
                       </td>
-                      <td style={{ ...tdStyle, fontWeight: 600 }}>{fmt(Number(item.totalPrice))}</td>
+                      <td style={{ ...tdStyle, fontWeight: 600, textAlign: 'right' }}>{fmt(Number(item.totalPrice))}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1448,8 +1462,22 @@ const { id } = useParams<{ id: string }>();
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
               <tbody>
                 <SideRow label="ORDERED ON" value={fmtDateTime(mo.createdAt)} />
-                <SideRow label="DELIVERY METHOD" value="Free Shipping" />
-                <SideRow label="SHIPPING APPLIED BY" value="Merchant Shipping" />
+                <SideRow
+                  label="DELIVERY METHOD"
+                  value={
+                    order.deliveryMethod === 'DELHIVERY'
+                      ? 'Delhivery (automatic)'
+                      : order.deliveryMethod === 'SELF_DELIVERY'
+                        ? 'Self / Merchant shipping'
+                        : 'Not chosen yet'
+                  }
+                />
+                {order.deliveryMethod === 'DELHIVERY' && order.courierName && (
+                  <SideRow label="COURIER" value={order.courierName} />
+                )}
+                {order.trackingNumber && (
+                  <SideRow label="TRACKING NO." value={order.trackingNumber} />
+                )}
                 <SideRow
                   label="ORDER STATUS"
                   value={
@@ -2658,9 +2686,25 @@ const thStyle: React.CSSProperties = {
   whiteSpace: 'nowrap',
 };
 
+// Header style for the fixed-layout Shipped Products table: same as thStyle but
+// allows wrapping so headers fit their fixed column width instead of forcing
+// the table wider (which caused the horizontal slide).
+const thWrapStyle: React.CSSProperties = {
+  textAlign: 'left',
+  padding: '8px 8px',
+  fontWeight: 600,
+  fontSize: 11,
+  color: '#6b7280',
+  textTransform: 'uppercase',
+  whiteSpace: 'normal',
+  wordBreak: 'break-word',
+};
+
 const tdStyle: React.CSSProperties = {
   padding: '10px',
   verticalAlign: 'middle',
+  wordBreak: 'break-word',
+  overflowWrap: 'anywhere',
 };
 
 const btnBlue: React.CSSProperties = {

@@ -8,6 +8,10 @@ export const envSchema = z.object({
   // the outbox publisher, and tear down crons before SIGKILL fires.
   // Default 30s matches the Kubernetes default `terminationGracePeriodSeconds`.
   SHUTDOWN_GRACE_MS: z.coerce.number().default(30_000),
+  // Node cluster fan-out (src/cluster.ts). Unset/1 = single process (default,
+  // legacy behaviour). 0 = one worker per available CPU core. N = N workers.
+  // Crons stay single-fire via LeaderElectedCron, so >1 is safe.
+  CLUSTER_WORKERS: z.coerce.number().int().min(0).default(1),
 
   APP_NAME: z.string().default('sportsmart-api'),
   APP_URL: z.string().default('http://localhost:8000'),
@@ -629,6 +633,12 @@ export const envSchema = z.object({
   // Default flipped to 'true' on 2026-05-16 after the soak window closed.
   // Set explicitly to 'false' in non-prod debug runs only.
   PERMISSIONS_GUARD_STRICT: z.string().default('true'),
+  // Global auth safety net (GlobalAuthGuard). SOAK by default ('false'):
+  // any route with neither an auth @UseGuards nor @Public() is ALLOWED but
+  // logs `event=authz.unguarded`. Flip to 'true' once those logs show only
+  // intended-public routes — then a forgotten guard fails CLOSED (401)
+  // instead of silently exposing the endpoint.
+  GLOBAL_AUTH_GUARD_STRICT: z.string().default('false'),
   // Daily RBAC drift detector: scans admin_custom_role_permissions for
   // permission keys that no longer exist in the code-side PERMISSIONS
   // registry, emits rbac.orphan_permission_detected for each. Read-only,

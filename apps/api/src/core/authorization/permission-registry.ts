@@ -874,6 +874,11 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
  */
 export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> = {
   SUPER_ADMIN: ALL_PERMISSION_KEYS,
+  // Zero-permission baseline. A STAFF admin sees nothing until a custom role
+  // grants it — the intended primary role for functional admins (Wallet
+  // Manager, Support, Returns, …) whose access is composed purely from custom
+  // roles. Keep this list EMPTY; never add a "floor" permission here.
+  STAFF: [],
   // Seller-scoped ops tier — ONLY seller-facing features (orders, catalog/
   // products, inventory, returns). Deliberately excludes all money/finance ops
   // (settlements, wallets, payouts, recon, accounts, refunds, disputes) that

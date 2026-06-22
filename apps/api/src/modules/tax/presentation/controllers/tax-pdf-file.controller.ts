@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Controller, Get, Logger, Param, Res } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
@@ -23,6 +24,7 @@ import { defaultStubTaxPdfDir } from '../../infrastructure/pdf/tax-pdf-storage.p
  * route, so it's resolver-version agnostic).
  */
 @ApiTags('Tax / Documents')
+@Public()
 @Controller('tax-pdfs')
 export class TaxPdfFileController {
   private readonly logger = new Logger(TaxPdfFileController.name);

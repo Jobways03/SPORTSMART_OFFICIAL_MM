@@ -837,7 +837,7 @@ export class SellerProductsController {
       if (entry.value === null || entry.value === undefined || entry.value === '') {
         // empty → unset all value columns (acts as a delete-value)
         valueData.valueText = null;
-        valueData.valueNumber = null;
+        valueData.valueNumeric = null;
         valueData.valueBoolean = null;
         valueData.valueDate = null;
         valueData.valueJson = null;
@@ -854,7 +854,7 @@ export class SellerProductsController {
           case 'NUMBER_INTEGER':
           case 'NUMBER_DECIMAL':
           case 'RATING':
-            valueData.valueNumber = Number(entry.value);
+            valueData.valueNumeric = Number(entry.value);
             break;
           case 'BOOLEAN':
             valueData.valueBoolean = entry.value === true || entry.value === 'true';

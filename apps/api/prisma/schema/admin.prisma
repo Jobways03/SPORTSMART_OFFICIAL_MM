@@ -4,6 +4,11 @@
 
 enum AdminRole {
   SUPER_ADMIN
+  // Zero-permission baseline. Grants nothing on its own — used as the primary
+  // role for functional admins whose access comes ENTIRELY from custom roles
+  // (effective perms = primary ∪ custom, so a near-empty primary lets a custom
+  // role like "Wallet Manager" actually scope the account down).
+  STAFF
   SELLER_ADMIN
   SELLER_SUPPORT
   SELLER_OPERATIONS

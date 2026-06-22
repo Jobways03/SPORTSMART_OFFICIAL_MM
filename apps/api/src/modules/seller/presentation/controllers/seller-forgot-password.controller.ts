@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Body, Controller, HttpCode, HttpStatus, Post, Req } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -11,6 +12,7 @@ import { ResendResetOtpSellerUseCase } from '../../application/use-cases/resend-
 import { CaptchaVerifierService } from '../../../../integrations/captcha/captcha-verifier.service';
 
 @ApiTags('Seller Auth')
+@Public()
 @Controller('seller/auth')
 export class SellerForgotPasswordController {
   constructor(

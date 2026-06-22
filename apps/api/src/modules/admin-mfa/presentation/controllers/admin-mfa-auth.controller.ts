@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Body,
   Controller,
@@ -46,6 +47,7 @@ import { VerifyMfaEmailOtpDto } from '../dtos/verify-mfa-email-otp.dto';
  * usage even after the rest of the system moved off it.
  */
 @ApiTags('Admin Auth')
+@Public()
 @Controller('admin/auth')
 export class AdminMfaAuthController {
   constructor(

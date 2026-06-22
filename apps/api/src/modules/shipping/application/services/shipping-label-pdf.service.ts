@@ -463,29 +463,29 @@ export class ShippingLabelPdfService {
       .strokeColor('#0b1f3a')
       .stroke();
 
-    // ── Header — SportSmart wordmark, drawn as VECTOR (the bundled
-    // pdfkit.standalone can't render raster images; its fs is shimmed out, so
-    // doc.image() throws — same reason barcodes are drawn as vector bars). ─
+    // ── Header — SportSmart wordmark, drawn as VECTOR to MATCH the real PNG
+    // logo used by the HTML/Puppeteer label. The bundled pdfkit.standalone
+    // can't embed raster images (its fs is shimmed out, so doc.image() throws —
+    // same reason barcodes are drawn as vector bars), so we reproduce the
+    // wordmark with text. The actual brand logo is a bold-italic red
+    // "SPORTSMART" over a dark "PLAY SMART . STAY FIT" tagline — NO ball mark
+    // and NO ".com" (an older fallback drew both, which is why the label looked
+    // different on machines without Chromium). Keeping the two render paths
+    // visually identical means every device's label stays on-brand. ─
     const RED = '#ED1C24';
     const logoY = y;
-    // Soccer-ball mark (red disc + navy ring + white seams).
-    doc.circle(M + 8, logoY + 9, 7).fill(RED);
-    doc.lineWidth(1).circle(M + 8, logoY + 9, 7).stroke('#0b1f3a');
-    doc.save().lineWidth(0.7).strokeColor('#ffffff');
-    doc.moveTo(M + 8, logoY + 3).lineTo(M + 8, logoY + 15).stroke();
-    doc.moveTo(M + 3, logoY + 7).lineTo(M + 13, logoY + 12).stroke();
-    doc.restore();
-    // Wordmark + .com (Helvetica-BoldOblique ≈ the logo's slanted bold).
-    const wmX = M + 21;
-    doc.font('Helvetica-BoldOblique').fontSize(16).fillColor(RED).text('SPORTSMART', wmX, logoY + 1, { lineBreak: false });
-    const wmW = doc.widthOfString('SPORTSMART');
-    doc.font('Helvetica-Bold').fontSize(7).fillColor(RED).text('.com', wmX + wmW + 1, logoY + 3, { lineBreak: false });
-    // Tagline
+    // Wordmark — Helvetica-BoldOblique ≈ the logo's slanted bold sans.
+    doc
+      .font('Helvetica-BoldOblique')
+      .fontSize(19)
+      .fillColor(RED)
+      .text('SPORTSMART', M, logoY, { lineBreak: false, characterSpacing: -0.2 });
+    // Tagline — dark navy, letter-spaced, sits directly under the wordmark.
     doc
       .font('Helvetica-Bold')
-      .fontSize(6)
-      .fillColor('#334155')
-      .text('PLAY SMART  ·  STAY FIT', wmX, logoY + 20, { characterSpacing: 1, lineBreak: false });
+      .fontSize(6.5)
+      .fillColor('#0b1f3a')
+      .text('PLAY SMART . STAY FIT', M + 1, logoY + 21, { characterSpacing: 1.4, lineBreak: false });
     // Courier (right)
     doc
       .font('Helvetica-Bold')

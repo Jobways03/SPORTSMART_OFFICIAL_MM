@@ -163,15 +163,9 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
     resolveAll(false);
   }, [resolveAll]);
 
-  // Email-first MFA: auto-email a step-up code as soon as the modal opens so no
-  // authenticator app is needed. The authenticator/backup paths still work in
-  // the backend; they're just no longer the prompted method.
-  useEffect(() => {
-    if (state.visible && !emailSentTo && !emailSending) {
-      void onEmailMe();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.visible]);
+  // Authenticator-first MFA: the step-up modal opens on the authenticator-code
+  // entry. The email OTP is sent ONLY when the user clicks "Email me a code"
+  // (onEmailMe) — no auto-send.
 
   // Close on Esc only when not mid-submit so an in-flight network call
   // can't be orphaned by an accidental keypress.

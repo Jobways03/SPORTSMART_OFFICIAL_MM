@@ -476,8 +476,10 @@ export default function SellerOrdersPage() {
                         {(() => {
                           const next = nextFulfillmentAction(so);
                           if (!next) return null;
-                          // SHIPPED requires tracking info — take seller to the detail page
-                          if (next.status === 'SHIPPED') {
+                          // SHIPPED needs tracking info, and PACKED needs the 4 shipment-evidence
+                          // photos — both only exist on the detail page, so route the seller there
+                          // instead of firing an inline status update.
+                          if (next.status === 'SHIPPED' || next.status === 'PACKED') {
                             return (
                               <button
                                 onClick={(e) => {
@@ -485,7 +487,7 @@ export default function SellerOrdersPage() {
                                   router.push(`/dashboard/orders/${so.id}`);
                                 }}
                                 disabled={actionLoading === so.id}
-                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: 'none', background: '#2563eb', color: '#fff', borderRadius: 4, cursor: 'pointer' }}
+                                style={{ padding: '4px 10px', fontSize: 11, fontWeight: 600, border: 'none', background: next.status === 'SHIPPED' ? '#2563eb' : '#d97706', color: '#fff', borderRadius: 4, cursor: 'pointer' }}
                               >
                                 {next.label}
                               </button>

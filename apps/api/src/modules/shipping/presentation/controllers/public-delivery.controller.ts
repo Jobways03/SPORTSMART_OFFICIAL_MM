@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import { Controller, Get, Param } from '@nestjs/common';
 import { ApiTags } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
@@ -11,6 +12,7 @@ import { DelhiveryToolsService } from '../../application/services/delhivery-tool
  * live serviceability API. Returns a trimmed, customer-safe shape.
  */
 @ApiTags('Delivery (public)')
+@Public()
 @Controller('delivery')
 export class PublicDeliveryController {
   constructor(private readonly tools: DelhiveryToolsService) {}

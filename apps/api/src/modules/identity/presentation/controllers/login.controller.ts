@@ -1,3 +1,4 @@
+import { Public } from '@core/decorators';
 import {
   Body,
   Controller,
@@ -19,6 +20,7 @@ import { setAuthCookies } from '../../../../core/auth/auth-cookie.helper';
 import { CaptchaVerifierService } from '../../../../integrations/captcha/captcha-verifier.service';
 
 @ApiTags('Auth')
+@Public()
 @Controller('auth')
 export class LoginController {
   constructor(
