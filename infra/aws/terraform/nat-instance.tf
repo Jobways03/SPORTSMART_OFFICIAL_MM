@@ -27,7 +27,7 @@ data "aws_ami" "fck_nat" {
 
   filter {
     name   = "name"
-    values = ["fck-nat-al2023-hvm-*-arm64-ebs"]
+    values = ["fck-nat-al2023-hvm-*-${var.nat_instance_arch}-ebs"]
   }
   filter {
     name   = "state"
@@ -71,7 +71,7 @@ resource "aws_instance" "nat" {
   count                       = var.use_nat_instance ? 1 : 0
   ami                         = data.aws_ami.fck_nat[0].id
   instance_type               = var.nat_instance_type
-  subnet_id                   = aws_subnet.public[local.azs[0]].id
+  subnet_id                   = aws_subnet.public[local.azs[min(var.nat_instance_az_index, length(local.azs) - 1)]].id
   vpc_security_group_ids      = [aws_security_group.nat_instance[0].id]
   associate_public_ip_address = true
   # Required: this instance forwards packets it is neither source nor dest of.

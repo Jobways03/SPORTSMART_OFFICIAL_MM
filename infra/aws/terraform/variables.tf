@@ -153,6 +153,22 @@ variable "nat_instance_type" {
   default     = "t4g.nano"
 }
 
+variable "nat_instance_az_index" {
+  description = "Which AZ (index into the AZ list) to place the NAT instance in when use_nat_instance=true. Use this to avoid an AZ that lacks capacity for the instance type (e.g. ap-south-1a had no t4g.nano capacity). Clamped to the available AZ range."
+  type        = number
+  default     = 0
+}
+
+variable "nat_instance_arch" {
+  description = "CPU architecture for the NAT instance AMI (fck-nat). MUST match nat_instance_type's architecture: 'arm64' for t4g.*, 'x86_64' for t3.*. Default arm64 matches the t4g.nano default."
+  type        = string
+  default     = "arm64"
+  validation {
+    condition     = contains(["arm64", "x86_64"], var.nat_instance_arch)
+    error_message = "nat_instance_arch must be 'arm64' or 'x86_64'."
+  }
+}
+
 variable "enable_vpc_endpoints" {
   description = "Create VPC endpoints (S3 gateway + ECR/Secrets Manager/KMS/Logs interface endpoints) so task-startup AWS-API traffic skips the NAT (lower cost + removes NAT from the image-pull/secret-read critical path)."
   type        = bool
