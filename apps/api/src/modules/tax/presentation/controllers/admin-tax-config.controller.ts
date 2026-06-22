@@ -67,9 +67,9 @@ export class AdminTaxConfigController {
     @Req() req: any,
     @Body()
     body: {
-      gst?: { rateBps?: number; baseType?: string };
-      tcs?: { rateBps?: number; baseType?: string };
-      tds?: { rateBps?: number; baseType?: string };
+      gst?: { rateBps?: number; baseType?: string; enabled?: boolean };
+      tcs?: { rateBps?: number; baseType?: string; enabled?: boolean };
+      tds?: { rateBps?: number; baseType?: string; enabled?: boolean };
     },
   ) {
     const data = await this.taxConfig.setSettlementTaxConfig(

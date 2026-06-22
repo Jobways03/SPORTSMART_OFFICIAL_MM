@@ -82,6 +82,25 @@ export class SettlementTcsHookService {
     }
 
     const filingPeriod = TcsService.filingPeriodOf(cycle.periodEnd);
+
+    // Master toggle — when §52 TCS is switched OFF in the settlement tax config,
+    // skip the cycle entirely: no GSTR-8 ledger, no per-settlement stamp,
+    // nothing to show. Already-stamped settlements keep their figures.
+    if (!(await this.taxConfig.getSettlementTaxConfig()).tcs.enabled) {
+      this.logger.log(
+        `TCS disabled in settlement tax config — skipping cycle ${args.cycleId}`,
+      );
+      return {
+        cycleId: args.cycleId,
+        settlementsProcessed: 0,
+        settlementsSkipped: 0,
+        settlementsFailed: 0,
+        failedSettlementIds: [],
+        totalTcsDeductedInPaise: 0n,
+        filingPeriod,
+      };
+    }
+
     const settlements = await this.prisma.sellerSettlement.findMany({
       where: { cycleId: args.cycleId },
       select: {

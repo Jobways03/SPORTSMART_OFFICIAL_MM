@@ -54,6 +54,11 @@ export class FranchiseReservationCleanupService {
   private readonly RESERVATION_TTL_MINUTES = 15;
   private lastContractCheck = 0;
   private readonly CONTRACT_CHECK_INTERVAL = 60 * 60 * 1000; // 1 hour
+  // Phase 159p backlog de-noise. Pre-fix reservations (no correlation id) can't
+  // be auto-classified, so the sweeper skips them on every tick. Warning once
+  // per row per minute flooded the logs; instead we emit a single summary count
+  // and only re-log when the backlog SIZE changes. -1 = "not yet observed".
+  private lastLegacySkipCount = -1;
 
   constructor(
     private readonly prisma: PrismaService,
@@ -161,16 +166,17 @@ export class FranchiseReservationCleanupService {
     });
 
     let releasedCount = 0;
+    let skippedLegacyCount = 0;
     for (const reservation of expiredReservations) {
       // Phase 159p (audit #3) — a reservation row with no correlation id
       // predates the lifecycle fix and can't be safely classified as committed
       // vs abandoned. Skip it: a leaked straggler is a one-off for an operator
       // to clear, whereas releasing a committed hold is a customer-facing
-      // oversell. (New reservations always carry a referenceId.)
+      // oversell. (New reservations always carry a referenceId.) Counted here
+      // and summarised once after the loop — warning per-row-per-tick flooded
+      // the logs every minute for a stable, known backlog.
       if (!reservation.referenceId) {
-        this.logger.warn(
-          `Skipping franchise reservation ${reservation.id} — no correlation id (pre-159p); needs manual review`,
-        );
+        skippedLegacyCount++;
         continue;
       }
 
@@ -213,6 +219,22 @@ export class FranchiseReservationCleanupService {
       } catch (err) {
         this.logger.warn(`Failed to release stale reservation: ${(err as Error).message}`);
       }
+    }
+
+    // Phase 159p backlog — emit ONE summary line, and only when the count
+    // changes from the previous tick, so a stable legacy backlog doesn't
+    // re-warn every minute. Logs the eventual drop to 0 once, then stays silent.
+    if (skippedLegacyCount !== this.lastLegacySkipCount) {
+      if (skippedLegacyCount > 0) {
+        this.logger.warn(
+          `Skipping ${skippedLegacyCount} pre-159p franchise reservation(s) with no correlation id — pending manual review (re-logged only when this count changes).`,
+        );
+      } else if (this.lastLegacySkipCount > 0) {
+        this.logger.log(
+          'Pre-159p franchise reservation backlog cleared — no uncorrelated reservations remain.',
+        );
+      }
+      this.lastLegacySkipCount = skippedLegacyCount;
     }
 
     if (releasedCount > 0) {

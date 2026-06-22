@@ -31,10 +31,13 @@ const BASE_LABEL: Record<TaxBaseType, string> = {
 interface Draft {
   gstRatePct: string;
   gstBase: TaxBaseType;
+  gstEnabled: boolean;
   tcsRatePct: string;
   tcsBase: TaxBaseType;
+  tcsEnabled: boolean;
   tdsRatePct: string;
   tdsBase: TaxBaseType;
+  tdsEnabled: boolean;
 }
 
 const bpsToPct = (bps: number) => String(bps / 100);
@@ -51,10 +54,13 @@ export default function SettlementChargesPage() {
   const fromConfig = (c: SettlementTaxConfig): Draft => ({
     gstRatePct: bpsToPct(c.gst.rateBps),
     gstBase: c.gst.baseType,
+    gstEnabled: c.gst.enabled,
     tcsRatePct: bpsToPct(c.tcs.rateBps),
     tcsBase: c.tcs.baseType,
+    tcsEnabled: c.tcs.enabled,
     tdsRatePct: bpsToPct(c.tds.rateBps),
     tdsBase: c.tds.baseType,
+    tdsEnabled: c.tds.enabled,
   });
 
   const refresh = useCallback(async () => {
@@ -93,9 +99,9 @@ export default function SettlementChargesPage() {
     setSaveErr(null);
     try {
       const res = await svc.save({
-        gst: { rateBps: pctToBps(draft.gstRatePct), baseType: draft.gstBase },
-        tcs: { rateBps: pctToBps(draft.tcsRatePct), baseType: draft.tcsBase },
-        tds: { rateBps: pctToBps(draft.tdsRatePct), baseType: draft.tdsBase },
+        gst: { rateBps: pctToBps(draft.gstRatePct), baseType: draft.gstBase, enabled: draft.gstEnabled },
+        tcs: { rateBps: pctToBps(draft.tcsRatePct), baseType: draft.tcsBase, enabled: draft.tcsEnabled },
+        tds: { rateBps: pctToBps(draft.tdsRatePct), baseType: draft.tdsBase, enabled: draft.tdsEnabled },
       });
       if (res.data) setDraft(fromConfig(res.data));
       setSavedAt(Date.now());
@@ -128,6 +134,8 @@ export default function SettlementChargesPage() {
           <TaxCard
             title="Commission GST"
             subtitle="GST the marketplace charges on its commission (SAC 9985). CGST/SGST vs IGST is split automatically by place of supply."
+            enabled={draft.gstEnabled}
+            onToggle={(v) => set({ gstEnabled: v })}
           >
             <RateField
               value={draft.gstRatePct}
@@ -143,6 +151,8 @@ export default function SettlementChargesPage() {
           <TaxCard
             title="TCS (Section 52)"
             subtitle="Tax Collected at Source, remitted in GSTR-8. Levied on the chosen base — default is the GST amount (“TCS on GST”). Note: §52 statutorily applies to the taxable value of supplies; other bases are a deliberate platform choice."
+            enabled={draft.tcsEnabled}
+            onToggle={(v) => set({ tcsEnabled: v })}
           >
             <RateField
               value={draft.tcsRatePct}
@@ -159,6 +169,8 @@ export default function SettlementChargesPage() {
           <TaxCard
             title="TDS (Section 194-O)"
             subtitle="Tax Deducted at Source, filed in Form 26Q. PAN-based 1% / 5% (§206AA) and the ₹5L threshold are applied automatically; set the standard rate and what it's levied on."
+            enabled={draft.tdsEnabled}
+            onToggle={(v) => set({ tdsEnabled: v })}
           >
             <RateField
               value={draft.tdsRatePct}
@@ -196,20 +208,98 @@ export default function SettlementChargesPage() {
 function TaxCard({
   title,
   subtitle,
+  enabled,
+  onToggle,
   children,
 }: {
   title: string;
   subtitle: string;
+  enabled: boolean;
+  onToggle: (v: boolean) => void;
   children: React.ReactNode;
 }) {
   return (
     <section style={sectionStyle}>
-      <div style={{ fontSize: 15, fontWeight: 700, color: '#0F1115' }}>{title}</div>
-      <p style={{ margin: '6px 0 14px', fontSize: 12.5, color: '#6b7280', lineHeight: 1.5 }}>
-        {subtitle}
-      </p>
-      <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>{children}</div>
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 15, fontWeight: 700, color: '#0F1115' }}>{title}</div>
+          <p style={{ margin: '6px 0 14px', fontSize: 12.5, color: '#6b7280', lineHeight: 1.5 }}>
+            {subtitle}
+          </p>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+          <span style={{ fontSize: 12, fontWeight: 700, color: enabled ? '#15803d' : '#9ca3af' }}>
+            {enabled ? 'On' : 'Off'}
+          </span>
+          <Toggle on={enabled} onChange={onToggle} label={title} />
+        </div>
+      </div>
+      {/* When off, the rate/base are preserved but greyed + non-interactive. */}
+      <div
+        style={{
+          display: 'flex',
+          gap: 16,
+          flexWrap: 'wrap',
+          opacity: enabled ? 1 : 0.4,
+          pointerEvents: enabled ? 'auto' : 'none',
+        }}
+        aria-disabled={!enabled}
+      >
+        {children}
+      </div>
+      {!enabled && (
+        <div style={{ marginTop: 12, fontSize: 12, fontWeight: 600, color: '#92400e' }}>
+          Off — this tax is not deducted in new settlements and won&apos;t appear in
+          payouts or GST / TDS filings. The rate &amp; base are kept for when you turn it back on.
+        </div>
+      )}
     </section>
+  );
+}
+
+function Toggle({
+  on,
+  onChange,
+  label,
+}: {
+  on: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={`Toggle ${label}`}
+      onClick={() => onChange(!on)}
+      style={{
+        position: 'relative',
+        width: 46,
+        height: 26,
+        flexShrink: 0,
+        borderRadius: 999,
+        border: 0,
+        cursor: 'pointer',
+        padding: 0,
+        background: on ? '#16a34a' : '#cbd5e1',
+        transition: 'background 0.15s',
+      }}
+    >
+      <span
+        style={{
+          position: 'absolute',
+          top: 3,
+          left: on ? 23 : 3,
+          width: 20,
+          height: 20,
+          borderRadius: '50%',
+          background: '#fff',
+          boxShadow: '0 1px 2px rgba(0,0,0,0.25)',
+          transition: 'left 0.15s',
+        }}
+      />
+    </button>
   );
 }
 

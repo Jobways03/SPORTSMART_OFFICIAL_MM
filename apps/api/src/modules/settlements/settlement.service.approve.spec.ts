@@ -119,9 +119,9 @@ function buildService(opts: {
   // not approve — a default-returning stub is enough here).
   const taxConfig: any = {
     getSettlementTaxConfig: jest.fn().mockResolvedValue({
-      gst: { rateBps: 1800, baseType: 'COMMISSION' },
-      tcs: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
-      tds: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
+      gst: { rateBps: 1800, baseType: 'COMMISSION', enabled: true },
+      tcs: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD', enabled: true },
+      tds: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD', enabled: true },
     }),
   };
   const service = new SettlementService(

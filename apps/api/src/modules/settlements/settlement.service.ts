@@ -266,11 +266,15 @@ export class SettlementService {
           gstCfg.baseType === 'COMMISSION'
             ? BigInt(data.totalPlatformMargin.mul(100).toFixed(0))
             : BigInt(data.totalPlatformAmount.mul(100).toFixed(0));
+        // Master toggle — when Commission GST is switched OFF in the settlement
+        // tax config, force the effective rate to 0 so the whole split computes
+        // to ₹0 (no GST deducted, all GST columns zero). The saved rate is
+        // preserved in config so flipping it back on restores it.
         const commissionGst = computeCommissionGst({
           commissionAmountInPaise: gstBaseInPaise,
           marketplaceStateCode,
           sellerStateCode: data.sellerStateCode,
-          rateBpsOverride: gstCfg.rateBps,
+          rateBpsOverride: gstCfg.enabled ? gstCfg.rateBps : 0,
         });
 
         // ── Phase 150: net this seller's PENDING claw-backs into the payout.

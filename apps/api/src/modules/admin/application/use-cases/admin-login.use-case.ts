@@ -259,18 +259,16 @@ export class AdminLoginUseCase {
     });
 
     // Phase 23 (2026-05-20) — Force MFA for SUPER_ADMIN.
-    //
-    // Pre-Phase-23 a SUPER_ADMIN who hadn't enrolled MFA could log in
-    // with just a password — defeating the point of MFA infrastructure
-    // for the most privileged role. Now: SUPER_ADMIN without MFA
-    // enrolled is hard-blocked at login with a clear ENFORCED_MFA
-    // code. The frontend surfaces a "you must enroll MFA before
-    // logging in" screen and walks the admin through the existing
-    // enrollment flow (which is itself gated behind an authenticated
-    // session, so we keep one well-defined path: an out-of-band
-    // recovery / break-glass route for the bootstrap super-admin's
-    // first login lives in the runbook).
-    if (admin.role === 'SUPER_ADMIN' && !mfaState?.mfaEnabledAt) {
+    // Extended (2026-06-22) — enforcement now covers EVERY admin role, not
+    // just SUPER_ADMIN, so MFA is mandatory at login across all admin portals
+    // (storefront, seller-admin, franchise-admin, affiliate-admin,
+    // retail-seller-admin). Any admin without MFA enrolled is hard-blocked at
+    // login with a clear ENFORCED_MFA code. The frontend surfaces a "you must
+    // enroll MFA before logging in" screen; un-enrolled admins enroll via the
+    // token-based invite flow (/mfa-enroll/[token]), which does NOT require an
+    // existing session. A break-glass route for the bootstrap super-admin's
+    // first login lives in the runbook.
+    if (!mfaState?.mfaEnabledAt) {
       this.auditLogin(
         admin.id,
         admin.role,
@@ -280,7 +278,7 @@ export class AdminLoginUseCase {
         userAgent,
       );
       throw new ForbiddenAppException(
-        'Your SUPER_ADMIN account must have MFA enrolled before you can sign in. Contact your security operator for the enrollment runbook.',
+        'Your admin account must have MFA enrolled before you can sign in. Ask a super-admin for an MFA enrollment invite, or see the security enrollment runbook.',
         'ENFORCED_MFA_ENROLLMENT',
       );
     }

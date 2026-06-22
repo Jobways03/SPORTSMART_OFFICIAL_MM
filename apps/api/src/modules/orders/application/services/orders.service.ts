@@ -2115,9 +2115,18 @@ export class OrdersService {
     );
     const relevantSubOrders =
       activeSubOrders.length > 0 ? activeSubOrders : order.subOrders;
-    const allDelivered = relevantSubOrders.every(
-      (so: any) => so.fulfillmentStatus === 'DELIVERED',
+    // A CANCELLED sub-order is dead for fulfillment + payment — exclude it so a
+    // PARTIALLY_CANCELLED order whose remaining sub-orders are all delivered can
+    // still be COD-collected (mirrors the admin order page's deliverable check).
+    // Without this, a single cancelled sub-order blocks mark-paid forever.
+    const deliverableSubOrders = relevantSubOrders.filter(
+      (so: any) => so.fulfillmentStatus !== 'CANCELLED',
     );
+    const allDelivered =
+      deliverableSubOrders.length > 0 &&
+      deliverableSubOrders.every(
+        (so: any) => so.fulfillmentStatus === 'DELIVERED',
+      );
 
     if (!allDelivered) {
       throw new BadRequestAppException(
@@ -2149,7 +2158,24 @@ export class OrdersService {
     // amount to that payable (the UI's "collect full" affordance); when the
     // admin records a different amount, a variance reason is mandatory so the
     // discrepancy is never silently absorbed.
-    const grossInPaise = BigInt(Math.round(Number(order.totalAmount) * 100));
+    // Net out any CANCELLED sub-orders — the customer doesn't pay for items that
+    // were cancelled. (REJECTED sub-orders were re-assigned to a new seller, not
+    // removed, so they still count toward the payable.) Without this, a
+    // PARTIALLY_CANCELLED COD order over-collects by the cancelled value.
+    const cancelledSubtotalInPaise = relevantSubOrders
+      .filter((so: any) => so.fulfillmentStatus === 'CANCELLED')
+      .reduce(
+        (sum: bigint, so: any) =>
+          sum + BigInt(Math.round(Number(so.subTotal) * 100)),
+        0n,
+      );
+    const grossBeforeCancelInPaise = BigInt(
+      Math.round(Number(order.totalAmount) * 100),
+    );
+    const grossInPaise =
+      grossBeforeCancelInPaise > cancelledSubtotalInPaise
+        ? grossBeforeCancelInPaise - cancelledSubtotalInPaise
+        : 0n;
     const walletInPaise = BigInt(order.walletAmountUsedInPaise ?? 0);
     const expectedInPaise =
       grossInPaise > walletInPaise ? grossInPaise - walletInPaise : 0n;
