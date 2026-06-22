@@ -45,6 +45,12 @@ SERVICE_URLS_JSON="$(aws ssm get-parameter \
   --name "/sportsmart/${TARGET}/deploy/service_urls" \
   --query 'Parameter.Value' --output text)"
 
+# Cluster name (same SSM source deploy.sh reads) — used below to look up each
+# service's desired task count so we can skip services intentionally scaled to 0.
+CLUSTER="$(aws ssm get-parameter \
+  --name "/sportsmart/${TARGET}/deploy/cluster" \
+  --query 'Parameter.Value' --output text)"
+
 # Which services to smoke.
 if [[ "$SERVICES_CSV" == "all" ]]; then
   mapfile -t SERVICES < <(printf '%s' "$SERVICE_URLS_JSON" | jq -r 'keys[]')
@@ -80,6 +86,16 @@ for name in "${SERVICES[@]}"; do
   base="$(printf '%s' "$SERVICE_URLS_JSON" | jq -r --arg k "$name" '.[$k] // empty')"
   if [[ -z "$base" ]]; then
     echo "  – $name: no URL in SSM service_urls (skipping)"
+    continue
+  fi
+  # Skip services intentionally scaled to 0 (staging runs lean via
+  # service_desired_count in *.tfvars). Zero tasks -> empty target group -> the
+  # ALB returns 503, which is correct behavior, not a deploy regression. Smoke
+  # only what is actually deployed; an unknown/missing count fails open (tests).
+  desired="$(aws ecs describe-services --cluster "$CLUSTER" --services "$name" \
+    --query 'services[0].desiredCount' --output text 2>/dev/null || echo "")"
+  if [[ "$desired" == "0" ]]; then
+    echo "  – $name: desired_count=0 (intentionally off in $TARGET), skipping"
     continue
   fi
   if [[ "$name" == "api" ]]; then
