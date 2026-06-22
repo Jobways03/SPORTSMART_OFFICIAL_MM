@@ -2,11 +2,13 @@
  * Production Seed Runner — loads ONLY the reference data a fresh production
  * database needs to be usable, idempotently.
  *
- * Unlike the dev runner (seed.ts), this NEVER loads demo/dev fixtures (catalog,
- * metafields, demo-products, smoke-actors). Those hardcode test passwords and
- * demo SKUs and would pollute a real prod DB — and seed-metafields actively
- * DEACTIVATES any metafield whose category slug it can't resolve, which would
- * silently wreck taxonomy on a prod DB that has no dev categories.
+ * Unlike the dev runner (seed.ts), this NEVER loads the demo fixtures that
+ * hardcode test passwords / demo SKUs (demo-products, smoke-actors) — they would
+ * pollute a real prod DB. It DOES load the real catalog taxonomy (categories +
+ * brands) and the category metafield definitions the storefront needs. Metafields
+ * run AFTER catalog so they resolve their categories; seed-metafields is
+ * idempotent (upsert + mark-inactive, never deletes) and is force-run on prod via
+ * FORCE_METAFIELD_SEED (set on the seed task in seed.tf — staging doesn't need it).
  *
  * Run AFTER `prisma migrate deploy` (the schema must already exist). Every step
  * is upsert / skip-safe, so this is idempotent and safe to re-run.
@@ -47,21 +49,23 @@ const tsNode = path.join('node_modules', '.bin', 'ts-node');
 const mask = (url: string | undefined): string =>
   (url ?? '').replace(/:\/\/[^@]*@/, '://***@');
 
-// Reference-only subset. admin / policies / SLA are independent; tax-master
-// seeds india_states (nothing here depends on it); the storefront nav menu is
-// reference data the shop needs to render its header — it is URL links only (no
-// test passwords/SKUs), so it belongs here, not with the demo fixtures. All
-// import only @prisma/client (+ bcrypt for admin), so they run from the
-// dist-only image. NOTE: seed-menu upserts the 'main-menu' shell but RECREATES
-// its items each run, so re-seeding RESETS any admin menu edits — fine at first
-// bring-up; on an established env, run RUN_SEED only when intentionally
-// refreshing the default menu.
+// Reference subset (no demo products / test users). ORDER MATTERS at the tail:
+// seed-catalog creates the category taxonomy + brands, and seed-metafields
+// attaches metafield definitions to those categories — so catalog MUST run
+// before metafields. admin/policies/SLA/tax/menu are independent. All import
+// only @prisma/client (+ bcrypt for admin) and run from the dist-only image.
+// NOTE: seed-menu / seed-catalog / seed-metafields recreate-or-upsert their
+// reference rows each run, so re-seeding RESETS admin edits to those defaults —
+// fine at first bring-up; on an established env run RUN_SEED only when
+// intentionally refreshing them.
 const STEPS: ReadonlyArray<{ label: string; script: string }> = [
   { label: 'Admin user + system roles', script: 'seed-admin.ts' },
   { label: 'Resource policies (ABAC)', script: 'seed-resource-policies.ts' },
   { label: 'SLA policies', script: 'seed-sla-policies.ts' },
   { label: 'Tax master (states, HSN, UQC, GST config)', script: 'seed-tax-master.ts' },
   { label: 'Storefront navigation menu', script: 'seed-menu.ts' },
+  { label: 'Catalog taxonomy (categories + brands)', script: 'seed-catalog.ts' },
+  { label: 'Category metafield definitions', script: 'seed-metafields.ts' },
 ];
 
 function run(label: string, script: string): void {
