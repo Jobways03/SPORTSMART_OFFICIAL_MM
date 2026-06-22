@@ -3,8 +3,8 @@
  * database needs to be usable, idempotently.
  *
  * Unlike the dev runner (seed.ts), this NEVER loads demo/dev fixtures (catalog,
- * menu, metafields, demo-products, smoke-actors). Those hardcode test passwords
- * and demo SKUs and would pollute a real prod DB — and seed-metafields actively
+ * metafields, demo-products, smoke-actors). Those hardcode test passwords and
+ * demo SKUs and would pollute a real prod DB — and seed-metafields actively
  * DEACTIVATES any metafield whose category slug it can't resolve, which would
  * silently wreck taxonomy on a prod DB that has no dev categories.
  *
@@ -48,13 +48,20 @@ const mask = (url: string | undefined): string =>
   (url ?? '').replace(/:\/\/[^@]*@/, '://***@');
 
 // Reference-only subset. admin / policies / SLA are independent; tax-master
-// seeds india_states (nothing here depends on it). All four import only
-// @prisma/client (+ bcrypt for admin), so they run from the dist-only image.
+// seeds india_states (nothing here depends on it); the storefront nav menu is
+// reference data the shop needs to render its header — it is URL links only (no
+// test passwords/SKUs), so it belongs here, not with the demo fixtures. All
+// import only @prisma/client (+ bcrypt for admin), so they run from the
+// dist-only image. NOTE: seed-menu upserts the 'main-menu' shell but RECREATES
+// its items each run, so re-seeding RESETS any admin menu edits — fine at first
+// bring-up; on an established env, run RUN_SEED only when intentionally
+// refreshing the default menu.
 const STEPS: ReadonlyArray<{ label: string; script: string }> = [
   { label: 'Admin user + system roles', script: 'seed-admin.ts' },
   { label: 'Resource policies (ABAC)', script: 'seed-resource-policies.ts' },
   { label: 'SLA policies', script: 'seed-sla-policies.ts' },
   { label: 'Tax master (states, HSN, UQC, GST config)', script: 'seed-tax-master.ts' },
+  { label: 'Storefront navigation menu', script: 'seed-menu.ts' },
 ];
 
 function run(label: string, script: string): void {
