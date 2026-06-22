@@ -121,6 +121,9 @@ export class DelhiveryCourierAdapter implements CourierGatewayPort {
       // forward (normal delivery) vs reverse (customer return pickup). The
       // facade routes 'reverse' to Delhivery's RVP create. Defaults to forward.
       direction: req.direction ?? s.direction ?? 'forward',
+      // NDD vs standard ground. Caller-decided from pickup→drop distance; the
+      // facade's Delhivery mapper defaults to 'D' when absent.
+      ...(s.transportSpeed ? { transportSpeed: s.transportSpeed } : {}),
     };
 
     let res: { status: number; body: any };

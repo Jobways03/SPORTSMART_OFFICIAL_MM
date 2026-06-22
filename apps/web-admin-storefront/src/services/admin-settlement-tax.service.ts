@@ -11,6 +11,8 @@ export type TaxBaseType = 'COMMISSION' | 'PRICE_OF_GOODS_SOLD' | 'GST';
 export interface OneTaxConfig {
   rateBps: number;
   baseType: TaxBaseType;
+  /** Master on/off. When false the tax is not deducted and shows nowhere. */
+  enabled: boolean;
 }
 
 export interface SettlementTaxConfig {
@@ -20,9 +22,9 @@ export interface SettlementTaxConfig {
 }
 
 export interface SettlementTaxConfigInput {
-  gst?: { rateBps?: number; baseType?: TaxBaseType };
-  tcs?: { rateBps?: number; baseType?: TaxBaseType };
-  tds?: { rateBps?: number; baseType?: TaxBaseType };
+  gst?: { rateBps?: number; baseType?: TaxBaseType; enabled?: boolean };
+  tcs?: { rateBps?: number; baseType?: TaxBaseType; enabled?: boolean };
+  tds?: { rateBps?: number; baseType?: TaxBaseType; enabled?: boolean };
 }
 
 export const adminSettlementTaxService = {

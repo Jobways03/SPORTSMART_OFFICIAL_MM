@@ -1,0 +1,15 @@
+-- Drift repair (2026-06-22).
+-- MasterOrder.gatewayAmountInPaise (Razorpay capture amount, Phase 165/166) was
+-- added to the Prisma model but no migration ever added the column to
+-- master_orders. The generated client SELECTs it on every findMany, so the
+-- admin order list (AdminOrdersController.listOrders) failed with Prisma P2022
+-- ("column master_orders.gateway_amount_in_paise does not exist") → HTTP 500.
+--
+-- Matches the schema declaration exactly:
+--   gatewayAmountInPaise BigInt @default(0) @map("gateway_amount_in_paise")
+-- 0 is the correct backfill for existing COD / pre-migration rows (verify
+-- callers fall back to totalAmountInPaise − walletAmountUsedInPaise).
+--
+-- IF NOT EXISTS keeps this safe to (re)apply on any DB that already has the
+-- column, since this repair is applied out-of-band on drifted dev databases.
+ALTER TABLE "master_orders" ADD COLUMN IF NOT EXISTS "gateway_amount_in_paise" BIGINT NOT NULL DEFAULT 0;

@@ -131,6 +131,10 @@ export function toDelhiveryShipment(
     shipment_length: payload.dimensionsCm?.lengthCm,
     shipment_width: payload.dimensionsCm?.widthCm,
     shipment_height: payload.dimensionsCm?.heightCm,
+    // NDD vs standard. 'F' = Next Day Delivery, 'D' = standard ground. Caller
+    // (apps/api) sets this from pickup→drop distance; default 'D' so an absent
+    // value never silently books the priced-up NDD lane.
+    transport_speed: payload.transportSpeed ?? 'D',
 
     // Commerce
     total_amount: totalAmount,

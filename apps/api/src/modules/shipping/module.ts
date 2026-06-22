@@ -37,6 +37,12 @@ import { RtoSideEffectsHandler } from './application/event-handlers/rto-side-eff
 // Phase 3 Delhivery wiring (2026-06-02) — auto-book Delhivery + attach
 // AWB when a DELHIVERY sub-order is marked PACKED.
 import { DelhiveryAutoBookHandler } from './application/event-handlers/delhivery-auto-book.handler';
+import { TransportSpeedService } from './application/services/transport-speed.service';
+// NDD distance check reuses the catalog Redis-backed PostOffice lookup (pincode
+// → lat/long, with region-approximation for coordless pincodes). Provided
+// locally here — it only needs the @Global Prisma/Redis, so no CatalogModule
+// import (and no circular dependency).
+import { PostOfficeCacheService } from '../catalog/application/services/post-office-cache.service';
 import { ReturnReverseAutoBookHandler } from './application/event-handlers/return-reverse-auto-book.handler';
 // Phase 3 Delhivery wiring (2026-06-02) — cancel the Delhivery shipment
 // when a sub-order with an AWB is cancelled by admin.
@@ -97,6 +103,8 @@ import { PublicShippingLabelController } from './presentation/controllers/public
     ShipmentNotificationHandler,
     ShipmentAuditHandler,
     RtoSideEffectsHandler,
+    PostOfficeCacheService,
+    TransportSpeedService,
     DelhiveryAutoBookHandler,
     ReturnReverseAutoBookHandler,
     DelhiveryCancelHandler,

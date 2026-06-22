@@ -732,10 +732,15 @@ export default function OrderDetailPage() {
   useEffect(() => { fetchOrder(); }, [fetchOrder]);
 
   // Phase 168 (#19) — open the COD cash-collection modal pre-filled with the
-  // full payable so the common "collected exactly the total" case is one click.
+  // payable so the common "collected exactly the total" case is one click. The
+  // payable nets out CANCELLED sub-orders (the customer doesn't pay for cancelled
+  // items) — matches the server's expected-amount in markCodPaid.
   const openCodModal = () => {
     if (!order) return;
-    setCodAmount(Number(order.totalAmount).toFixed(2));
+    const cancelled = order.subOrders
+      .filter((s) => s.fulfillmentStatus === 'CANCELLED')
+      .reduce((sum, s) => sum + Number(s.subTotal), 0);
+    setCodAmount(Math.max(0, Number(order.totalAmount) - cancelled).toFixed(2));
     setCodReference('');
     setCodNotes('');
     setCodVarianceReason('');
@@ -751,7 +756,10 @@ export default function OrderDetailPage() {
       return;
     }
     const collectedPaise = Math.round(rupees * 100);
-    const expectedPaise = Math.round(Number(order.totalAmount) * 100);
+    const cancelled = order.subOrders
+      .filter((s) => s.fulfillmentStatus === 'CANCELLED')
+      .reduce((sum, s) => sum + Number(s.subTotal), 0);
+    const expectedPaise = Math.round(Math.max(0, Number(order.totalAmount) - cancelled) * 100);
     if (collectedPaise !== expectedPaise && !codVarianceReason.trim()) {
       setCodError('Collected amount differs from the payable — a variance reason is required.');
       return;
@@ -955,8 +963,15 @@ export default function OrderDetailPage() {
   // Only consider active (non-rejected) sub-orders for status checks
   const activeSubOrders = order.subOrders.filter((s) => s.acceptStatus !== 'REJECTED');
   const relevantSubOrders = activeSubOrders.length > 0 ? activeSubOrders : order.subOrders;
-  const allDelivered = relevantSubOrders.every((s) => s.fulfillmentStatus === 'DELIVERED');
-  const allFulfilled = relevantSubOrders.every((s) => s.fulfillmentStatus === 'FULFILLED' || s.fulfillmentStatus === 'DELIVERED');
+  // A CANCELLED sub-order is dead for fulfillment + payment — exclude it from the
+  // delivery checks so a PARTIALLY_CANCELLED order whose remaining sub-orders are
+  // all delivered still counts as "delivered". Otherwise a single cancelled
+  // sub-order keeps allDelivered=false and the COD "Mark as Paid" button never
+  // appears. relevantSubOrders is left intact so the cancelled sub-order still
+  // renders in the list + timeline below.
+  const deliverableSubOrders = relevantSubOrders.filter((s) => s.fulfillmentStatus !== 'CANCELLED');
+  const allDelivered = deliverableSubOrders.length > 0 && deliverableSubOrders.every((s) => s.fulfillmentStatus === 'DELIVERED');
+  const allFulfilled = deliverableSubOrders.length > 0 && deliverableSubOrders.every((s) => s.fulfillmentStatus === 'FULFILLED' || s.fulfillmentStatus === 'DELIVERED');
   const totalItems = relevantSubOrders.reduce((sum, s) => sum + s.items.reduce((a, i) => a + i.quantity, 0), 0);
   const currentStatus = order.orderStatus || (order.verified ? 'VERIFIED' : 'PLACED');
   // Phase 90 — for DISPLAY only, treat an order whose every sub-order is
@@ -1011,7 +1026,7 @@ export default function OrderDetailPage() {
         <AdminOrderTimeline
           orderStatus={displayStatus}
           paymentStatus={order.paymentStatus}
-          fulfillmentStatuses={relevantSubOrders.map(s => s.fulfillmentStatus)}
+          fulfillmentStatuses={deliverableSubOrders.map(s => s.fulfillmentStatus)}
         />
       </div>
 

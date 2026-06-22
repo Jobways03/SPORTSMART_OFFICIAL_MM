@@ -59,6 +59,10 @@ export default function LoginPage() {
     if (mfa && mfaInputRef.current) mfaInputRef.current.focus();
   }, [mfa]);
 
+  // MFA email OTP is sent ONLY when the admin clicks "Email me a code instead"
+  // (handleRequestEmailOtp). The authenticator code is the default; email is an
+  // on-demand fallback. Auto-send-on-challenge was removed (2026-06-22) so a
+  // code goes out only on an explicit user action.
   // Authenticator-first MFA: the challenge opens on the authenticator-code
   // entry by default. The email OTP is sent ONLY when the user clicks
   // "Email me a code instead" (handleRequestEmailOtp) — no auto-send.

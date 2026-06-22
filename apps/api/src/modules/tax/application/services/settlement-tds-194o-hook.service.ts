@@ -67,6 +67,26 @@ export class SettlementTds194OHookService {
     }
 
     const filingPeriod = Tds194OService.filingPeriodOf(cycle.periodEnd);
+
+    // Master toggle — when §194-O TDS is switched OFF in the settlement tax
+    // config, skip the cycle entirely: no Form-26Q ledger, no per-settlement
+    // stamp, nothing to show. Already-stamped settlements keep their figures.
+    if (!(await this.taxConfig.getSettlementTaxConfig()).tds.enabled) {
+      this.logger.log(
+        `TDS disabled in settlement tax config — skipping cycle ${args.cycleId}`,
+      );
+      return {
+        cycleId: args.cycleId,
+        settlementsProcessed: 0,
+        settlementsSkipped: 0,
+        settlementsExempt: 0,
+        settlementsFailed: 0,
+        failedSettlementIds: [],
+        totalTdsDeductedInPaise: 0n,
+        filingPeriod,
+      };
+    }
+
     const settlements = await this.prisma.sellerSettlement.findMany({
       where: { cycleId: args.cycleId },
       select: {

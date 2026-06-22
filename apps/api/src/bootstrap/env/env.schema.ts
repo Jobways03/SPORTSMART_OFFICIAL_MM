@@ -291,6 +291,25 @@ export const envSchema = z.object({
   // without a redeploy.
   SHIPMENT_EVIDENCE_REQUIRED_PHOTOS: z.coerce.number().default(4),
 
+  // Next Day Delivery (Delhivery transport_speed='F') routing. When enabled, a
+  // forward Delhivery shipment whose pickup→drop distance is within
+  // NDD_MAX_DISTANCE_KM books NDD ('F'); beyond it books standard ('D'). Off by
+  // default so nothing changes until ops explicitly turns it on. Read via
+  // getBoolean('NDD_ENABLED', false) / getNumber('NDD_MAX_DISTANCE_KM', 50).
+  NDD_ENABLED: z.string().default('false'),
+  NDD_MAX_DISTANCE_KM: z.coerce.number().positive().default(50),
+  // Daily NDD pickup cutoff, as an hour in 24h IST. A near route booked at or
+  // after this hour can't make tonight's line-haul, so it books standard 'D'
+  // instead of a next-day 'F' it can't honour. Default 14 (2 PM IST). Read via
+  // getNumber('NDD_CUTOFF_HOUR', 14).
+  NDD_CUTOFF_HOUR: z.coerce.number().int().min(0).max(23).default(14),
+  // Final NDD gate: confirm Delhivery actually runs next-day on the lane via
+  // their expected_tat API (mot='N') before booking 'F'. Fail-closed — any
+  // failure/ambiguity books 'D'. On by default; this is the ops kill-switch to
+  // fall back to distance+cutoff only if the TAT interpretation ever misbehaves
+  // in prod. Read via getBoolean('NDD_TAT_CHECK_ENABLED', true).
+  NDD_TAT_CHECK_ENABLED: z.string().default('true'),
+
   // Routing engine scoring weights. Must sum to 1.0 — the engine
   // normalises if they don't, but round-number thirds are cleaner.
   ROUTING_DISTANCE_WEIGHT: z.coerce.number().default(0.7),

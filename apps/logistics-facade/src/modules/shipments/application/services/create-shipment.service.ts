@@ -69,6 +69,8 @@ export class CreateShipmentService {
       // 'reverse' → adapter books a Delhivery reverse pickup (RVP) instead of a
       // forward shipment. Defaults to 'forward'.
       direction: req.direction ?? 'forward',
+      // NDD vs standard. Caller-decided; the Delhivery mapper defaults to 'D'.
+      transportSpeed: req.transportSpeed,
     };
 
     const result = await adapter.createShipment(payload);

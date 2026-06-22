@@ -29,6 +29,13 @@ export function isSettlementTaxBaseType(v: unknown): v is SettlementTaxBaseType 
 export interface OneTaxConfig {
   rateBps: number;
   baseType: SettlementTaxBaseType;
+  /**
+   * Master on/off switch for this tax. When false the tax is OFF: it is not
+   * deducted in new settlement cycles and produces no ledger / line anywhere
+   * (the calc paths skip it). The saved rate + base are preserved so flipping
+   * it back on restores the prior config. Defaults to true (on).
+   */
+  enabled: boolean;
 }
 
 export interface SettlementTaxConfig {
@@ -41,9 +48,9 @@ export interface SettlementTaxConfig {
 // GST", per the team); TDS 1% on commission (per the CA). These are read by the
 // statutory engine and editable in the admin "Settlement Charges" page.
 export const DEFAULT_SETTLEMENT_TAX_CONFIG: SettlementTaxConfig = {
-  gst: { rateBps: 1800, baseType: 'COMMISSION' },
-  tcs: { rateBps: 100, baseType: 'GST' },
-  tds: { rateBps: 100, baseType: 'COMMISSION' },
+  gst: { rateBps: 1800, baseType: 'COMMISSION', enabled: true },
+  tcs: { rateBps: 100, baseType: 'GST', enabled: true },
+  tds: { rateBps: 100, baseType: 'COMMISSION', enabled: true },
 };
 
 /**
