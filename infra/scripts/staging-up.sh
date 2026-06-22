@@ -36,11 +36,23 @@ RDS="$(aws rds describe-db-instances \
 if [[ -n "$RDS" && "$RDS" != "None" ]]; then
   ST="$(aws rds describe-db-instances --db-instance-identifier "$RDS" \
     --query 'DBInstances[0].DBInstanceStatus' --output text)"
+  # If a recent staging-down is still stopping it, wait out the stop first:
+  # start-db-instance only works from 'stopped', so skipping it would leave the
+  # 'wait available' below hanging forever (the failure mode when up is run right
+  # after down). There is no 'db-instance-stopped' CLI waiter, so poll.
+  while [[ "$ST" == "stopping" ]]; do
+    echo "  RDS $RDS still stopping from a recent park — waiting for it to fully stop…"
+    sleep 15
+    ST="$(aws rds describe-db-instances --db-instance-identifier "$RDS" \
+      --query 'DBInstances[0].DBInstanceStatus' --output text)"
+  done
   if [[ "$ST" == "stopped" ]]; then
     aws rds start-db-instance --db-instance-identifier "$RDS" >/dev/null
     echo "  RDS $RDS → starting (waiting for 'available', ~5-10 min)…"
+  elif [[ "$ST" == "available" ]]; then
+    echo "  RDS $RDS already available"
   else
-    echo "  RDS $RDS is '$ST'"
+    echo "  RDS $RDS is '$ST' — waiting for 'available'…"
   fi
   aws rds wait db-instance-available --db-instance-identifier "$RDS"
   echo "  ✓ RDS available"
