@@ -167,6 +167,9 @@ export class FranchiseReservationCleanupService {
 
     let releasedCount = 0;
     let skippedLegacyCount = 0;
+    // Per-tick cache of stock reservedQty, keyed by franchise|product|variant,
+    // so classifying many legacy rows for the same SKU costs one lookup.
+    const reservedQtyCache = new Map<string, number>();
     for (const reservation of expiredReservations) {
       // Phase 159p (audit #3) — a reservation row with no correlation id
       // predates the lifecycle fix and can't be safely classified as committed
@@ -176,7 +179,29 @@ export class FranchiseReservationCleanupService {
       // and summarised once after the loop — warning per-row-per-tick flooded
       // the logs every minute for a stable, known backlog.
       if (!reservation.referenceId) {
-        skippedLegacyCount++;
+        // A legacy NULL-ref row is only genuinely "pending manual review" if
+        // its stock STILL holds reserved units these rows could account for. If
+        // the stock's reservedQty has already settled to 0, the counter
+        // reconciled long ago and this is just immutable journal history —
+        // re-flagging it every minute is misleading. Only count rows whose
+        // stock still carries a reservation that can't be explained.
+        const key = `${reservation.franchiseId}|${reservation.productId}|${reservation.variantId ?? ''}`;
+        let reservedQty = reservedQtyCache.get(key);
+        if (reservedQty === undefined) {
+          const fs = await this.prisma.franchiseStock.findFirst({
+            where: {
+              franchiseId: reservation.franchiseId,
+              productId: reservation.productId,
+              variantId: reservation.variantId,
+            },
+            select: { reservedQty: true },
+          });
+          reservedQty = fs?.reservedQty ?? 0;
+          reservedQtyCache.set(key, reservedQty);
+        }
+        if (reservedQty > 0) {
+          skippedLegacyCount++;
+        }
         continue;
       }
 

@@ -26,6 +26,8 @@ function buildService(opts: {
   }>;
   /** referenceIds that DO have a follow-up entry (won't be released). */
   followedUpRefIds?: string[];
+  /** reservedQty the franchise_stock lookup returns for legacy NULL-ref rows. */
+  stockReservedQty?: number;
 }) {
   const findManyExpired = jest
     .fn()
@@ -49,6 +51,14 @@ function buildService(opts: {
     // exercise abandoned-cart orphans (no order), so default to null.
     orderItem: {
       findFirst: jest.fn().mockResolvedValue(null),
+    },
+    // Sweeper classifies legacy NULL-ref rows by their stock's reservedQty:
+    // a reconciled (0) stock means the row is immutable history, not a
+    // "pending manual review" backlog item.
+    franchiseStock: {
+      findFirst: jest
+        .fn()
+        .mockResolvedValue({ reservedQty: opts.stockReservedQty ?? 0 }),
     },
     franchisePartner: {
       findMany: findManyContracts,
@@ -99,7 +109,7 @@ function buildService(opts: {
     audit,
   );
 
-  return { service, prisma, env, inventory, leader, unreserveStock, instr, audit };
+  return { service, prisma, env, inventory, leader, unreserveStock, instr, audit, logger };
 }
 
 describe('FranchiseReservationCleanupService — PR 1.8', () => {
@@ -202,6 +212,48 @@ describe('FranchiseReservationCleanupService — PR 1.8', () => {
     expect(unreserveStock).toHaveBeenCalledTimes(2);
     const refIds = unreserveStock.mock.calls.map((c: any) => c[4]);
     expect(refIds.sort()).toEqual(['r-orphan-1', 'r-orphan-2']);
+  });
+
+  // ── Legacy NULL-ref backlog de-noise ──────────────────────────────
+  // A pre-159p reservation (no correlation id) is "pending manual review"
+  // only while its stock STILL holds reserved units. Once the counter has
+  // settled to 0, the row is reconciled immutable history and must NOT be
+  // re-flagged every minute.
+
+  it('does NOT flag a legacy NULL-ref row whose stock is already reconciled (reservedQty=0)', async () => {
+    const { service, unreserveStock, logger } = buildService({
+      expiredReservations: [
+        { id: 'legacy-1', franchiseId: 'f', productId: 'p', variantId: null, globalSku: 's', quantityDelta: 1, referenceId: null },
+      ],
+      stockReservedQty: 0,
+    });
+
+    await service.tick();
+
+    // Cannot (and must not) release against a 0 counter...
+    expect(unreserveStock).not.toHaveBeenCalled();
+    // ...and the reconciled row is no longer reported as a pending backlog.
+    const flagged = (logger.warn as jest.Mock).mock.calls.some((c: any[]) =>
+      String(c[0]).includes('pre-159p'),
+    );
+    expect(flagged).toBe(false);
+  });
+
+  it('still flags a legacy NULL-ref row whose stock genuinely holds reserved units', async () => {
+    const { service, unreserveStock, logger } = buildService({
+      expiredReservations: [
+        { id: 'legacy-2', franchiseId: 'f', productId: 'p', variantId: null, globalSku: 's', quantityDelta: 1, referenceId: null },
+      ],
+      stockReservedQty: 4,
+    });
+
+    await service.tick();
+
+    expect(unreserveStock).not.toHaveBeenCalled();
+    const flagged = (logger.warn as jest.Mock).mock.calls.some((c: any[]) =>
+      String(c[0]).includes('pre-159p'),
+    );
+    expect(flagged).toBe(true);
   });
 
   it('continues processing when one unreserveStock throws', async () => {

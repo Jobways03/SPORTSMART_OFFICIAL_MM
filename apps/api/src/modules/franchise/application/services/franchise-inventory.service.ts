@@ -10,6 +10,7 @@ import {
 import { BadRequestAppException, NotFoundAppException } from '../../../../core/exceptions';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
+import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
 
 @Injectable()
 export class FranchiseInventoryService {
@@ -20,7 +21,10 @@ export class FranchiseInventoryService {
     private readonly catalogRepo: FranchiseCatalogRepository,
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBusService,
-  ) {}
+    private readonly logger: AppLoggerService,
+  ) {
+    this.logger.setContext('FranchiseInventoryService');
+  }
 
   // Phase 159o (audit #18) — emit a stock-movement event so downstream
   // listeners (low-stock alerting, dashboards) can subscribe. Fire-and-forget.
@@ -255,9 +259,31 @@ export class FranchiseInventoryService {
     if (!stock) {
       throw new NotFoundAppException('Stock record not found for this product');
     }
-    if (stock.reservedQty < quantity) {
-      throw new BadRequestAppException(
-        `Cannot unreserve more than reserved: reserved=${stock.reservedQty}, requested=${quantity}`,
+
+    // Idempotent release. A cancellation can fire unreserve more than once —
+    // retries, or because the reserve and its release carry different
+    // correlation ids (reserve stamps OrderItem.stockReservationId, the cancel
+    // path passes the order / master-order id), so a prior release can't be
+    // de-duped. Releasing more than is currently held is therefore an EXPECTED,
+    // benign no-op rather than an error. Clamp to what's actually reserved
+    // instead of throwing — the old throw logged a noisy "Cannot unreserve more
+    // than reserved" WARN on every redundant cancel (every caller already
+    // catches it best-effort, so it never blocked a cancellation; it was pure
+    // noise). The over-release guard's real invariant — reservedQty can never
+    // go negative — is preserved here because we release at most what is held.
+    const releaseQty = Math.min(quantity, stock.reservedQty);
+    if (releaseQty <= 0) {
+      // Already fully released — nothing to do.
+      return { stock, ledgerEntry: null };
+    }
+    if (releaseQty < quantity) {
+      // Partial: held less than requested. Rarer than the plain redundant
+      // cancel and worth surfacing (a possible reserve/release imbalance), but
+      // it no longer throws — we release what's there and carry on.
+      this.logger.warn(
+        `Clamped franchise unreserve for ${franchiseId} product ${productId}` +
+          `${variantId ? ` / variant ${variantId}` : ''}: requested ${quantity}, ` +
+          `only ${stock.reservedQty} reserved — released ${releaseQty}.`,
       );
     }
 
@@ -267,10 +293,10 @@ export class FranchiseInventoryService {
       variantId,
       globalSku: stock.globalSku,
       movementType: 'ORDER_UNRESERVE',
-      quantityDelta: -quantity,
+      quantityDelta: -releaseQty,
       referenceType: 'ORDER',
       referenceId: orderId,
-      remarks: `Unreserved ${quantity} units`,
+      remarks: `Unreserved ${releaseQty} units`,
       actorType: 'SYSTEM',
       updateField: 'reservedQty',
     });
