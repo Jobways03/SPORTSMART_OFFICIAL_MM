@@ -15,6 +15,11 @@ function makeSvc(financeRepo: any, prisma: any) {
 function makeRepo(opts: { prevBalance?: bigint; existing?: any; currentStatus?: string } = {}) {
   const tx: any = {
     $queryRaw: jest.fn().mockResolvedValue([]),
+    // Phase 181 switched the per-franchise advisory lock to $executeRaw
+    // (pg_advisory_xact_lock returns SQL `void`, which $queryRaw can't
+    // deserialize under Prisma 6.19+). The tx mock must expose it or runCore
+    // throws "tx.$executeRaw is not a function". Returns a row count (unused).
+    $executeRaw: jest.fn().mockResolvedValue(1),
     franchisePartner: {
       findUnique: jest.fn().mockResolvedValue({ ledgerBalanceInPaise: opts.prevBalance ?? 0n }),
       update: jest.fn().mockResolvedValue({}),
