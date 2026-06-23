@@ -142,6 +142,11 @@ locals {
     "JWT_REFRESH_SECRET",
     "AFFILIATE_ENCRYPTION_KEY",
     "ADMIN_MFA_ENCRYPTION_KEY",
+    # Seller/franchise bank-account encryption keys (TF-generated in secrets.tf
+    # via random_id.aes, like the two above). Listing them here is what makes
+    # the API task def actually inject them (ecs.tf api_secrets iterates this).
+    "SELLER_BANK_ENCRYPTION_KEY",
+    "FRANCHISE_BANK_ENCRYPTION_KEY",
   ]
 
   external_secret_keys = [
@@ -152,6 +157,11 @@ locals {
     "R2_BUCKET",
     "R2_ACCESS_KEY_ID",
     "R2_SECRET_ACCESS_KEY",
+    # Public base URL the app serves R2 objects from (a custom domain on the
+    # bucket, or the bucket's r2.dev public URL). media-storage.adapter.ts:58
+    # treats R2 as "not configured" — and REFUSES image uploads with a 502 —
+    # without it, even when the 4 creds above are set. Operator-owned.
+    "R2_PUBLIC_BASE_URL",
     # SMTP creds for outbound mail (OTPs etc.) — operator-owned, set in the
     # external secret via the console. Without them the API runs "log-only" mail.
     "MAIL_USER",

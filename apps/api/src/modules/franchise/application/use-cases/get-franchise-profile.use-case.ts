@@ -5,6 +5,7 @@ import {
   FRANCHISE_PARTNER_REPOSITORY,
 } from '../../domain/repositories/franchise.repository.interface';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { computeFranchiseProfileCompletion } from '../../../../core/utils/franchise-profile-completion.util';
 
 @Injectable()
 export class GetFranchiseProfileUseCase {
@@ -54,6 +55,27 @@ export class GetFranchiseProfileUseCase {
 
     if (!franchise) {
       throw new NotFoundAppException('Franchise profile not found');
+    }
+
+    // Self-heal the completion %: it is a DERIVED field that was historically
+    // only recomputed on profile-update / media changes — so a franchise that
+    // filled everything at onboarding (or was created before the field was
+    // wired) stays stuck at the 0% default despite a complete profile. Recompute
+    // from the live fields here and lazily persist when it has drifted, so this
+    // page AND the admin/dashboard views that read the stored column show the
+    // true value.
+    const { profileCompletionPercentage, isProfileCompleted } =
+      computeFranchiseProfileCompletion(franchise as never);
+    if (
+      profileCompletionPercentage !== franchise.profileCompletionPercentage ||
+      isProfileCompleted !== franchise.isProfileCompleted
+    ) {
+      await this.prisma.franchisePartner
+        .update({
+          where: { id: franchiseId },
+          data: { profileCompletionPercentage, isProfileCompleted },
+        })
+        .catch(() => undefined); // best-effort self-heal; never fail the read
     }
 
     // Frozen once registered with a logistics partner — the franchise
@@ -108,8 +130,8 @@ export class GetFranchiseProfileUseCase {
       logoUrl: franchise.logoUrl,
       assignedZone: franchise.assignedZone,
       isEmailVerified: franchise.isEmailVerified,
-      profileCompletionPercentage: franchise.profileCompletionPercentage,
-      isProfileCompleted: franchise.isProfileCompleted,
+      profileCompletionPercentage,
+      isProfileCompleted,
       createdAt: franchise.createdAt,
       logisticsLocked,
       hasBankDetails,

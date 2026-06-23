@@ -433,6 +433,32 @@ export default function AdminFranchiseDetailPage() {
     }
   }, [franchiseId, router]);
 
+  // Per-field PAN / GSTIN attestation (parity with the seller admin). Opens a
+  // confirm modal, then marks the ID verified. Record-keeping ONLY — it does
+  // NOT change the §194-O TDS rate (that's driven by the KYC verification card),
+  // so the modal makes no TDS claim.
+  const handleVerifyTaxId = async (which: 'pan' | 'gst') => {
+    if (!franchise) return;
+    const label = which === 'pan' ? 'PAN' : 'GSTIN';
+    const ok = await confirmDialog({
+      title: `Verify ${label}`,
+      message:
+        `Confirm you have verified this franchise's ${label} on the official portal. ` +
+        `This marks the ${label} as verified for records. (It does not change the ` +
+        `§194-O TDS rate — that is driven by the franchise's KYC verification.)`,
+      confirmText: 'Confirm & verify',
+    });
+    if (!ok) return;
+    try {
+      if (which === 'pan') await adminFranchisesService.verifyPan(franchise.id);
+      else await adminFranchisesService.verifyGstin(franchise.id);
+      void notify(`${label} marked as verified`);
+      await fetchFranchise();
+    } catch (err) {
+      void notify(err instanceof ApiError ? err.message : `Failed to verify ${label}`);
+    }
+  };
+
   const fetchCatalog = useCallback(async () => {
     if (!franchiseId) return;
     setCatalogLoading(true);
@@ -869,12 +895,42 @@ export default function AdminFranchiseDetailPage() {
                     <InfoItem label="PAN Number" value={franchise.panNumber} />
                   </div>
                 )}
+                {/* Per-field tax-ID attestation (parity with the seller admin).
+                    Record-keeping only — NOT the §194-O TDS trigger (that is the
+                    KYC verification below). Each ID can be marked verified once
+                    checked on the official portal. */}
+                {!editMode && (
+                  <div style={{ marginTop: 14, display: 'flex', flexWrap: 'wrap', gap: 20 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>PAN:</span>
+                      {franchise.panVerified ? (
+                        <span style={{ fontSize: 12, fontWeight: 600, color: '#065F46', background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: 6, padding: '3px 9px' }}>✓ Verified</span>
+                      ) : franchise.panNumber ? (
+                        <button type="button" className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 13 }} onClick={() => void handleVerifyTaxId('pan')}>Verify PAN</button>
+                      ) : (
+                        <span style={{ fontSize: 12, color: '#92400E' }}>No PAN on file</span>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 13, fontWeight: 600 }}>GSTIN:</span>
+                      {franchise.gstVerified ? (
+                        <span style={{ fontSize: 12, fontWeight: 600, color: '#065F46', background: '#ECFDF5', border: '1px solid #A7F3D0', borderRadius: 6, padding: '3px 9px' }}>✓ Verified</span>
+                      ) : franchise.gstNumber ? (
+                        <button type="button" className="btn btn-primary" style={{ padding: '5px 12px', fontSize: 13 }} onClick={() => void handleVerifyTaxId('gst')}>Verify GSTIN</button>
+                      ) : (
+                        <span style={{ fontSize: 12, color: '#92400E' }}>No GSTIN on file</span>
+                      )}
+                    </div>
+                  </div>
+                )}
                 {/* Phase 254 — §194-O TDS rate is driven by KYC verification:
                     an unverified franchise (or one without a PAN) is withheld at
                     the §206AA 5% penalty; a VERIFIED franchise with a PAN on file
                     drops to the configured rate (e.g. 1%). Mirrors the seller-side
-                    PAN-verify card (franchises have no separate panVerified flag —
-                    the overall verificationStatus is the §206AA signal). */}
+                    PAN-verify card. NOTE: the per-field panVerified flag (set by
+                    the "Verify PAN" button above) is a record-keeping attestation
+                    only — the §206AA / §194-O signal remains the overall
+                    verificationStatus, NOT panVerified. */}
                 {!editMode && (
                   <div
                     style={{

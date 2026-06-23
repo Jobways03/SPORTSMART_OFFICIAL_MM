@@ -1,10 +1,12 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
   HttpCode,
   HttpStatus,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -114,6 +116,87 @@ export class AdminFranchiseController {
       success: true,
       message: 'Franchise tax IDs verified',
       data: { gst, panVerified },
+    };
+  }
+
+  /**
+   * Per-field PAN attestation — parity with the d2c/retail seller admin's
+   * "Verify PAN" action (admin-verify-seller-tax-ids). The admin attests they
+   * checked the PAN on the official portal; we flip `panVerified`, which is the
+   * flag the §194-O / §206AA TDS logic reads to drop the 5% no-PAN penalty rate
+   * to the configured rate. Idempotent: re-verifying an already-verified PAN is
+   * a safe no-op. Distinct from the combined verify-tax-ids endpoint above (kept
+   * for the automated GSTN-portal path) so the UI can verify each field on its own.
+   */
+  @Post(':franchiseId/verify-pan')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('franchise.approve')
+  @Idempotent()
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  async verifyPan(@Param('franchiseId') franchiseId: string) {
+    const fr = await this.prisma.franchisePartner.findUnique({
+      where: { id: franchiseId },
+      select: { id: true, panNumber: true, panVerified: true },
+    });
+    if (!fr) throw new NotFoundException('Franchise not found');
+    if (!fr.panNumber) {
+      throw new BadRequestException(
+        'A PAN must be on file before it can be verified.',
+      );
+    }
+    if (fr.panVerified) {
+      return {
+        success: true,
+        message: 'PAN already verified',
+        data: { panVerified: true, alreadyVerified: true },
+      };
+    }
+    await this.prisma.franchisePartner.update({
+      where: { id: franchiseId },
+      data: { panVerified: true, panVerifiedAt: new Date() },
+    });
+    return { success: true, message: 'PAN verified', data: { panVerified: true } };
+  }
+
+  /**
+   * Per-field GSTIN attestation — parity with the seller admin's "Verify GSTIN".
+   * The admin attests they checked the GSTIN on the official portal; we flip
+   * `gstVerified` (used for tax invoicing). Idempotent. (The combined
+   * verify-tax-ids endpoint runs the automated GSTN-portal check; this is the
+   * lightweight manual attestation the per-field UI button uses, matching the
+   * seller flow.)
+   */
+  @Post(':franchiseId/verify-gstin')
+  @HttpCode(HttpStatus.OK)
+  @Permissions('franchise.approve')
+  @Idempotent()
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  async verifyGstin(@Param('franchiseId') franchiseId: string) {
+    const fr = await this.prisma.franchisePartner.findUnique({
+      where: { id: franchiseId },
+      select: { id: true, gstNumber: true, gstVerified: true },
+    });
+    if (!fr) throw new NotFoundException('Franchise not found');
+    if (!fr.gstNumber) {
+      throw new BadRequestException(
+        'A GSTIN must be on file before it can be verified.',
+      );
+    }
+    if (fr.gstVerified) {
+      return {
+        success: true,
+        message: 'GSTIN already verified',
+        data: { gstVerified: true, alreadyVerified: true },
+      };
+    }
+    await this.prisma.franchisePartner.update({
+      where: { id: franchiseId },
+      data: { gstVerified: true, gstVerifiedAt: new Date() },
+    });
+    return {
+      success: true,
+      message: 'GSTIN verified',
+      data: { gstVerified: true },
     };
   }
 

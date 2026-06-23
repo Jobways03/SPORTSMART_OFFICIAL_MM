@@ -28,6 +28,7 @@ import DeleteSellerModal from '../components/delete-seller-modal';
 import ImpersonateModal from '../components/impersonate-modal';
 import EditBankModal from '../components/edit-bank-modal';
 import KycReviewModal from '../components/kyc-review-modal';
+import '../components/modal.css';
 import './profile.css';
 import '../sellers.css';
 
@@ -345,6 +346,9 @@ export default function AdminSellerDetailPage() {
   const [adminRole, setAdminRole] = useState('');
   // Phase 254 — manual PAN / GSTIN verification in progress (null when idle).
   const [verifyingTaxId, setVerifyingTaxId] = useState<null | 'pan' | 'gst'>(null);
+  // Which tax id the confirm modal is open for (null = closed). Mirrors the
+  // d2c-seller-admin styled modal that replaced the native window.confirm.
+  const [verifyConfirm, setVerifyConfirm] = useState<null | 'pan' | 'gst'>(null);
 
   useEffect(() => {
     try {
@@ -393,17 +397,20 @@ export default function AdminSellerDetailPage() {
   // Phase 254 — manually mark the seller's PAN / GSTIN verified. PAN
   // verification is what drops §194-O TDS from the 5% no-PAN penalty to the
   // configured rate; GSTIN verification feeds tax invoicing. Idempotent.
+  // Open the in-app confirm modal (replaces the native window.confirm).
   const verifyTaxId = useCallback(
-    async (which: 'pan' | 'gst') => {
+    (which: 'pan' | 'gst') => {
       if (verifyingTaxId) return;
+      setVerifyConfirm(which);
+    },
+    [verifyingTaxId],
+  );
+
+  // Actual verification — run from the modal's confirm button.
+  const runVerify = useCallback(
+    async (which: 'pan' | 'gst') => {
       const label = which === 'pan' ? 'PAN' : 'GSTIN';
-      const ok = window.confirm(
-        `Confirm you have verified this seller's ${label} on the official portal.\n\n` +
-          (which === 'pan'
-            ? 'This drops their Section 194-O TDS from the 5% no-PAN penalty rate to the configured rate (e.g. 1%).'
-            : 'This marks the GSTIN as verified for tax invoicing.'),
-      );
-      if (!ok) return;
+      setVerifyConfirm(null);
       setVerifyingTaxId(which);
       try {
         const res =
@@ -421,7 +428,7 @@ export default function AdminSellerDetailPage() {
         setVerifyingTaxId(null);
       }
     },
-    [verifyingTaxId, sellerId, addToast, fetchSeller],
+    [sellerId, addToast, fetchSeller],
   );
 
   // Field handlers
@@ -1050,6 +1057,43 @@ export default function AdminSellerDetailPage() {
             </p>
           )}
         </div>
+
+        {/* Verify PAN/GSTIN confirmation modal (replaces native window.confirm). */}
+        {verifyConfirm && (
+          <div className="modal-overlay" onClick={() => setVerifyConfirm(null)}>
+            <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+              <div className="modal-header">
+                <h2>Verify {verifyConfirm === 'pan' ? 'PAN' : 'GSTIN'}</h2>
+                <button className="modal-close" onClick={() => setVerifyConfirm(null)}>
+                  &times;
+                </button>
+              </div>
+              <div className="modal-body">
+                <p style={{ fontSize: 14, color: 'var(--color-text)', lineHeight: 1.5, margin: 0 }}>
+                  Confirm you have verified this seller&apos;s{' '}
+                  <strong>{verifyConfirm === 'pan' ? 'PAN' : 'GSTIN'}</strong> on the
+                  official portal.
+                </p>
+                <div className="modal-warning" style={{ marginTop: 12 }}>
+                  {verifyConfirm === 'pan'
+                    ? 'This drops their Section 194-O TDS from the 5% no-PAN penalty rate to the configured rate (e.g. 1%).'
+                    : 'This marks the GSTIN as verified for tax invoicing.'}
+                </div>
+              </div>
+              <div className="modal-footer">
+                <button className="modal-btn" onClick={() => setVerifyConfirm(null)}>
+                  Cancel
+                </button>
+                <button
+                  className="modal-btn modal-btn-primary"
+                  onClick={() => void runVerify(verifyConfirm)}
+                >
+                  Confirm &amp; verify
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Store Address */}
         <div className="profile-card">

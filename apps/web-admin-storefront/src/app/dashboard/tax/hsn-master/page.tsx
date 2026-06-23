@@ -594,6 +594,31 @@ function CreateModal({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
+  // UQC options for the Default UQC dropdown — loaded from the UQC master so the
+  // list always matches what the backend accepts (hsn-master.service.resolveUqc
+  // rejects any code not active in uqc_master). The master is seeded with the
+  // full CBIC UQC list (seed-tax-master UQC_LIST), so this offers ALL units —
+  // not just the PCS/KGS the old free-text "e.g." hint implied.
+  const [uqcOptions, setUqcOptions] = useState<{ code: string; description: string }[]>([]);
+  useEffect(() => {
+    let active = true;
+    void adminTaxService
+      .listUqc({ activeOnly: true, limit: 200 })
+      .then((res) => {
+        if (active) {
+          setUqcOptions(
+            (res.data?.items ?? []).map((u) => ({ code: u.code, description: u.description })),
+          );
+        }
+      })
+      .catch(() => {
+        /* leave empty — the field still submits whatever was previously set */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const valid =
     form.hsnCode.length >= 4 && form.hsnCode.length <= 8
     && form.description.trim().length > 0
@@ -720,13 +745,19 @@ function CreateModal({
               ))}
             </select>
           </Field>
-          <Field label="Default UQC" hint="e.g. PCS, KGS">
-            <input
+          <Field label="Default UQC" hint="optional — the statutory unit">
+            <select
               value={form.defaultUqcCode}
-              onChange={(e) => setForm({ ...form, defaultUqcCode: e.target.value.toUpperCase() })}
-              placeholder="PCS"
-              style={{ ...input, fontFamily: 'ui-monospace, monospace' }}
-            />
+              onChange={(e) => setForm({ ...form, defaultUqcCode: e.target.value })}
+              style={input}
+            >
+              <option value="">— None —</option>
+              {uqcOptions.map((u) => (
+                <option key={u.code} value={u.code}>
+                  {u.code} — {u.description}
+                </option>
+              ))}
+            </select>
           </Field>
 
           <div style={{ gridColumn: '1 / -1' }}>

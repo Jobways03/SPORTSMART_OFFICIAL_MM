@@ -45,7 +45,16 @@ resource "random_password" "jwt" {
 
 # AES-256 keys as 64 hex chars (matches the .env.example "32-byte hex" format).
 resource "random_id" "aes" {
-  for_each    = toset(["AFFILIATE_ENCRYPTION_KEY", "ADMIN_MFA_ENCRYPTION_KEY"])
+  for_each = toset([
+    "AFFILIATE_ENCRYPTION_KEY",
+    "ADMIN_MFA_ENCRYPTION_KEY",
+    # Seller/franchise bank-account field encryption. env.schema.ts:68/71 require
+    # min 32 chars; seller-bank-details.service.ts:78 needs EXACTLY 32 bytes =
+    # 64 hex chars, which byte_length=32 .hex yields. Optional at boot (warn
+    # only) — bank-details writes are refused until the key is injected.
+    "SELLER_BANK_ENCRYPTION_KEY",
+    "FRANCHISE_BANK_ENCRYPTION_KEY",
+  ])
   byte_length = 32
 }
 
@@ -82,6 +91,9 @@ locals {
 
       AFFILIATE_ENCRYPTION_KEY = random_id.aes["AFFILIATE_ENCRYPTION_KEY"].hex
       ADMIN_MFA_ENCRYPTION_KEY = random_id.aes["ADMIN_MFA_ENCRYPTION_KEY"].hex
+
+      SELLER_BANK_ENCRYPTION_KEY    = random_id.aes["SELLER_BANK_ENCRYPTION_KEY"].hex
+      FRANCHISE_BANK_ENCRYPTION_KEY = random_id.aes["FRANCHISE_BANK_ENCRYPTION_KEY"].hex
 
       # logistics-facade: its three boot-required secrets, plus the shared key
       # the API consumes as LOGISTICS_FACADE_API_KEY (see ecs.tf api_secrets).

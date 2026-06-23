@@ -35,6 +35,9 @@ export interface FranchiseDetail {
   phoneNumber: string;
   gstNumber: string | null;
   panNumber: string | null;
+  // Per-field tax-ID attestation flags (admin "Verify PAN/GSTIN").
+  panVerified: boolean;
+  gstVerified: boolean;
   // Bank payout details (masked).
   hasBankDetails: boolean;
   bankName: string | null;
@@ -329,6 +332,17 @@ export const adminFranchisesService = {
       method: 'PATCH',
       body: JSON.stringify({ verificationStatus, reason }),
     });
+  },
+
+  // Per-field tax-ID attestation — parity with the seller admin. Marks the PAN /
+  // GSTIN as verified (record-keeping); does NOT change the §194-O TDS rate
+  // (that is driven by the KYC verificationStatus).
+  verifyPan(id: string): Promise<ApiResponse> {
+    return apiClient(`/admin/franchises/${id}/verify-pan`, { method: 'POST' });
+  },
+
+  verifyGstin(id: string): Promise<ApiResponse> {
+    return apiClient(`/admin/franchises/${id}/verify-gstin`, { method: 'POST' });
   },
 
   updateCommission(

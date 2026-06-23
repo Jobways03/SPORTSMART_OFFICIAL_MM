@@ -989,6 +989,32 @@ const router = useRouter();
   const sortedVariants = [...product.variants];
   const isSubmitted = product.moderationStatus === 'SUBMITTED' || product.moderationStatus === 'IN_REVIEW';
 
+  // Status moves the backend FSM actually permits from each status (mirrors
+  // admin-products.controller.ts updateStatus). The PRODUCT STATUS dropdown
+  // below only offers these, so it can never suggest an invalid transition —
+  // e.g. a SUBMITTED product is published via Approve → make-live, never
+  // SUBMITTED→ACTIVE (which the server rejects with "Cannot transition…").
+  const STATUS_TRANSITIONS: Record<string, string[]> = {
+    DRAFT: ['ARCHIVED'],
+    SUBMITTED: ['ARCHIVED'],
+    APPROVED: ['ACTIVE', 'ARCHIVED'],
+    ACTIVE: ['SUSPENDED', 'ARCHIVED', 'DRAFT'],
+    SUSPENDED: ['ACTIVE', 'ARCHIVED'],
+    ARCHIVED: ['ACTIVE', 'DRAFT'],
+    REJECTED: ['DRAFT'],
+    CHANGES_REQUESTED: ['DRAFT'],
+  };
+  const STATUS_OPTION_LABELS: Record<string, string> = {
+    ACTIVE: 'Active — make live (visible on storefront)',
+    DRAFT: 'Draft — Hidden from storefront',
+    SUSPENDED: 'Suspended',
+    ARCHIVED: 'Archived',
+  };
+  // ACTIVE (make-live) is super-admin only, matching the server gate.
+  const allowedStatusMoves = (STATUS_TRANSITIONS[product.status] ?? []).filter(
+    s => s !== 'ACTIVE' || adminRole === 'SUPER_ADMIN',
+  );
+
   // ----- Render -----
 
   return (
@@ -2102,14 +2128,9 @@ const router = useRouter();
             <label className="form-label" style={{ marginBottom: 6, display: 'block' }}>Current: <strong>{product.status}</strong></label>
             <select className="form-select" value={statusAction} onChange={e => setStatusAction(e.target.value)}>
               <option value="">Change status...</option>
-              {adminRole === 'SUPER_ADMIN' && product.status !== 'ACTIVE' && (
-                <option value="ACTIVE">Active — make live (visible on storefront)</option>
-              )}
-              {product.status !== 'DRAFT' && <option value="DRAFT">Draft — Hidden from storefront</option>}
-              {product.status !== 'SUSPENDED' && product.status !== 'APPROVED' && (
-                <option value="SUSPENDED">Suspended</option>
-              )}
-              {product.status !== 'ARCHIVED' && <option value="ARCHIVED">Archived</option>}
+              {allowedStatusMoves.map(s => (
+                <option key={s} value={s}>{STATUS_OPTION_LABELS[s]}</option>
+              ))}
             </select>
           </div>
           <button type="button" className="form-btn primary" onClick={handleStatusChange} disabled={!statusAction || statusChanging}>

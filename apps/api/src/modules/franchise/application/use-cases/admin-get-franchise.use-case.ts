@@ -69,6 +69,12 @@ export class AdminGetFranchiseUseCase {
       country: franchise.country,
       gstNumber: franchise.gstNumber,
       panNumber: franchise.panNumber,
+      // Per-field tax-ID attestation flags (admin "Verify PAN/GSTIN"). Record-
+      // keeping only — the §194-O TDS rate is driven by verificationStatus, not
+      // these flags. Surfaced so the admin UI can show verified status + the
+      // per-field verify buttons.
+      panVerified: franchise.panVerified,
+      gstVerified: franchise.gstVerified,
       onlineFulfillmentRate: franchise.onlineFulfillmentRate,
       procurementFeeRate: franchise.procurementFeeRate,
       contractStartDate: franchise.contractStartDate,
