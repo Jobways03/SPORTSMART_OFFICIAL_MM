@@ -30,7 +30,7 @@ logistics_facade_image_tag = "staging-latest"
 # Minimal always-on staging sizing (~$150/mo). Smallest viable instances —
 # db.t4g.micro (~1 GB) and cache.t4g.micro (~0.5 GB) are enough for a low-
 # traffic test env; bump to t4g.small if migrations/connections struggle.
-rds_instance_class        = "db.t4g.micro"
+rds_instance_class        = "db.t3.micro" # t4g.micro had no capacity in ap-south-1b (2026-06-23 InsufficientInstanceCapacity); x86 t3 has stock
 rds_multi_az              = false
 rds_backup_retention_days = 7
 rds_deletion_protection   = false
