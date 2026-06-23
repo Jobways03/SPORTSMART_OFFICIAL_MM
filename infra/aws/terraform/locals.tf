@@ -152,5 +152,9 @@ locals {
     "R2_BUCKET",
     "R2_ACCESS_KEY_ID",
     "R2_SECRET_ACCESS_KEY",
+    # SMTP creds for outbound mail (OTPs etc.) — operator-owned, set in the
+    # external secret via the console. Without them the API runs "log-only" mail.
+    "MAIL_USER",
+    "MAIL_PASS",
   ]
 }
