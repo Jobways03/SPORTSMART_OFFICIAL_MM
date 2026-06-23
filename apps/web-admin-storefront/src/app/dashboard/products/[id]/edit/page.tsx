@@ -1010,9 +1010,15 @@ const router = useRouter();
     SUSPENDED: 'Suspended',
     ARCHIVED: 'Archived',
   };
-  // ACTIVE (make-live) is super-admin only, matching the server gate.
+  // ACTIVE (make-live) needs super-admin AND an already-APPROVED product: the
+  // server make-live gate rejects ACTIVE unless moderationStatus is APPROVED
+  // (a never-approved DRAFT/SUBMITTED/ARCHIVED product can't be made live here —
+  // it must go through the approval flow first). So only offer "Active" when it
+  // would actually succeed, instead of letting it error.
   const allowedStatusMoves = (STATUS_TRANSITIONS[product.status] ?? []).filter(
-    s => s !== 'ACTIVE' || adminRole === 'SUPER_ADMIN',
+    s =>
+      s !== 'ACTIVE' ||
+      (adminRole === 'SUPER_ADMIN' && product.moderationStatus === 'APPROVED'),
   );
 
   // ----- Render -----
