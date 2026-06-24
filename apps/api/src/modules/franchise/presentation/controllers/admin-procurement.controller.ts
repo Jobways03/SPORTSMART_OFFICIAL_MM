@@ -174,4 +174,51 @@ export class AdminProcurementController {
       data,
     };
   }
+
+  // ── Damage claims (receipt damage → admin photo review) ──────────────
+
+  /** List the damage claims raised on a procurement request. */
+  @Get(':id/damage-claims')
+  async listDamageClaims(@Param('id') id: string) {
+    const data = await this.procurementService.listDamageClaims(id);
+    return { success: true, message: 'Damage claims fetched', data };
+  }
+
+  /** Approve a damage claim — units written off, franchise payable drops. */
+  @Patch('damage-claims/:claimId/approve')
+  @Permissions('franchise.procurement.approve')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async approveDamageClaim(
+    @Req() req: Request,
+    @Param('claimId') claimId: string,
+    @Body() body: { note?: string },
+  ) {
+    const adminId = (req as any).adminId;
+    const data = await this.procurementService.approveDamageClaim(
+      adminId,
+      claimId,
+      body?.note,
+    );
+    return { success: true, message: 'Damage claim approved', data };
+  }
+
+  /** Reject a damage claim — units become saleable, franchise still pays. */
+  @Patch('damage-claims/:claimId/reject')
+  @Permissions('franchise.procurement.approve')
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async rejectDamageClaim(
+    @Req() req: Request,
+    @Param('claimId') claimId: string,
+    @Body() body: { note?: string },
+  ) {
+    const adminId = (req as any).adminId;
+    const data = await this.procurementService.rejectDamageClaim(
+      adminId,
+      claimId,
+      body?.note,
+    );
+    return { success: true, message: 'Damage claim rejected', data };
+  }
 }

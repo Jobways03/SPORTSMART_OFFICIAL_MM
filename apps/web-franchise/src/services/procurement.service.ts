@@ -13,9 +13,32 @@ export interface ProcurementItem {
   approvedQty: number;
   receivedQty: number;
   damagedQty: number;
+  approvedDamagedQty?: number;
   landedUnitCost: number | null;
   procurementFeePerUnit: number | null;
   finalUnitCostToFranchise: number | null;
+}
+
+export interface ProcurementDamageClaimImage {
+  id: string;
+  fileId: string;
+  caption: string | null;
+}
+
+export interface ProcurementDamageClaim {
+  id: string;
+  procurementRequestId: string;
+  procurementItemId: string;
+  productId: string;
+  variantId: string | null;
+  globalSku: string;
+  claimedQty: number;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  franchiseNote: string | null;
+  reviewNote: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+  images: ProcurementDamageClaimImage[];
 }
 
 export interface ProcurementRequest {
@@ -41,6 +64,7 @@ export interface ProcurementRequest {
   createdAt: string;
   updatedAt: string;
   items?: ProcurementItem[];
+  damageClaims?: ProcurementDamageClaim[];
 }
 
 export interface CreateProcurementPayload {
@@ -57,6 +81,7 @@ export interface ConfirmReceiptPayload {
     itemId: string;
     receivedQty: number;
     damagedQty?: number;
+    damageImageFileIds?: string[];
   }>;
 }
 
@@ -102,6 +127,16 @@ export const franchiseProcurementService = {
     return apiClient(`/franchise/procurement/${id}/receive`, {
       method: 'POST',
       body: JSON.stringify(payload),
+    });
+  },
+  // Upload one damage-proof photo; returns the FileMetadata id to attach to a
+  // receipt's damaged line. QC_EVIDENCE = image-only, PRIVATE bucket.
+  uploadDamagePhoto(file: File) {
+    const fd = new FormData();
+    fd.append('file', file);
+    return apiClient<{ id: string }>('/files/upload?purpose=QC_EVIDENCE', {
+      method: 'POST',
+      body: fd as unknown as BodyInit,
     });
   },
 };

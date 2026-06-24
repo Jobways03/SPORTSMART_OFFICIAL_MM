@@ -49,6 +49,30 @@ function DamagedNotMoreThanReceived(validationOptions?: ValidationOptions) {
   };
 }
 
+// Photo proof is mandatory whenever a damage is claimed — an admin reviews the
+// images before the units are accepted as damaged (and dropped from the
+// franchise's payable). No damage claimed → no images required.
+function ImagesRequiredWhenDamaged(validationOptions?: ValidationOptions) {
+  return (object: object, propertyName: string) => {
+    registerDecorator({
+      name: 'imagesRequiredWhenDamaged',
+      target: object.constructor,
+      propertyName,
+      options: validationOptions,
+      validator: {
+        validate(value: unknown, args?: any) {
+          const obj = (args?.object ?? {}) as ReceiptItemDto;
+          if (!obj.damagedQty || obj.damagedQty <= 0) return true;
+          return Array.isArray(value) && value.length > 0;
+        },
+        defaultMessage() {
+          return 'At least one damage photo is required when damagedQty > 0';
+        },
+      },
+    });
+  };
+}
+
 export class ReceiptItemDto {
   @IsNotEmpty({ message: 'Item ID is required' })
   @IsUUID(undefined, { message: 'Item ID must be a valid UUID' })
@@ -64,6 +88,15 @@ export class ReceiptItemDto {
   @Min(0, { message: 'Damaged quantity must be at least 0' })
   @DamagedNotMoreThanReceived()
   damagedQty?: number;
+
+  // Photo proof (FileMetadata ids from POST /files/upload?purpose=QC_EVIDENCE)
+  // for the claimed-damaged units. Required (>=1) whenever damagedQty > 0.
+  @IsOptional()
+  @IsArray({ message: 'damageImageFileIds must be an array' })
+  @ArrayMaxSize(10, { message: 'At most 10 damage photos per item' })
+  @IsUUID(undefined, { each: true, message: 'Each damage image id must be a valid UUID' })
+  @ImagesRequiredWhenDamaged()
+  damageImageFileIds?: string[];
 }
 
 export class ProcurementReceiptDto {

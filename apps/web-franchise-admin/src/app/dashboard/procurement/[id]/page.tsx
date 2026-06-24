@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   adminProcurementService,
+  AdminDamageClaim,
   AdminProcurementRequest,
   ApproveItemInput,
   statusPalette,
@@ -537,6 +538,16 @@ export default function AdminProcurementDetailPage() {
           strong
         />
       </div>
+
+      {/* Damage claims review */}
+      {(request.damageClaims?.length ?? 0) > 0 && (
+        <DamageClaimsReview
+          claims={request.damageClaims ?? []}
+          payable={formatINR(request.finalPayableAmount)}
+          onResolved={fetch}
+          notify={notify}
+        />
+      )}
 
       {/* Items */}
       <div
@@ -1129,6 +1140,280 @@ function Modal({
         }}
       >
         {children}
+      </div>
+    </div>
+  );
+}
+
+function DamageClaimsReview({
+  claims,
+  payable,
+  onResolved,
+  notify,
+}: {
+  claims: AdminDamageClaim[];
+  payable: string;
+  onResolved: () => void;
+  notify: (msg: string) => void;
+}) {
+  const [urls, setUrls] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+
+  // Resolve each photo's short-lived presigned URL once (stable key so this
+  // doesn't re-fire on every parent re-render).
+  const fileIdsKey = claims
+    .flatMap((c) => c.images.map((im) => im.fileId))
+    .join(',');
+  useEffect(() => {
+    let cancelled = false;
+    const fileIds = fileIdsKey ? fileIdsKey.split(',') : [];
+    (async () => {
+      for (const fileId of fileIds) {
+        try {
+          const res = await adminProcurementService.damagePhotoUrl(fileId);
+          const url = res.data?.url;
+          if (!cancelled && url) {
+            setUrls((prev) => ({ ...prev, [fileId]: url }));
+          }
+        } catch {
+          // A missing/expired file just shows no thumbnail.
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [fileIdsKey]);
+
+  const decide = async (claimId: string, decision: 'approve' | 'reject') => {
+    setBusy(claimId);
+    try {
+      const note = notes[claimId]?.trim() || undefined;
+      const res =
+        decision === 'approve'
+          ? await adminProcurementService.approveDamageClaim(claimId, note)
+          : await adminProcurementService.rejectDamageClaim(claimId, note);
+      const newPayable = res.data?.finalPayableAmount;
+      notify(
+        decision === 'approve'
+          ? `Damage approved.${
+              newPayable
+                ? ` Franchise payable is now ₹${Number(
+                    newPayable,
+                  ).toLocaleString('en-IN')}.`
+                : ''
+            }`
+          : 'Damage rejected — units returned to saleable; franchise still billed.',
+      );
+      onResolved();
+    } catch (err) {
+      notify(
+        err instanceof ApiError
+          ? err.body.message || 'Could not record the decision.'
+          : 'Could not record the decision.',
+      );
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const pendingCount = claims.filter((c) => c.status === 'PENDING').length;
+
+  return (
+    <div
+      style={{
+        background: '#fff',
+        border: '1px solid #e5e7eb',
+        borderRadius: 12,
+        overflow: 'hidden',
+        marginBottom: 16,
+      }}
+    >
+      <div
+        style={{
+          padding: '12px 16px',
+          borderBottom: '1px solid #e5e7eb',
+          fontSize: 14,
+          fontWeight: 600,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <span>Damage claims ({pendingCount} pending)</span>
+        <span style={{ fontSize: 12, fontWeight: 500, color: '#6b7280' }}>
+          Franchise payable: {payable}
+        </span>
+      </div>
+      <div style={{ padding: 16, display: 'grid', gap: 14 }}>
+        {claims.map((c) => {
+          const tone =
+            c.status === 'APPROVED'
+              ? { bg: '#ecfdf5', fg: '#16a34a', label: 'Approved' }
+              : c.status === 'REJECTED'
+                ? { bg: '#fef2f2', fg: '#dc2626', label: 'Rejected' }
+                : { bg: '#fffbeb', fg: '#d97706', label: 'Pending review' };
+          const isPending = c.status === 'PENDING';
+          return (
+            <div
+              key={c.id}
+              style={{ border: '1px solid #e5e7eb', borderRadius: 10, padding: 14 }}
+            >
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 12,
+                  marginBottom: 10,
+                }}
+              >
+                <div style={{ fontWeight: 600, color: '#111827' }}>
+                  {c.claimedQty} unit(s) reported damaged
+                  <span style={{ fontWeight: 400, color: '#6b7280', fontSize: 12 }}>
+                    {' '}
+                    · {c.globalSku}
+                  </span>
+                </div>
+                <span
+                  style={{
+                    background: tone.bg,
+                    color: tone.fg,
+                    fontSize: 12,
+                    fontWeight: 700,
+                    padding: '4px 10px',
+                    borderRadius: 999,
+                  }}
+                >
+                  {tone.label}
+                </span>
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  marginBottom: isPending ? 12 : 0,
+                }}
+              >
+                {c.images.length === 0 && (
+                  <span style={{ fontSize: 12, color: '#9ca3af' }}>
+                    No photos attached.
+                  </span>
+                )}
+                {c.images.map((im) =>
+                  urls[im.fileId] ? (
+                    <a
+                      key={im.id}
+                      href={urls[im.fileId]}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={urls[im.fileId]}
+                        alt="damage proof"
+                        style={{
+                          width: 84,
+                          height: 84,
+                          objectFit: 'cover',
+                          borderRadius: 8,
+                          border: '1px solid #e5e7eb',
+                          display: 'block',
+                        }}
+                      />
+                    </a>
+                  ) : (
+                    <div
+                      key={im.id}
+                      style={{
+                        width: 84,
+                        height: 84,
+                        borderRadius: 8,
+                        border: '1px dashed #e5e7eb',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        fontSize: 11,
+                        color: '#9ca3af',
+                      }}
+                    >
+                      loading…
+                    </div>
+                  ),
+                )}
+              </div>
+
+              {c.reviewNote && !isPending && (
+                <div style={{ fontSize: 12, color: '#6b7280', marginTop: 8 }}>
+                  Note: “{c.reviewNote}”
+                </div>
+              )}
+
+              {isPending && (
+                <>
+                  <input
+                    type="text"
+                    placeholder="Optional note (reason / instruction)"
+                    value={notes[c.id] ?? ''}
+                    onChange={(e) =>
+                      setNotes((prev) => ({ ...prev, [c.id]: e.target.value }))
+                    }
+                    disabled={busy === c.id}
+                    style={{
+                      width: '100%',
+                      padding: '8px 10px',
+                      fontSize: 13,
+                      border: '1px solid #d1d5db',
+                      borderRadius: 8,
+                      marginBottom: 10,
+                    }}
+                  />
+                  <div
+                    style={{ display: 'flex', gap: 10, justifyContent: 'flex-end' }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => decide(c.id, 'reject')}
+                      disabled={busy === c.id}
+                      style={{
+                        padding: '8px 16px',
+                        borderRadius: 8,
+                        border: '1px solid #fecaca',
+                        background: '#fff',
+                        color: '#dc2626',
+                        fontWeight: 600,
+                        fontSize: 13,
+                        cursor: busy === c.id ? 'default' : 'pointer',
+                      }}
+                    >
+                      {busy === c.id ? '…' : 'Reject'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => decide(c.id, 'approve')}
+                      disabled={busy === c.id}
+                      style={{
+                        padding: '8px 16px',
+                        borderRadius: 8,
+                        border: 'none',
+                        background: '#16a34a',
+                        color: '#fff',
+                        fontWeight: 600,
+                        fontSize: 13,
+                        cursor: busy === c.id ? 'default' : 'pointer',
+                      }}
+                    >
+                      {busy === c.id ? '…' : 'Approve damage'}
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
