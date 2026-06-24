@@ -70,20 +70,18 @@ export class PrismaProductRepository implements IProductRepository {
     if (moderationStatus) where.moderationStatus = moderationStatus;
     if (categoryId) where.categoryId = categoryId;
     if (sellerId) where.sellerId = sellerId;
-    // Seller-type scope: a D2C/RETAIL-scoped admin sees a product when a seller
-    // of their type OWNS it OR has a mapping (offer) to it. Owner-only scoping
-    // wrongly hid shared catalog products owned by a different-type seller but
-    // mapped by one of the admin's sellers (e.g. a retail seller offering a
-    // D2C-owned product — the retail admin must still see & manage that offer).
+    // Seller-type scope (2026-06-24): strict channel isolation. A D2C/RETAIL-
+    // scoped admin sees ONLY products OWNED by a seller of their own channel. A
+    // product owned by another channel's seller — even one a D2C seller merely
+    // offers (maps) — no longer appears in this catalog list. Cross-channel
+    // OFFERS are still surfaced for review/approval by the dedicated
+    // "Pending Seller Approvals" view (/admin/seller-mappings/pending), which
+    // scopes by seller type on its own — so dropping the offer branch here hides
+    // no approval work; it just keeps each channel's product catalog its own.
     if (allowedSellerTypes && allowedSellerTypes.length > 0) {
       where.AND = [
         ...(where.AND || []),
-        {
-          OR: [
-            { seller: { sellerType: { in: allowedSellerTypes } } },
-            { sellerMappings: { some: { seller: { sellerType: { in: allowedSellerTypes } } } } },
-          ],
-        },
+        { seller: { sellerType: { in: allowedSellerTypes } } },
       ];
     }
     if (hasSellers) {
