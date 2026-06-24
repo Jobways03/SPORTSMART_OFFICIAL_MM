@@ -6,8 +6,11 @@ import Link from 'next/link';
 import { apiClient, ApiError } from '@/lib/api-client';
 import { useModal } from '@sportsmart/ui';
 import { DeliveryMethodBadge } from '@/components/DeliveryMethodBadge';
-import { DeliveryMethodPicker } from '@/components/DeliveryMethodPicker';
-import { SelfDeliveryStatusButtons } from '@/components/SelfDeliveryStatusButtons';
+// Self-delivery UI hidden 2026-06-24 — D2C ships via Delhivery. The picker +
+// status buttons (and these imports) are commented out below, not deleted;
+// uncomment them to restore the self-delivery flow.
+// import { DeliveryMethodPicker } from '@/components/DeliveryMethodPicker';
+// import { SelfDeliveryStatusButtons } from '@/components/SelfDeliveryStatusButtons';
 import { SellerInvoiceCard } from '@/components/tax/SellerInvoiceCard';
 
 /* -- types -- */
@@ -2720,15 +2723,12 @@ const btnBlue: React.CSSProperties = {
 };
 
 /**
- * Delivery section: combines the badge, the self-delivery picker
- * (only shown if no method is yet chosen and the sub-order is
- * accepted), and the self-delivery status buttons (only for sub-orders
- * already on the SELF_DELIVERY path). Hidden for rejected / cancelled
- * sub-orders since there's nothing to ship.
+ * Delivery section: the badge (+ the self-delivery picker / status buttons,
+ * currently commented out — D2C ships via Delhivery). Hidden for rejected /
+ * cancelled sub-orders since there's nothing to ship.
  */
 function DeliverySection({
   order,
-  onChanged,
 }: {
   order: SubOrderDetail;
   onChanged: () => void;
@@ -2737,9 +2737,10 @@ function DeliverySection({
     order.acceptStatus === 'REJECTED' || order.fulfillmentStatus === 'CANCELLED';
   if (cancelled) return null;
 
-  const accepted = order.acceptStatus === 'ACCEPTED';
-  const noMethodYet = !order.deliveryMethod;
-  const isSelf = order.deliveryMethod === 'SELF_DELIVERY';
+  // Self-delivery derived flags — used only by the commented-out blocks below.
+  // const accepted = order.acceptStatus === 'ACCEPTED';
+  // const noMethodYet = !order.deliveryMethod;
+  // const isSelf = order.deliveryMethod === 'SELF_DELIVERY';
 
   return (
     <div style={{ marginBottom: 20 }}>
@@ -2752,6 +2753,9 @@ function DeliverySection({
         <DeliveryMethodBadge method={order.deliveryMethod ?? null} size="md" />
       </div>
 
+      {/* Self-delivery picker + status buttons — hidden 2026-06-24 (D2C ships via
+          Delhivery). Uncomment this block, the imports, and the derived flags
+          above to restore.
       {accepted && noMethodYet && (
         <div
           style={{
@@ -2775,6 +2779,7 @@ function DeliverySection({
           onChanged={onChanged}
         />
       )}
+      */}
     </div>
   );
 }

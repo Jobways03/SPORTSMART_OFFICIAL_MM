@@ -68,6 +68,15 @@ COPY packages packages
 ARG NEXT_PUBLIC_API_URL=""
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 
+# Razorpay PUBLISHABLE key id (rzp_test_* / rzp_live_*). The storefront checkout
+# only shows the "Pay online" option when this is present at build time
+# (checkout/page.tsx: onlineEnabled = !!NEXT_PUBLIC_RAZORPAY_KEY_ID). It is the
+# PUBLIC key — safe to inline into the client bundle; the key SECRET stays
+# server-side only. deploy.yml passes it per target; empty default keeps a
+# local / unconfigured build COD-only.
+ARG NEXT_PUBLIC_RAZORPAY_KEY_ID=""
+ENV NEXT_PUBLIC_RAZORPAY_KEY_ID=${NEXT_PUBLIC_RAZORPAY_KEY_ID}
+
 # Build via Next.js. The transpilePackages config in each app's
 # next.config.js handles the workspace packages.
 RUN pnpm --filter @sportsmart/${APP} run build

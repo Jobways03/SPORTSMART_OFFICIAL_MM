@@ -104,8 +104,29 @@ locals {
     { for k, v in random_password.jwt : k => v.result },
   )
 
-  # External creds: placeholder ("") unless supplied via var.external_secrets.
-  external_secret_values = { for k in local.external_secret_keys : k => lookup(var.external_secrets, k, "") }
+  # Per-key default for an UNSUPPLIED external cred. Most default to "" (the app
+  # treats empty as "not configured"). The DELHIVERY_* keys instead default to the
+  # logistics-facade's OWN placeholder values (delhivery.config.ts loadDelhiveryConfig
+  # fallback), because that config is parsed EAGERLY at facade boot and its `??`
+  # fallback only catches UNDEFINED, not "": injecting "" would fail the zod
+  # url()/min() parse and crash-loop the facade. These placeholders pass the
+  # permissive (staging) schema so the facade boots; real Delhivery calls return 401
+  # until the operator sets real values. The STRICT production schema still rejects
+  # "replace-me-" tokens and staging URLs, so a prod deploy MUST supply real creds
+  # (it crash-loops on boot otherwise — the intended production-safety behaviour).
+  external_secret_defaults = {
+    DELHIVERY_API_URL       = "https://staging-express.delhivery.com"
+    DELHIVERY_API_TOKEN     = "replace-me-delhivery-api-token"
+    DELHIVERY_CLIENT_NAME   = "replace-me-delhivery-client"
+    DELHIVERY_WEBHOOK_TOKEN = "replace-me-delhivery-webhook-token"
+  }
+
+  # External creds: operator value if supplied via var.external_secrets, else the
+  # per-key default (mostly "", DELHIVERY_* placeholders per above).
+  external_secret_values = {
+    for k in local.external_secret_keys :
+    k => lookup(var.external_secrets, k, lookup(local.external_secret_defaults, k, ""))
+  }
 }
 
 # ── TF-managed secret (generated) ───────────────────────────────────────

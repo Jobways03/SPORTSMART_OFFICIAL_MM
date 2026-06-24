@@ -157,6 +157,15 @@ resource "aws_ecs_task_definition" "logistics_facade" {
         { name = "LOGISTICS_DATABASE_URL", valueFrom = "${aws_secretsmanager_secret.generated.arn}:LOGISTICS_DATABASE_URL::" },
         { name = "LOGISTICS_REDIS_URL", valueFrom = "${aws_secretsmanager_secret.generated.arn}:LOGISTICS_REDIS_URL::" },
         { name = "INTERNAL_API_KEY", valueFrom = "${aws_secretsmanager_secret.generated.arn}:INTERNAL_API_KEY::" },
+        # Delhivery partner creds from the operator-owned `external` secret. They
+        # default to placeholders (locals.external_secret_defaults) so the facade
+        # boots; warehouse-register + create-shipment return 401 until REAL values
+        # are set in <env>/app/external. The execution role already reads `external`
+        # (iam.tf task_execution_secrets grants both generated + external).
+        { name = "DELHIVERY_API_URL", valueFrom = "${aws_secretsmanager_secret.external.arn}:DELHIVERY_API_URL::" },
+        { name = "DELHIVERY_API_TOKEN", valueFrom = "${aws_secretsmanager_secret.external.arn}:DELHIVERY_API_TOKEN::" },
+        { name = "DELHIVERY_CLIENT_NAME", valueFrom = "${aws_secretsmanager_secret.external.arn}:DELHIVERY_CLIENT_NAME::" },
+        { name = "DELHIVERY_WEBHOOK_TOKEN", valueFrom = "${aws_secretsmanager_secret.external.arn}:DELHIVERY_WEBHOOK_TOKEN::" },
       ]
 
       logConfiguration = {

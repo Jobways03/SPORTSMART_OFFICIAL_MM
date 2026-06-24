@@ -51,6 +51,7 @@ jobs:
     outputs:
       image_tag: ${{ steps.tag.outputs.tag }}
       api_url: ${{ steps.cfg.outputs.api_url }}
+      razorpay_key: ${{ steps.cfg.outputs.razorpay_key }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
@@ -109,13 +110,21 @@ jobs:
           role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN || vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
 
-      - name: Read API URL from SSM (baked into web images)
+      - name: Read build-time config from SSM (baked into web images)
         id: cfg
         run: |
           api_url="$(aws ssm get-parameter \
             --name "/sportsmart/${{ inputs.target }}/deploy/api_url" \
             --query 'Parameter.Value' --output text)"
           echo "api_url=${api_url}" >> "$GITHUB_OUTPUT"
+          # Razorpay PUBLISHABLE key id — OPTIONAL. The storefront checkout shows
+          # the "Pay online" option only when this is set at build time. A missing
+          # parameter resolves to empty => COD-only, so an environment without
+          # online payment still builds cleanly (no failure).
+          razorpay_key="$(aws ssm get-parameter \
+            --name "/sportsmart/${{ inputs.target }}/deploy/razorpay_key_id" \
+            --query 'Parameter.Value' --output text 2>/dev/null || echo '')"
+          echo "razorpay_key=${razorpay_key}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build + push (${{ matrix.name }})
@@ -167,6 +176,7 @@ jobs:
           build-args: |
             ${{ matrix.app != '' && format('APP={0}', matrix.app) || '' }}
             ${{ matrix.app != '' && format('NEXT_PUBLIC_API_URL={0}', needs.prep.outputs.api_url) || '' }}
+            ${{ matrix.app != '' && format('NEXT_PUBLIC_RAZORPAY_KEY_ID={0}', needs.prep.outputs.razorpay_key) || '' }}
           tags: |
             ${{ steps.ecr.outputs.registry }}/sportsmart-${{ inputs.target }}/${{ matrix.name }}:${{ needs.prep.outputs.image_tag }}
             ${{ steps.ecr.outputs.registry }}/sportsmart-${{ inputs.target }}/${{ matrix.name }}:${{ inputs.target }}-latest

@@ -166,5 +166,16 @@ locals {
     # external secret via the console. Without them the API runs "log-only" mail.
     "MAIL_USER",
     "MAIL_PASS",
+    # Delhivery carrier creds, consumed by the logistics-facade (apps/logistics-
+    # facade/.../delhivery/config/delhivery.config.ts). Operator-owned. They DEFAULT
+    # to the facade's own placeholder values (see external_secret_defaults in
+    # secrets.tf) so the facade keeps booting in staging; set REAL values in the
+    # external secret to enable warehouse registration + shipment creation.
+    # API_URL: staging host = https://staging-express.delhivery.com,
+    #          prod host    = https://track.delhivery.com (verify on one.delhivery.com).
+    "DELHIVERY_API_URL",
+    "DELHIVERY_API_TOKEN",
+    "DELHIVERY_CLIENT_NAME",
+    "DELHIVERY_WEBHOOK_TOKEN",
   ]
 }

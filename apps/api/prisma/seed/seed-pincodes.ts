@@ -5,10 +5,32 @@ import * as path from 'path';
 const prisma = new PrismaClient();
 
 const BATCH_SIZE = 1000;
-// Resolve the India-Post directory CSV. The committed prisma/seed/pincodes.csv is
-// a broken symlink to a single developer's local machine, so honour an explicit
-// PINCODE_CSV_PATH override first and fall back to the in-tree path otherwise.
-const CSV_PATH = process.env.PINCODE_CSV_PATH || path.join(__dirname, 'pincodes.csv');
+// Resolve the India-Post directory CSV. Candidates, in priority order:
+//   1. PINCODE_CSV_PATH override (ops / CI),
+//   2. prisma/seed/pincodes.csv — a broken symlink to one developer's machine in
+//      a clean checkout AND inside the API image, so usually UNreadable,
+//   3. prisma/seed/pincodes 2.csv — the real 165K-row file committed to the repo
+//      and shipped in the API image (the build's `COPY apps/api` carries
+//      prisma/seed/*.csv; .dockerignore does not exclude it).
+// Pick the first READABLE candidate; if none is readable the check in main()
+// emits an actionable error against the first path.
+function resolveCsvPath(): string {
+  const candidates = [
+    process.env.PINCODE_CSV_PATH,
+    path.join(__dirname, 'pincodes.csv'),
+    path.join(__dirname, 'pincodes 2.csv'),
+  ].filter((p): p is string => !!p && p.length > 0);
+  for (const candidate of candidates) {
+    try {
+      fs.accessSync(candidate, fs.constants.R_OK);
+      return candidate;
+    } catch {
+      /* not readable — try the next candidate */
+    }
+  }
+  return candidates[0] ?? path.join(__dirname, 'pincodes.csv');
+}
+const CSV_PATH = resolveCsvPath();
 
 function parseCSVLine(line: string): string[] {
   const result: string[] = [];
@@ -39,6 +61,25 @@ function parseCSVLine(line: string): string[] {
 async function main() {
   console.log('=== Pincode Import Script ===');
   console.log(`Reading CSV from: ${CSV_PATH}`);
+
+  // Idempotency: if post_offices already has coord-bearing rows, the pincode data
+  // is loaded — skip so this can sit safely in the prod seed runner (RUN_SEED) and
+  // re-run cheaply. PINCODE_SEED_FORCE=true forces a full reload, e.g. to refresh
+  // against a newer India-Post release OR to repair a table that was seeded
+  // WITHOUT coordinates (which makes every checkout unserviceable: the allocator
+  // can't resolve the customer pincode's coordinates → PINCODE_UNKNOWN).
+  const FORCE_RELOAD = process.env.PINCODE_SEED_FORCE === 'true';
+  const existingWithCoords = await prisma.postOffice.count({
+    where: { latitude: { not: null } },
+  });
+  if (existingWithCoords > 0 && !FORCE_RELOAD) {
+    console.log(
+      `\n[skip] post_offices already has ${existingWithCoords} rows WITH coordinates — ` +
+        `pincode data looks loaded. Set PINCODE_SEED_FORCE=true to force a full reload.\n`,
+    );
+    await prisma.$disconnect();
+    return;
+  }
 
   // Fail fast with an actionable message instead of a raw ENOENT. The in-tree
   // prisma/seed/pincodes.csv is a broken symlink, so a clean checkout has no file.
@@ -128,6 +169,19 @@ async function main() {
 
   // Phase 2: Fill NA coordinates from same pincode and insert in batches
   console.log('\n[Phase 2] Inserting into database...');
+
+  // The @@unique([pincode, officeName]) index means createMany(skipDuplicates)
+  // SKIPS rows that already exist — so re-running against a table that was seeded
+  // WITHOUT coordinates (the exact staging data gap this repairs) would leave the
+  // coordless rows untouched and coords would never populate. Clear first for a
+  // clean reload. Safe: post_offices is standalone reference data with no inbound
+  // foreign keys (pincodes are referenced as plain strings elsewhere).
+  const preexisting = await prisma.postOffice.count();
+  if (preexisting > 0) {
+    console.log(`  Clearing ${preexisting} existing rows for a clean reload…`);
+    await prisma.postOffice.deleteMany({});
+  }
+
   let inserted = 0;
   let naFixed = 0;
   let batched: any[] = [];

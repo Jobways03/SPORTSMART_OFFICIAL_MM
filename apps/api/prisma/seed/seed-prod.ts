@@ -24,8 +24,11 @@
  *     in the dist-only prod image, so it can't run from the image. The
  *     SUPER_ADMIN created by seed-admin can operate prod meanwhile; wire this
  *     in once it is made image-runnable.
- *   - pincodes: need the 165K-row India-Post CSV, not shipped in the image.
  *   - all dev/demo fixtures.
+ *
+ * Pincodes ARE loaded here now (the 165K-row India-Post CSV is committed as
+ * prisma/seed/pincodes 2.csv and ships in the image); the step is idempotent and
+ * skips once coordinates are present.
  */
 
 import { execSync } from 'child_process';
@@ -66,6 +69,15 @@ const STEPS: ReadonlyArray<{ label: string; script: string }> = [
   { label: 'Storefront navigation menu', script: 'seed-menu.ts' },
   { label: 'Catalog taxonomy (categories + brands)', script: 'seed-catalog.ts' },
   { label: 'Category metafield definitions', script: 'seed-metafields.ts' },
+  // Pincode coordinates — the India-Post 165K-row directory. The checkout
+  // allocator needs the customer pincode's coordinates to run the Retail →
+  // Franchise → D2C distance cascade; with no coords it returns PINCODE_UNKNOWN
+  // and EVERY item is unserviceable. seed-pincodes is idempotent (it skips when
+  // post_offices already has coordinates), so this is cheap on re-runs and only
+  // does the full load on a fresh / coordless table. Must run AFTER 'Tax master'
+  // (it reads IndiaState to resolve each row's 2-digit GST state code). The CSV
+  // (prisma/seed/pincodes 2.csv) ships in the image, so it runs in the seed task.
+  { label: 'Pincode coordinates (India-Post directory)', script: 'seed-pincodes.ts' },
 ];
 
 function run(label: string, script: string): void {
@@ -108,7 +120,7 @@ function main(): void {
   console.log('\n✅ Production reference seed complete.');
   console.log(
     '   Not run here (by design): granular admin RBAC roles (seed-admin-rbac —\n' +
-      '   needs app source), pincodes (need the India-Post CSV), and dev fixtures.\n',
+      '   needs app source) and dev/demo fixtures.\n',
   );
 }
 

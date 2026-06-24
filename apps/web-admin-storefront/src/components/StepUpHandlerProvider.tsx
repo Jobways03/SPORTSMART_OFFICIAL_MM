@@ -88,9 +88,12 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
           }
           return {
             visible: true,
+            // Always show plain-language copy — never the raw backend/developer
+            // message (e.g. "POST a TOTP code to /admin/mfa/step-up..."), which
+            // means nothing to an admin operating the dashboard.
             message:
-              meta.message ??
-              'This action requires a fresh security check. Enter the 6-digit code we email you to continue.',
+              'This is a sensitive action, so we need to confirm it is really you. ' +
+              'Enter the 6-digit code from your authenticator app, or click "Email me a code" to get one by email.',
             maxAgeMs: meta.maxAgeMs,
             queue: [{ resolve }],
           };
@@ -255,7 +258,7 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
                   marginBottom: 6,
                 }}
               >
-                Emailed 6-digit code
+                6-digit code
               </label>
               <input
                 id="sm-stepup-code"
@@ -308,7 +311,7 @@ export function StepUpHandlerProvider({ children }: { children: ReactNode }) {
                     opacity: submitting || emailSending ? 0.6 : 1,
                   }}
                 >
-                  {emailSending ? 'Sending…' : 'Resend code'}
+                  {emailSending ? 'Sending…' : emailSentTo ? 'Resend code' : 'Email me a code'}
                 </button>
                 {emailSentTo && (
                   <p style={{ margin: '6px 0 0', color: '#0b8457', fontSize: 12, lineHeight: 1.4 }}>
