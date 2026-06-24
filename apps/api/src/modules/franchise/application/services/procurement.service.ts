@@ -459,7 +459,8 @@ export class ProcurementService {
         'You do not have access to this procurement request',
       );
     }
-    return request;
+    const damageClaims = await this.listDamageClaims(requestId);
+    return { ...request, damageClaims };
   }
 
   /**
@@ -473,6 +474,7 @@ export class ProcurementService {
       itemId: string;
       receivedQty: number;
       damagedQty?: number;
+      damageImageFileIds?: string[];
     }>,
     actorId?: string,
   ) {
@@ -619,22 +621,43 @@ export class ProcurementService {
           lastStock = result.stock;
         }
 
-        // Phase 55 — damaged units go into FranchiseStock.damagedQty
-        // with a DAMAGE ledger row (audit Gap #3). Pre-Phase-55 these
-        // units silently vanished from the trail.
+        // Damage now requires admin review with photo proof. Rather than write
+        // the units straight into FranchiseStock.damagedQty (and keep billing
+        // the franchise for them), raise a PENDING claim carrying the images.
+        // An admin later APPROVES (→ damagedQty + DAMAGE ledger, units dropped
+        // from payable) or REJECTS (→ units become saleable, still billed). The
+        // good units already committed above; only the damaged portion waits.
         if (damagedDelta > 0) {
-          const result = await this.inventoryService.addDamagedFromProcurement(
-            franchiseId,
-            existingItem.productId,
-            existingItem.variantId ?? null,
-            existingItem.globalSku,
-            damagedDelta,
-            requestId,
-            effectiveActorId,
-            tx,
-          );
-          ledgerEntryIds.push(result.ledgerEntry.id);
-          lastStock = result.stock;
+          const fileIds = receiptItem.damageImageFileIds ?? [];
+          if (fileIds.length === 0) {
+            throw new BadRequestAppException(
+              `Item ${receiptItem.itemId}: at least one damage photo is required to claim ${damagedDelta} damaged unit(s).`,
+            );
+          }
+          // The referenced files must exist (uploaded via /files/upload).
+          const foundFiles = await tx.fileMetadata.count({
+            where: { id: { in: fileIds } },
+          });
+          if (foundFiles !== fileIds.length) {
+            throw new BadRequestAppException(
+              `Item ${receiptItem.itemId}: one or more damage photo references are invalid.`,
+            );
+          }
+          await tx.procurementDamageClaim.create({
+            data: {
+              procurementRequestId: requestId,
+              procurementItemId: receiptItem.itemId,
+              productId: existingItem.productId,
+              variantId: existingItem.variantId ?? null,
+              globalSku: existingItem.globalSku,
+              claimedQty: damagedDelta,
+              status: 'PENDING',
+              raisedByActorId: effectiveActorId,
+              images: {
+                create: fileIds.map((fileId) => ({ fileId })),
+              },
+            },
+          });
         }
 
         if (ledgerEntryIds.length > 0 && lastStock) {
@@ -1394,6 +1417,187 @@ export class ProcurementService {
     if (!request) {
       throw new NotFoundAppException('Procurement request not found');
     }
-    return request;
+    const damageClaims = await this.listDamageClaims(requestId);
+    return { ...request, damageClaims };
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Procurement damage claims (receipt damage → admin photo review)
+  // ═══════════════════════════════════════════════════════════════
+
+  /** All damage claims for a request, newest first, with their image ids. */
+  async listDamageClaims(requestId: string) {
+    return this.prisma.procurementDamageClaim.findMany({
+      where: { procurementRequestId: requestId },
+      orderBy: { createdAt: 'desc' },
+      include: { images: true },
+    });
+  }
+
+  /**
+   * Admin APPROVES a damage claim: the claimed units are committed to
+   * FranchiseStock.damagedQty (+ DAMAGE ledger), the item's approvedDamagedQty
+   * grows, and the request payable is recomputed so the franchise no longer
+   * pays for them. Returns the updated claim + the new finalPayableAmount.
+   */
+  async approveDamageClaim(adminId: string, claimId: string, note?: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const claim = await tx.procurementDamageClaim.findUnique({
+        where: { id: claimId },
+        include: { request: true },
+      });
+      if (!claim) throw new NotFoundAppException('Damage claim not found');
+      if (claim.status !== 'PENDING') {
+        throw new BadRequestAppException(
+          `Damage claim is already ${claim.status.toLowerCase()}.`,
+        );
+      }
+      const franchiseId = claim.request.franchiseId;
+
+      // Commit the damaged units to stock (damagedQty + DAMAGE ledger row).
+      await this.inventoryService.addDamagedFromProcurement(
+        franchiseId,
+        claim.productId,
+        claim.variantId,
+        claim.globalSku,
+        claim.claimedQty,
+        claim.procurementRequestId,
+        adminId,
+        tx,
+      );
+
+      // Accept the damage on the item so billing excludes these units.
+      await tx.procurementRequestItem.update({
+        where: { id: claim.procurementItemId },
+        data: { approvedDamagedQty: { increment: claim.claimedQty } },
+      });
+
+      await tx.procurementDamageClaim.update({
+        where: { id: claimId },
+        data: {
+          status: 'APPROVED',
+          reviewedByAdminId: adminId,
+          reviewedAt: new Date(),
+          reviewNote: note ?? null,
+        },
+      });
+
+      // Recompute totals now that approvedDamagedQty changed → payable drops.
+      const totals = await this.procurementRepo.calculateTotals(
+        claim.procurementRequestId,
+        tx,
+      );
+      await tx.procurementRequest.update({
+        where: { id: claim.procurementRequestId },
+        data: {
+          totalApprovedAmount: totals.totalApprovedAmount,
+          procurementFeeAmount: totals.procurementFeeAmount,
+          finalPayableAmount: totals.finalPayableAmount,
+        },
+      });
+
+      await this.recordProcurementEvent(
+        {
+          procurementRequestId: claim.procurementRequestId,
+          action: 'DAMAGE_CLAIM_APPROVED',
+          fromStatus: claim.request.status,
+          toStatus: claim.request.status,
+          actorId: adminId,
+          actorType: 'ADMIN',
+          reason: `Approved damage claim ${claimId} (${claim.claimedQty} unit(s))`,
+        },
+        tx,
+      );
+
+      const updated = await tx.procurementDamageClaim.findUnique({
+        where: { id: claimId },
+        include: { images: true },
+      });
+      return {
+        claim: updated,
+        finalPayableAmount: totals.finalPayableAmount.toString(),
+      };
+    });
+  }
+
+  /**
+   * Admin REJECTS a damage claim: the claim is denied, so the units are NOT
+   * damaged — they become saleable (added to onHandQty) and the franchise still
+   * pays for them (approvedDamagedQty unchanged → full received billed).
+   */
+  async rejectDamageClaim(adminId: string, claimId: string, note?: string) {
+    return this.prisma.$transaction(async (tx) => {
+      const claim = await tx.procurementDamageClaim.findUnique({
+        where: { id: claimId },
+        include: { request: true },
+      });
+      if (!claim) throw new NotFoundAppException('Damage claim not found');
+      if (claim.status !== 'PENDING') {
+        throw new BadRequestAppException(
+          `Damage claim is already ${claim.status.toLowerCase()}.`,
+        );
+      }
+      const franchiseId = claim.request.franchiseId;
+
+      // Denied → the units were never written off, so add them as saleable now.
+      await this.inventoryService.addProcurementStock(
+        franchiseId,
+        claim.productId,
+        claim.variantId,
+        claim.globalSku,
+        claim.claimedQty,
+        claim.procurementRequestId,
+        adminId,
+        undefined,
+        'ADMIN',
+        tx,
+      );
+
+      await tx.procurementDamageClaim.update({
+        where: { id: claimId },
+        data: {
+          status: 'REJECTED',
+          reviewedByAdminId: adminId,
+          reviewedAt: new Date(),
+          reviewNote: note ?? null,
+        },
+      });
+
+      // approvedDamagedQty unchanged → payable already reflects full received.
+      const totals = await this.procurementRepo.calculateTotals(
+        claim.procurementRequestId,
+        tx,
+      );
+      await tx.procurementRequest.update({
+        where: { id: claim.procurementRequestId },
+        data: {
+          totalApprovedAmount: totals.totalApprovedAmount,
+          procurementFeeAmount: totals.procurementFeeAmount,
+          finalPayableAmount: totals.finalPayableAmount,
+        },
+      });
+
+      await this.recordProcurementEvent(
+        {
+          procurementRequestId: claim.procurementRequestId,
+          action: 'DAMAGE_CLAIM_REJECTED',
+          fromStatus: claim.request.status,
+          toStatus: claim.request.status,
+          actorId: adminId,
+          actorType: 'ADMIN',
+          reason: `Rejected damage claim ${claimId} (${claim.claimedQty} unit(s) returned to saleable)`,
+        },
+        tx,
+      );
+
+      const updated = await tx.procurementDamageClaim.findUnique({
+        where: { id: claimId },
+        include: { images: true },
+      });
+      return {
+        claim: updated,
+        finalPayableAmount: totals.finalPayableAmount.toString(),
+      };
+    });
   }
 }

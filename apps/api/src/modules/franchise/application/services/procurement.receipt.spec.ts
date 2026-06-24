@@ -6,8 +6,9 @@
  *     + finance totals (audit Gap #4 + #5).
  *   - Delta-based idempotency on retry — a repeated POST with the
  *     same payload adds ZERO stock (audit Gap #1).
- *   - Damaged units go into FranchiseStock.damagedQty + DAMAGE
- *     ledger row (audit Gap #3).
+ *   - Damaged units now raise a PENDING ProcurementDamageClaim with
+ *     photo proof (admin review gate) INSTEAD of writing damagedQty at
+ *     receipt — the franchise keeps being billed until an admin approves.
  *   - actorId threads through to the ledger (audit Gap #2).
  *   - receivedQty > dispatchedQty rejected (audit Gap #11).
  *   - Event payload includes items[] + ledgerEntryIds + stock
@@ -86,6 +87,15 @@ function makeService(opts: { request?: any; itemsById?: Record<string, any> } = 
     procurementRequest: {
       updateMany: jest.fn().mockResolvedValue({ count: 1 }),
     },
+    // Damage feature — claimed-damaged units raise a PENDING claim (with photo
+    // proof) instead of writing damagedQty at receipt. count() validates the
+    // referenced image ids exist (mock returns the number requested).
+    fileMetadata: {
+      count: jest.fn(async ({ where }: any) => where?.id?.in?.length ?? 0),
+    },
+    procurementDamageClaim: {
+      create: jest.fn().mockResolvedValue({ id: 'claim-1' }),
+    },
   };
   prisma.$transaction = jest.fn(async (fn: any) => fn(prisma));
   const env: any = { getNumber: jest.fn() };
@@ -132,15 +142,22 @@ describe('ProcurementService.confirmReceipt (Phase 55)', () => {
     ).rejects.toBeInstanceOf(BadRequestAppException);
   });
 
-  it('writes goodQty to onHand AND damagedQty to damagedQty on first receipt', async () => {
-    const { service, inventoryService } = makeService({
+  it('writes goodQty to onHand AND raises a PENDING damage claim for the damaged units', async () => {
+    const { service, inventoryService, prisma } = makeService({
       request: baseRequest([baseItem({ dispatchedQty: 10 })]),
       itemsById: { 'item-1': baseItem({ dispatchedQty: 10 }) },
     });
     await service.confirmReceipt(
       'franchise-1',
       'req-1',
-      [{ itemId: 'item-1', receivedQty: 10, damagedQty: 2 }],
+      [
+        {
+          itemId: 'item-1',
+          receivedQty: 10,
+          damagedQty: 2,
+          damageImageFileIds: ['file-1', 'file-2'],
+        },
+      ],
       'user-7',
     );
 
@@ -157,16 +174,17 @@ describe('ProcurementService.confirmReceipt (Phase 55)', () => {
       'FRANCHISE_USER',
       expect.any(Object),
     );
-    // damagedDelta = 2 → addDamagedFromProcurement(2)
-    expect(inventoryService.addDamagedFromProcurement).toHaveBeenCalledWith(
-      'franchise-1',
-      'prod-1',
-      null,
-      'SKU-001',
-      2,
-      'req-1',
-      'user-7',
-      expect.any(Object),
+    // damagedDelta = 2 → a PENDING claim with the photos, NOT a damagedQty write.
+    expect(inventoryService.addDamagedFromProcurement).not.toHaveBeenCalled();
+    expect(prisma.procurementDamageClaim.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          procurementItemId: 'item-1',
+          claimedQty: 2,
+          status: 'PENDING',
+          images: { create: [{ fileId: 'file-1' }, { fileId: 'file-2' }] },
+        }),
+      }),
     );
   });
 
@@ -206,7 +224,7 @@ describe('ProcurementService.confirmReceipt (Phase 55)', () => {
   });
 
   it('adds only the DELTA on a top-up receipt (audit Gap #1)', async () => {
-    const { service, inventoryService } = makeService({
+    const { service, inventoryService, prisma } = makeService({
       // First pass: received 4, damaged 0. Now receiving 8 more,
       // damaged 1. goodDelta = (10-1) - (4-0) = 5; damagedDelta = 1.
       request: {
@@ -227,7 +245,14 @@ describe('ProcurementService.confirmReceipt (Phase 55)', () => {
     await service.confirmReceipt(
       'franchise-1',
       'req-1',
-      [{ itemId: 'item-1', receivedQty: 10, damagedQty: 1 }],
+      [
+        {
+          itemId: 'item-1',
+          receivedQty: 10,
+          damagedQty: 1,
+          damageImageFileIds: ['file-1'],
+        },
+      ],
       'user-7',
     );
 
@@ -236,10 +261,12 @@ describe('ProcurementService.confirmReceipt (Phase 55)', () => {
       5, // goodDelta
       'req-1', 'user-7', undefined, 'FRANCHISE_USER', expect.any(Object),
     );
-    expect(inventoryService.addDamagedFromProcurement).toHaveBeenCalledWith(
-      'franchise-1', 'prod-1', null, 'SKU-001',
-      1, // damagedDelta
-      'req-1', 'user-7', expect.any(Object),
+    // damagedDelta = 1 → PENDING claim (not a direct damagedQty write).
+    expect(inventoryService.addDamagedFromProcurement).not.toHaveBeenCalled();
+    expect(prisma.procurementDamageClaim.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ claimedQty: 1, status: 'PENDING' }),
+      }),
     );
   });
 
@@ -335,7 +362,14 @@ describe('ProcurementService.confirmReceipt (Phase 55)', () => {
     await service.confirmReceipt(
       'franchise-1',
       'req-1',
-      [{ itemId: 'item-1', receivedQty: 10, damagedQty: 2 }],
+      [
+        {
+          itemId: 'item-1',
+          receivedQty: 10,
+          damagedQty: 2,
+          damageImageFileIds: ['file-1'],
+        },
+      ],
       'user-7',
     );
 

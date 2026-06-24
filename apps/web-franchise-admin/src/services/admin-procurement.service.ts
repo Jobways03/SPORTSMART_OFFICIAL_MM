@@ -11,12 +11,36 @@ export interface AdminProcurementItem {
   dispatchedQty: number;
   receivedQty: number;
   damagedQty: number;
+  approvedDamagedQty?: number;
   landedUnitCost: number | string | null;
   procurementFeePerUnit: number | string | null;
   finalUnitCostToFranchise: number | string | null;
   status: string;
   product?: { title?: string } | null;
   variant?: { title?: string | null } | null;
+}
+
+export interface AdminDamageClaimImage {
+  id: string;
+  fileId: string;
+  caption: string | null;
+}
+
+export interface AdminDamageClaim {
+  id: string;
+  procurementRequestId: string;
+  procurementItemId: string;
+  productId: string;
+  variantId: string | null;
+  globalSku: string;
+  claimedQty: number;
+  status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  franchiseNote: string | null;
+  reviewNote: string | null;
+  reviewedByAdminId: string | null;
+  reviewedAt: string | null;
+  createdAt: string;
+  images: AdminDamageClaimImage[];
 }
 
 export interface AdminProcurementRequest {
@@ -42,6 +66,7 @@ export interface AdminProcurementRequest {
   finalPayableAmount: number | string;
   createdAt: string;
   items: AdminProcurementItem[];
+  damageClaims?: AdminDamageClaim[];
   franchise?: {
     id: string;
     franchiseCode?: string;
@@ -120,6 +145,39 @@ export const adminProcurementService = {
 
   settle(id: string): Promise<ApiResponse> {
     return apiClient(`/admin/procurement/${id}/settle`, { method: 'PATCH' });
+  },
+
+  // ── Damage claims (receipt damage → admin photo review) ──────────────
+
+  /** Short-lived presigned URL to view a damage-proof photo. */
+  damagePhotoUrl(
+    fileId: string,
+  ): Promise<ApiResponse<{ url: string; expiresInSeconds: number }>> {
+    return apiClient<{ url: string; expiresInSeconds: number }>(
+      `/files/${fileId}/secure-url`,
+    );
+  },
+
+  /** Approve a claim — units written off, franchise payable drops. */
+  approveDamageClaim(
+    claimId: string,
+    note?: string,
+  ): Promise<ApiResponse<{ finalPayableAmount: string }>> {
+    return apiClient(`/admin/procurement/damage-claims/${claimId}/approve`, {
+      method: 'PATCH',
+      body: JSON.stringify({ note }),
+    });
+  },
+
+  /** Reject a claim — units become saleable, franchise still pays. */
+  rejectDamageClaim(
+    claimId: string,
+    note?: string,
+  ): Promise<ApiResponse<{ finalPayableAmount: string }>> {
+    return apiClient(`/admin/procurement/damage-claims/${claimId}/reject`, {
+      method: 'PATCH',
+      body: JSON.stringify({ note }),
+    });
   },
 };
 

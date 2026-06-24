@@ -666,6 +666,7 @@ model ProcurementRequest {
   franchise FranchisePartner         @relation(fields: [franchiseId], references: [id], onDelete: Cascade)
   items     ProcurementRequestItem[]
   events    ProcurementRequestEvent[]
+  damageClaims ProcurementDamageClaim[]
 
   @@index([franchiseId, status])
   @@index([status])
@@ -712,7 +713,13 @@ model ProcurementRequestItem {
   sourcedQty    Int @default(0) @map("sourced_qty")
   dispatchedQty Int @default(0) @map("dispatched_qty")
   receivedQty   Int @default(0) @map("received_qty")
-  damagedQty    Int @default(0) @map("damaged_qty")
+  // damagedQty = units the franchise CLAIMED as damaged at receipt (with photo
+  // proof). approvedDamagedQty = of those, how many an admin has APPROVED as
+  // genuinely damaged. Billing excludes only the APPROVED-damaged units; a
+  // pending or rejected claim is still billed. damagedQty also feeds the item
+  // status (DAMAGED).
+  damagedQty         Int @default(0) @map("damaged_qty")
+  approvedDamagedQty Int @default(0) @map("approved_damaged_qty")
 
   // Phase 237 (Pricing Snapshot audit) — MRP (customer-facing base price)
   // captured at REQUEST creation so finance can compute procurement margin
@@ -731,13 +738,66 @@ model ProcurementRequestItem {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  procurementRequest ProcurementRequest @relation(fields: [procurementRequestId], references: [id], onDelete: Cascade)
+  procurementRequest ProcurementRequest      @relation(fields: [procurementRequestId], references: [id], onDelete: Cascade)
+  damageClaims       ProcurementDamageClaim[]
 
   @@index([procurementRequestId])
   // Phase 235 — per-product analytics ("how much of SKU X have franchises
   // procured / received") without a full-table scan.
   @@index([productId])
   @@map("procurement_request_items")
+}
+
+/// Damage claim raised by a franchise at procurement receipt. Holds the claimed
+/// damaged quantity + photo proof; an admin reviews and APPROVES or REJECTS.
+/// While PENDING the units are neither written off nor billed-excluded — only
+/// approval commits them to FranchiseStock.damagedQty and drops them from the
+/// franchise's payable. One claim per receipt submission per item.
+model ProcurementDamageClaim {
+  id                   String                       @id @default(uuid())
+  procurementRequestId String                       @map("procurement_request_id")
+  procurementItemId    String                       @map("procurement_item_id")
+  productId            String                       @map("product_id")
+  variantId            String?                      @map("variant_id")
+  globalSku            String                       @map("global_sku")
+  claimedQty           Int                          @map("claimed_qty")
+  status               ProcurementDamageClaimStatus @default(PENDING)
+
+  // Free-form note from the franchise describing the damage.
+  franchiseNote String? @map("franchise_note")
+
+  // Admin review outcome.
+  reviewedByAdminId String?   @map("reviewed_by_admin_id")
+  reviewedAt        DateTime? @map("reviewed_at")
+  reviewNote        String?   @map("review_note")
+
+  raisedByActorId String?  @map("raised_by_actor_id")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  request ProcurementRequest           @relation(fields: [procurementRequestId], references: [id], onDelete: Cascade)
+  item    ProcurementRequestItem        @relation(fields: [procurementItemId], references: [id], onDelete: Cascade)
+  images  ProcurementDamageClaimImage[]
+
+  @@index([procurementRequestId])
+  @@index([status, createdAt])
+  @@index([procurementItemId])
+  @@map("procurement_damage_claims")
+}
+
+/// Photo proof attached to a damage claim. Files live in the shared
+/// FileAttachment table (same polymorphic pattern as DisputeEvidence).
+model ProcurementDamageClaimImage {
+  id         String   @id @default(uuid())
+  claimId    String   @map("claim_id")
+  fileId     String   @map("file_id")
+  caption    String?
+  uploadedAt DateTime @default(now()) @map("uploaded_at")
+
+  claim ProcurementDamageClaim @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@index([claimId])
+  @@map("procurement_damage_claim_images")
 }
 
 model ProcurementSequence {

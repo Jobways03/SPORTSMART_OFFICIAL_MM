@@ -362,7 +362,14 @@ export class PrismaProcurementRepository implements ProcurementRepository {
       // otherwise the approved quantity (the pre-receipt estimate). Previously
       // totalApproved used approvedQty while the other two used the
       // received-or-approved qty, so the books drifted after a partial receipt.
-      const qty = item.receivedQty > 0 ? item.receivedQty : item.approvedQty;
+      //
+      // Damage feature — the franchise does not pay for units an admin has
+      // APPROVED as damaged. Bill received MINUS approvedDamagedQty (floored at
+      // 0). A pending/rejected claim does NOT reduce the bill — only an
+      // admin-approved damage drops it.
+      const billableReceived = item.receivedQty - (item.approvedDamagedQty ?? 0);
+      const qty =
+        item.receivedQty > 0 ? Math.max(0, billableReceived) : item.approvedQty;
 
       totalApprovedAmount = totalApprovedAmount.plus(landedCost.times(qty));
       procurementFeeAmount = procurementFeeAmount.plus(feePerUnit.times(qty));
