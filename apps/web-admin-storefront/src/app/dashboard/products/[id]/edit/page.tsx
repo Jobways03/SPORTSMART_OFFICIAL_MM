@@ -988,6 +988,15 @@ const router = useRouter();
   const sortedImages = [...product.images].sort((a: any, b: any) => a.sortOrder - b.sortOrder);
   const sortedVariants = [...product.variants];
   const isSubmitted = product.moderationStatus === 'SUBMITTED' || product.moderationStatus === 'IN_REVIEW';
+  // A super-admin can also approve a product that's in an approvable lifecycle
+  // status but NOT in the review queue (DRAFT / REJECTED / CHANGES_REQUESTED) —
+  // e.g. to take a never-submitted or recalled product through to go-live
+  // without waiting for the seller to re-submit. Mirrors the backend
+  // approvableStatuses set. (ARCHIVED is NOT approvable — move it to Draft first.)
+  const canApproveFromHere =
+    isSubmitted ||
+    (adminRole === 'SUPER_ADMIN' &&
+      ['DRAFT', 'REJECTED', 'CHANGES_REQUESTED'].includes(product.status));
 
   // Status moves the backend FSM actually permits from each status (mirrors
   // admin-products.controller.ts updateStatus). The PRODUCT STATUS dropdown
@@ -1046,12 +1055,16 @@ const router = useRouter();
           small note row underneath when present. */}
       <ProductContextBar product={product} />
 
-      {/* Approval Actions (only for SUBMITTED / IN_REVIEW products) */}
-      {isSubmitted && (
+      {/* Approval actions — SUBMITTED/IN_REVIEW for any catalog approver, plus
+          DRAFT/REJECTED/CHANGES_REQUESTED for a super-admin (admin-driven path to
+          go-live without a seller re-submit). */}
+      {canApproveFromHere && (
         <div className="form-card" style={{ marginBottom: 16 }}>
           <div className="form-card-title">APPROVAL</div>
           <p style={{ fontSize: 14, marginBottom: 12, color: '#374151' }}>
-            This product is awaiting approval. Take an action:
+            {isSubmitted
+              ? 'This product is awaiting approval. Take an action:'
+              : 'Approve this product to make it eligible for go-live (then set the tax config below and use “Active — make live”):'}
           </p>
           <div style={{ display: 'flex', gap: 10 }}>
             <button
