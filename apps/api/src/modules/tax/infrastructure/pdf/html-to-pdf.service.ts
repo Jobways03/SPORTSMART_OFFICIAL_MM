@@ -67,7 +67,7 @@ export class HtmlToPdfService implements OnModuleDestroy {
     html: string,
     // Optional explicit page size (e.g. a 4x6 shipping label). When omitted,
     // the default A4 + invoice margins are used (tax-invoice callers unchanged).
-    opts?: { width?: string; height?: string },
+    opts?: { width?: string; height?: string; pageRanges?: string },
   ): Promise<Buffer> {
     let browser: Browser;
     try {
@@ -93,6 +93,11 @@ export class HtmlToPdfService implements OnModuleDestroy {
               height: opts.height,
               printBackground: true,
               margin: { top: 0, bottom: 0, left: 0, right: 0 },
+              // Single-page guard for fixed-size labels (e.g. 4x6): without it a
+              // long address can push content a hair past the page and Puppeteer
+              // emits a near-blank 2nd page. Multi-page callers (tax invoices)
+              // use the A4 branch below and never set this.
+              ...(opts.pageRanges ? { pageRanges: opts.pageRanges } : {}),
             }
           : {
               format: 'A4',

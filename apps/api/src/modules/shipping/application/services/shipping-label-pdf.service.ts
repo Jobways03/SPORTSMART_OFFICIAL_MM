@@ -295,7 +295,9 @@ export class ShippingLabelPdfService {
       this.barcodePngDataUri(orderRef),
     ]);
     const html = this.buildLabelHtml({ awb, courier, orderRef, s, awbPng, refPng });
-    return this.htmlToPdf.render(html, { width: '4in', height: '6in' });
+    // pageRanges:'1' — a 4x6 label is single-page by definition; this guarantees
+    // a long address never produces a near-blank 2nd page.
+    return this.htmlToPdf.render(html, { width: '4in', height: '6in', pageRanges: '1' });
   }
 
   private buildLabelHtml(d: {
@@ -345,7 +347,7 @@ export class ShippingLabelPdfService {
       .awb { text-align: center; padding: 9px 12px 8px; border-bottom: 1px solid #e2e8f0; }
       .awb img { display: block; margin: 4px auto 0; height: 44px; }
       .awb .v { font-weight: 700; font-size: 13px; letter-spacing: 2px; margin-top: 2px; }
-      .body { flex: 1; padding: 11px 14px; display: flex; flex-direction: column; justify-content: center; }
+      .body { flex: 1; min-height: 0; overflow: hidden; padding: 11px 14px; display: flex; flex-direction: column; justify-content: flex-start; }
       .to .nm { font-weight: 800; font-size: 15px; margin-top: 2px; }
       .to .ad { font-size: 10.5px; color: #1e293b; margin-top: 3px; line-height: 1.45; }
       .meta { display: flex; gap: 16px; margin-top: 14px; padding-top: 10px; border-top: 1px solid #e2e8f0; }

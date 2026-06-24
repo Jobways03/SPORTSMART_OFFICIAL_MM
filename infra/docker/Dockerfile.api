@@ -103,6 +103,19 @@ WORKDIR /app
 ENV NODE_ENV=production \
     PORT=4000
 
+# Chromium for server-side PDF rendering. HtmlToPdfService (Puppeteer) renders
+# tax invoices / tax documents AND shipping labels; node:22-slim ships no
+# browser, so puppeteer.launch() throws and every PDF 500s with "PDF rendering
+# is temporarily unavailable". Install the system package (pulls in the shared
+# libs + base Latin fonts) and point puppeteer at it — its own bundled Chromium
+# downloads to ~/.cache during the build and is NOT copied into this pruned
+# runtime image. Placed before the app COPYs so this (rarely-changing) browser
+# layer stays cached across builds.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends chromium fonts-liberation \
+ && rm -rf /var/lib/apt/lists/*
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
 # Non-root for defence in depth. The node:*-slim image ships a `node`
 # user (uid 1000) specifically for this pattern.
 COPY --from=build --chown=node:node /out/package.json ./package.json
