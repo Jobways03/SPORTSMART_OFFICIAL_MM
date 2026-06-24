@@ -88,6 +88,30 @@ export function TaxConfigPanel({ productId }: Props) {
   const hsnBoxRef = useRef<HTMLDivElement | null>(null);
   const hsnTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // UQC options for the dropdown — loaded from the UQC master so it only ever
+  // offers codes the backend accepts. The attestation rejects any UQC not active
+  // in uqc_master (e.g. the stale "PAR" — the master uses "PRS" for pairs), so a
+  // hard-coded list could let an admin pick a code that then fails to attest.
+  const [uqcOptions, setUqcOptions] = useState<{ code: string; description: string }[]>([]);
+  useEffect(() => {
+    let active = true;
+    void adminTaxService
+      .listUqc({ activeOnly: true, limit: 200 })
+      .then((res) => {
+        if (active) {
+          setUqcOptions(
+            (res.data?.items ?? []).map((u) => ({ code: u.code, description: u.description })),
+          );
+        }
+      })
+      .catch(() => {
+        /* leave empty; the field still submits whatever was previously set */
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     setErr(null);
@@ -395,14 +419,11 @@ export function TaxConfigPanel({ productId }: Props) {
                 style={inputStyle}
               >
                 <option value="">Select unit</option>
-                <option value="NOS">NOS — Numbers</option>
-                <option value="PCS">PCS — Pieces</option>
-                <option value="PAR">PAR — Pair</option>
-                <option value="SET">SET — Set</option>
-                <option value="BOX">BOX — Box</option>
-                <option value="KGS">KGS — Kilograms</option>
-                <option value="MTR">MTR — Metres</option>
-                <option value="DOZ">DOZ — Dozen</option>
+                {uqcOptions.map((u) => (
+                  <option key={u.code} value={u.code}>
+                    {u.code} — {u.description}
+                  </option>
+                ))}
               </select>
             </label>
             <label style={editLabel}>
