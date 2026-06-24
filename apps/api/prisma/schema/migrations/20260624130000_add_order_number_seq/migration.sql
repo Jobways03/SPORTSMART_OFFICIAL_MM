@@ -1,0 +1,12 @@
+-- Create the order-number sequence that checkout uses to build SM<year><padded>
+-- order numbers. prisma-checkout.repository.ts runs
+--   SELECT nextval('order_number_seq')
+-- inside placeOrderLocked, but NO migration ever created this sequence — it only
+-- existed ad hoc in developer databases where it had been made by hand. On a
+-- fresh database (staging / prod) order placement failed with Postgres 42P01
+-- (undefined relation) and the whole place-order request 500'd.
+--
+-- Idempotent (IF NOT EXISTS) so it is safe on DBs where the sequence was already
+-- created manually. GLOBAL, not year-scoped — the SM<year> prefix disambiguates
+-- across years (see the NOTE in prisma-checkout.repository.ts).
+CREATE SEQUENCE IF NOT EXISTS order_number_seq START WITH 1 INCREMENT BY 1;

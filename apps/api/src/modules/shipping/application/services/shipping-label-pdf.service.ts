@@ -63,8 +63,15 @@ export class ShippingLabelPdfService {
    * so no frontend code changes.
    */
   buildLabelUrl(subOrderId: string): string {
+    // Public base for the no-auth label route. Prefer an explicit
+    // PUBLIC_API_BASE_URL, then fall back to APP_URL (the API's public URL, set
+    // per-environment and guarded to https in prod) — NOT localhost, which leaks
+    // `http://localhost:<PORT>` into deployed label links (PORT is 4000 in the
+    // staging/prod containers, so the link pointed at localhost:4000 and refused
+    // to connect). The localhost form is only the last-resort local-dev default.
     const base =
       process.env.PUBLIC_API_BASE_URL ||
+      process.env.APP_URL ||
       `http://localhost:${process.env.PORT || 8000}`;
     return `${base.replace(/\/+$/, '')}/api/v1/public/shipping/labels/${signLabelToken(
       subOrderId,
