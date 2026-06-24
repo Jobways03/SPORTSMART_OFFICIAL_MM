@@ -169,6 +169,16 @@ enum ProcurementStatus {
   CANCELLED
 }
 
+// Damage raised by a franchise at procurement receipt. The damaged units are
+// NOT written off (or billed-excluded) until an admin reviews the photo proof
+// and APPROVES. REJECTED → the units were not accepted as damaged and become
+// saleable; the franchise pays for them.
+enum ProcurementDamageClaimStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
 enum FranchiseLedgerSource {
   ONLINE_ORDER
   POS_SALE

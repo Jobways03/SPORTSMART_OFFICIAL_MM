@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -80,6 +80,9 @@ const router = useRouter();
   const [receiptItems, setReceiptItems] = useState<
     Record<string, { receivedQty: number; damagedQty: number }>
   >({});
+  // Damage-proof photos selected per item (uploaded on Confirm). A line with
+  // damagedQty > 0 cannot be submitted without at least one photo.
+  const [damageFiles, setDamageFiles] = useState<Record<string, File[]>>({});
 
   const loadRequest = useCallback(async () => {
     if (!id) return;
@@ -194,7 +197,24 @@ const router = useRouter();
       };
     });
     setReceiptItems(initial);
+    setDamageFiles({});
     setShowReceiptModal(true);
+  };
+
+  const addDamageFiles = (itemId: string, files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const incoming = Array.from(files).filter((f) => f.type.startsWith('image/'));
+    setDamageFiles((prev) => {
+      const existing = prev[itemId] ?? [];
+      return { ...prev, [itemId]: [...existing, ...incoming].slice(0, 10) };
+    });
+  };
+
+  const removeDamageFile = (itemId: string, index: number) => {
+    setDamageFiles((prev) => {
+      const existing = prev[itemId] ?? [];
+      return { ...prev, [itemId]: existing.filter((_, i) => i !== index) };
+    });
   };
 
   const handleReceiptItemChange = (
@@ -219,31 +239,60 @@ const router = useRouter();
     });
   };
 
-  const handleReceiptSubmit = async () => {if (!request) return;
-    const payload: ConfirmReceiptPayload = {
-      items: Object.entries(receiptItems)
-        .filter(([, v]) => v.receivedQty > 0 || v.damagedQty > 0)
-        .map(([itemId, v]) => ({
-          itemId,
-          receivedQty: v.receivedQty,
-          damagedQty: v.damagedQty || undefined,
-        })),
-    };
-    if (payload.items.length === 0) {
+  const handleReceiptSubmit = async () => {
+    if (!request) return;
+    const entries = Object.entries(receiptItems).filter(
+      ([, v]) => v.receivedQty > 0 || v.damagedQty > 0,
+    );
+    if (entries.length === 0) {
       void notify('Please enter received quantities for at least one item.');
       return;
     }
+    // Every damaged line needs photo proof before we touch the API.
+    for (const [itemId, v] of entries) {
+      if (v.damagedQty > 0 && (damageFiles[itemId]?.length ?? 0) === 0) {
+        const it = items.find((i) => i.id === itemId);
+        void notify(
+          `Add at least one damage photo for "${it?.productTitle ?? 'the damaged item'}" before confirming.`,
+        );
+        return;
+      }
+    }
     setActionLoading(true);
     try {
+      // Upload the proof photos first → collect a fileId list per damaged line.
+      const fileIdsByItem: Record<string, string[]> = {};
+      for (const [itemId, v] of entries) {
+        if (v.damagedQty > 0) {
+          const ids: string[] = [];
+          for (const f of damageFiles[itemId] ?? []) {
+            const res = await franchiseProcurementService.uploadDamagePhoto(f);
+            if (res.data?.id) ids.push(res.data.id);
+          }
+          if (ids.length === 0) throw new Error('Damage photo upload failed.');
+          fileIdsByItem[itemId] = ids;
+        }
+      }
+      const payload: ConfirmReceiptPayload = {
+        items: entries.map(([itemId, v]) => ({
+          itemId,
+          receivedQty: v.receivedQty,
+          damagedQty: v.damagedQty || undefined,
+          damageImageFileIds:
+            v.damagedQty > 0 ? fileIdsByItem[itemId] : undefined,
+        })),
+      };
       await franchiseProcurementService.confirmReceipt(request.id, payload);
       setShowReceiptModal(false);
       await loadRequest();
-      void notify('Receipt confirmed. Saleable items have been added to your inventory.');
+      void notify(
+        'Receipt confirmed. Saleable items added to inventory; any damaged units are pending admin review.',
+      );
     } catch (err) {
       if (err instanceof ApiError) {
         void notify(err.body.message || 'Failed to confirm receipt.');
       } else {
-        void notify('Failed to confirm receipt.');
+        void notify((err as Error)?.message || 'Failed to confirm receipt.');
       }
     } finally {
       setActionLoading(false);
@@ -677,6 +726,69 @@ const router = useRouter();
             </div>
           </div>
 
+          {/* Damage claims (receipt damage → admin review) */}
+          {(request.damageClaims?.length ?? 0) > 0 && (
+            <div className="card">
+              <h2>Damage Claims</h2>
+              <p style={{ fontSize: 13, color: '#6b7280', marginBottom: 12 }}>
+                Units you reported damaged at receipt. An admin reviews the photos —
+                approved units are removed from your payable; rejected units stay
+                billed and become saleable. Your Total Payable updates once a claim
+                is resolved.
+              </p>
+              <div style={{ display: 'grid', gap: 10 }}>
+                {request.damageClaims!.map((c) => {
+                  const it = items.find((i) => i.id === c.procurementItemId);
+                  const tone =
+                    c.status === 'APPROVED'
+                      ? { bg: '#ecfdf5', fg: '#16a34a', label: 'Approved' }
+                      : c.status === 'REJECTED'
+                        ? { bg: '#fef2f2', fg: '#dc2626', label: 'Rejected' }
+                        : { bg: '#fffbeb', fg: '#d97706', label: 'Pending review' };
+                  return (
+                    <div
+                      key={c.id}
+                      style={{
+                        border: '1px solid #e5e7eb',
+                        borderRadius: 8,
+                        padding: 12,
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: 12,
+                      }}
+                    >
+                      <div>
+                        <div
+                          style={{ fontWeight: 600, color: '#111827', fontSize: 14 }}
+                        >
+                          {it?.productTitle ?? c.globalSku}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#6b7280' }}>
+                          {c.claimedQty} unit(s) claimed · {c.images.length} photo(s)
+                          {c.reviewNote ? ` · “${c.reviewNote}”` : ''}
+                        </div>
+                      </div>
+                      <span
+                        style={{
+                          background: tone.bg,
+                          color: tone.fg,
+                          fontSize: 12,
+                          fontWeight: 700,
+                          padding: '4px 10px',
+                          borderRadius: 999,
+                          whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {tone.label}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {/* Totals */}
           <div className="card">
             <h2>Totals</h2>
@@ -811,7 +923,10 @@ const router = useRouter();
                 it.status === 'SOURCED'),
           )}
           values={receiptItems}
+          damageFiles={damageFiles}
           onChange={handleReceiptItemChange}
+          onAddDamageFiles={addDamageFiles}
+          onRemoveDamageFile={removeDamageFile}
           onClose={() => setShowReceiptModal(false)}
           onConfirm={handleReceiptSubmit}
           loading={actionLoading}
@@ -1024,23 +1139,34 @@ function CancelModal({
 function ReceiptModal({
   items,
   values,
+  damageFiles,
   onChange,
+  onAddDamageFiles,
+  onRemoveDamageFile,
   onClose,
   onConfirm,
   loading,
 }: {
   items: ProcurementItem[];
   values: Record<string, { receivedQty: number; damagedQty: number }>;
+  damageFiles: Record<string, File[]>;
   onChange: (
     itemId: string,
     field: 'receivedQty' | 'damagedQty',
     value: string,
     max: number,
   ) => void;
+  onAddDamageFiles: (itemId: string, files: FileList | null) => void;
+  onRemoveDamageFile: (itemId: string, index: number) => void;
   onClose: () => void;
   onConfirm: () => void;
   loading: boolean;
 }) {
+  // Block confirm until every damaged line carries at least one photo.
+  const blockedByPhotos = items.some((it) => {
+    const v = values[it.id];
+    return !!v && v.damagedQty > 0 && (damageFiles[it.id]?.length ?? 0) === 0;
+  });
   return (
     <ModalOverlay onClose={onClose}>
       <div style={{ padding: 24 }}>
@@ -1055,8 +1181,10 @@ function ReceiptModal({
           Confirm Receipt
         </h2>
         <p style={{ fontSize: 14, color: '#6b7280', marginBottom: 16 }}>
-          Enter the quantities you actually received. This will add the saleable
-          items to your inventory.
+          Enter the quantities you actually received. Saleable items are added to
+          your inventory immediately. If you report any <strong>damaged</strong>{' '}
+          units, attach a photo of each — an admin reviews the proof before the
+          damage is accepted and removed from your payable.
         </p>
 
         {items.length === 0 ? (
@@ -1123,10 +1251,8 @@ function ReceiptModal({
                     current.receivedQty - current.damagedQty,
                   );
                   return (
-                    <tr
-                      key={it.id}
-                      style={{ borderBottom: '1px solid #f3f4f6' }}
-                    >
+                    <Fragment key={it.id}>
+                    <tr style={{ borderBottom: '1px solid #f3f4f6' }}>
                       <td style={{ padding: '10px 12px' }}>
                         <div style={{ fontWeight: 600, color: '#111827' }}>
                           {it.productTitle}
@@ -1204,6 +1330,112 @@ function ReceiptModal({
                         {saleable}
                       </td>
                     </tr>
+                    {current.damagedQty > 0 && (
+                      <tr style={{ background: '#fffbeb' }}>
+                        <td colSpan={5} style={{ padding: '10px 14px 14px' }}>
+                          <div
+                            style={{
+                              fontSize: 12,
+                              fontWeight: 600,
+                              color: '#92400e',
+                              marginBottom: 6,
+                            }}
+                          >
+                            Damage photos for “{it.productTitle}” — required (
+                            {damageFiles[it.id]?.length ?? 0} added)
+                          </div>
+                          <div
+                            style={{
+                              display: 'flex',
+                              gap: 8,
+                              flexWrap: 'wrap',
+                              alignItems: 'center',
+                            }}
+                          >
+                            {(damageFiles[it.id] ?? []).map((f, idx) => (
+                              <div key={idx} style={{ position: 'relative' }}>
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={URL.createObjectURL(f)}
+                                  alt="damage proof"
+                                  style={{
+                                    width: 56,
+                                    height: 56,
+                                    objectFit: 'cover',
+                                    borderRadius: 6,
+                                    border: '1px solid #e5e7eb',
+                                    display: 'block',
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => onRemoveDamageFile(it.id, idx)}
+                                  disabled={loading}
+                                  aria-label="Remove photo"
+                                  style={{
+                                    position: 'absolute',
+                                    top: -6,
+                                    right: -6,
+                                    width: 18,
+                                    height: 18,
+                                    borderRadius: '50%',
+                                    border: 'none',
+                                    background: '#dc2626',
+                                    color: '#fff',
+                                    fontSize: 12,
+                                    lineHeight: '18px',
+                                    cursor: 'pointer',
+                                    padding: 0,
+                                  }}
+                                >
+                                  ×
+                                </button>
+                              </div>
+                            ))}
+                            <label
+                              style={{
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                width: 56,
+                                height: 56,
+                                border: '1px dashed #d1d5db',
+                                borderRadius: 6,
+                                fontSize: 12,
+                                color: '#2563eb',
+                                cursor: loading ? 'not-allowed' : 'pointer',
+                                background: '#fff',
+                              }}
+                            >
+                              + Add
+                              <input
+                                type="file"
+                                accept="image/*"
+                                multiple
+                                style={{ display: 'none' }}
+                                disabled={loading}
+                                onChange={(e) => {
+                                  onAddDamageFiles(it.id, e.target.files);
+                                  e.target.value = '';
+                                }}
+                              />
+                            </label>
+                          </div>
+                          {(damageFiles[it.id]?.length ?? 0) === 0 && (
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: '#b91c1c',
+                                marginTop: 6,
+                              }}
+                            >
+                              At least one photo is required to claim damage.
+                            </div>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -1231,7 +1463,12 @@ function ReceiptModal({
             type="button"
             className="btn btn-primary"
             onClick={onConfirm}
-            disabled={loading || items.length === 0}
+            disabled={loading || items.length === 0 || blockedByPhotos}
+            title={
+              blockedByPhotos
+                ? 'Attach a photo for every damaged line first'
+                : undefined
+            }
           >
             {loading ? 'Confirming...' : 'Confirm Receipt'}
           </button>
