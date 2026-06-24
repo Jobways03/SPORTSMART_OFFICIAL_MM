@@ -181,7 +181,12 @@ jobs:
             ${{ steps.ecr.outputs.registry }}/sportsmart-${{ inputs.target }}/${{ matrix.name }}:${{ needs.prep.outputs.image_tag }}
             ${{ steps.ecr.outputs.registry }}/sportsmart-${{ inputs.target }}/${{ matrix.name }}:${{ inputs.target }}-latest
           cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,scope=${{ matrix.name }},mode=max
+          # ignore-error=true: the GitHub Actions Cache backend occasionally
+          # 503s on export (it's a build-speed optimisation, not part of the
+          # image). Without this, a transient cache-upload failure marks the
+          # whole build red AFTER the image already pushed to ECR — which blocks
+          # the deploy job for no real reason. Make cache export best-effort.
+          cache-to: type=gha,scope=${{ matrix.name }},mode=max,ignore-error=true
 
   rollout:
     name: Rollout (${{ inputs.target }})
