@@ -378,9 +378,16 @@ export class PrismaReturnRepository implements ReturnRepository {
     }
     // Phase 38 (admin breadth) — scope to returns whose sub-order seller is in
     // the admin's seller-type scope.
+    //
+    // 2026-06-25 — channel isolation: a D2C/RETAIL-scoped admin sees only
+    // SELLER-fulfilled returns of its own channel. A FRANCHISE-fulfilled return
+    // belongs to the Franchise admin's returns view (admin-franchise-returns),
+    // so exclude it here — even when the franchise sub-order still carries the
+    // original (D2C/RETAIL) seller id, which would otherwise leak it in.
     if (allowedSellerTypes && allowedSellerTypes.length > 0) {
       where.subOrder = {
         ...(where.subOrder as any),
+        fulfillmentNodeType: 'SELLER',
         seller: { sellerType: { in: allowedSellerTypes } },
       };
     }
@@ -916,7 +923,10 @@ export class PrismaReturnRepository implements ReturnRepository {
     // Phase 38 (admin breadth) — scope to returns whose sub-order seller is in
     // the admin's seller-type scope.
     if (params?.allowedSellerTypes && params.allowedSellerTypes.length > 0) {
+      // Channel isolation — exclude franchise-fulfilled returns (see the list
+      // query); they belong to the Franchise admin.
       (dateFilter as any).subOrder = {
+        fulfillmentNodeType: 'SELLER',
         seller: { sellerType: { in: params.allowedSellerTypes } },
       };
     }
@@ -1022,7 +1032,7 @@ export class PrismaReturnRepository implements ReturnRepository {
     // sub-order → seller subquery (keeps the outer columns unqualified).
     const scopeClause =
       params.allowedSellerTypes && params.allowedSellerTypes.length > 0
-        ? Prisma.sql`AND "sub_order_id" IN (SELECT so.id FROM sub_orders so JOIN sellers s ON s.id = so.seller_id WHERE s.seller_type::text IN (${Prisma.join(params.allowedSellerTypes)}))`
+        ? Prisma.sql`AND "sub_order_id" IN (SELECT so.id FROM sub_orders so JOIN sellers s ON s.id = so.seller_id WHERE so.fulfillment_node_type = 'SELLER' AND s.seller_type::text IN (${Prisma.join(params.allowedSellerTypes)}))`
         : Prisma.empty;
 
     const result = await this.prisma.$queryRaw<
@@ -1066,7 +1076,10 @@ export class PrismaReturnRepository implements ReturnRepository {
     if (allowedSellerTypes && allowedSellerTypes.length > 0) {
       where.return = {
         ...((where.return as any) || {}),
-        subOrder: { seller: { sellerType: { in: allowedSellerTypes } } },
+        subOrder: {
+          fulfillmentNodeType: 'SELLER',
+          seller: { sellerType: { in: allowedSellerTypes } },
+        },
       };
     }
 
@@ -1090,7 +1103,12 @@ export class PrismaReturnRepository implements ReturnRepository {
     // Phase 38 (admin breadth) — scope to in-type sellers.
     const sellerFilter: Prisma.ReturnWhereInput =
       allowedSellerTypes && allowedSellerTypes.length > 0
-        ? { subOrder: { seller: { sellerType: { in: allowedSellerTypes } } } }
+        ? {
+            subOrder: {
+              fulfillmentNodeType: 'SELLER',
+              seller: { sellerType: { in: allowedSellerTypes } },
+            },
+          }
         : {};
     const [totalReturns, refundedAgg, recentReturns] = await Promise.all([
       this.prisma.return.count({ where: { customerId, ...sellerFilter } }),

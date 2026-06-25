@@ -132,6 +132,11 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState('');
+  // Search box — matches order number / customer name / email (the backend's
+  // GET /admin/orders already supports ?search=). Debounced so we don't fire a
+  // request on every keystroke.
+  const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [exceptionCount, setExceptionCount] = useState(0);
   // Phase 0 — explicit fetch-error state so an API outage surfaces to
   // ops instead of a silent forever-loading spinner. Previously this
@@ -144,6 +149,7 @@ export default function OrdersPage() {
     setFetchError(null);
     const params = new URLSearchParams({ page: String(p), limit: '20' });
     if (statusFilter) params.append('orderStatus', statusFilter);
+    if (debouncedSearch) params.append('search', debouncedSearch);
     apiClient<OrdersResponse>(`/admin/orders?${params.toString()}`)
       .then((res) => { if (res.data) setData(res.data); })
       .catch((err) => {
@@ -165,7 +171,12 @@ export default function OrdersPage() {
   };
 
   useEffect(() => { fetchExceptionCount(); }, []);
-  useEffect(() => { fetchOrders(page); }, [page, statusFilter]);
+  // Debounce the search box: apply it 350ms after the user stops typing.
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
+    return () => clearTimeout(t);
+  }, [search]);
+  useEffect(() => { fetchOrders(page); }, [page, statusFilter, debouncedSearch]);
 
   const formatPrice = (price: number) => `\u20B9${Number(price).toLocaleString('en-IN')}`;
   const formatDate = (d: string) => new Date(d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
@@ -337,6 +348,23 @@ export default function OrdersPage() {
         </div>
 
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ position: 'relative' }}>
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              placeholder="Search order # or customer…"
+              aria-label="Search orders by number or customer"
+              style={{
+                padding: '7px 12px',
+                border: '1px solid #e5e7eb',
+                borderRadius: 8,
+                fontSize: 13,
+                minWidth: 260,
+                outline: 'none',
+              }}
+            />
+          </div>
           <label style={{ fontSize: 12, color: '#6b7280', fontWeight: 600 }}>Detailed Status:</label>
           <select
             value={statusFilter}
