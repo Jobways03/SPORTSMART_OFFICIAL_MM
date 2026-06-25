@@ -3,6 +3,8 @@
  *  expressed as a technology-agnostic contract.
  * ──────────────────────────────────────────────────────────────────── */
 
+import { SellerType } from '../../../../core/authorization/seller-scope';
+
 // ── DTOs ──────────────────────────────────────────────────────────
 
 export interface MappingRecord {
@@ -102,10 +104,17 @@ export interface InventoryManagementRepository {
 
   /* ── Low stock queries ── */
   findActiveMappingsForSeller(sellerId: string): Promise<MappingRecord[]>;
-  findAllActiveMappings(sellerId?: string): Promise<MappingRecord[]>;
+  // `allowedSellerTypes` (when a restricting set) scopes results to those seller
+  // types; null/undefined/empty = unrestricted (SUPER_ADMIN) → no filter.
+  findAllActiveMappings(
+    sellerId?: string,
+    allowedSellerTypes?: SellerType[],
+  ): Promise<MappingRecord[]>;
 
   /* ── Out-of-stock ── */
-  findActiveMappingsForAggregation(): Promise<MappingForAggregation[]>;
+  findActiveMappingsForAggregation(
+    allowedSellerTypes?: SellerType[],
+  ): Promise<MappingForAggregation[]>;
 
   /* ── Stock import ── */
   findVariantsByMasterSkus(skus: string[]): Promise<VariantLookup[]>;
@@ -118,16 +127,22 @@ export interface InventoryManagementRepository {
   setMappingStockQty(mappingId: string, stockQty: number): Promise<void>;
 
   /* ── Overview ── */
-  countDistinctMappedProducts(): Promise<number>;
-  countDistinctMappedVariants(): Promise<number>;
-  aggregateActiveStock(): Promise<StockAggResult>;
-  findAllActiveMappingStockInfo(): Promise<MappingStockInfo[]>;
+  countDistinctMappedProducts(allowedSellerTypes?: SellerType[]): Promise<number>;
+  countDistinctMappedVariants(allowedSellerTypes?: SellerType[]): Promise<number>;
+  aggregateActiveStock(allowedSellerTypes?: SellerType[]): Promise<StockAggResult>;
+  findAllActiveMappingStockInfo(
+    allowedSellerTypes?: SellerType[],
+  ): Promise<MappingStockInfo[]>;
 
   /* ── Reservations ── */
   findActiveReservations(
     page: number,
     limit: number,
-    filters?: { mappingId?: string; orderId?: string },
+    filters?: {
+      mappingId?: string;
+      orderId?: string;
+      allowedSellerTypes?: SellerType[];
+    },
   ): Promise<{ reservations: ReservationWithMapping[]; total: number }>;
 
   /* ── Stock movement audit ── */

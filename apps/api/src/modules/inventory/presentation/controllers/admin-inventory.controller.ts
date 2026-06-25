@@ -19,6 +19,10 @@ import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
 import { InventoryManagementService } from '../../application/services/inventory-management.service';
 import { AdminAdjustStockDto } from '../dtos/inventory-adjust.dto';
+import {
+  resolveScopedTypes,
+  SellerType,
+} from '../../../../core/authorization/seller-scope';
 
 @ApiTags('Admin Inventory')
 @Controller('admin/inventory')
@@ -30,13 +34,28 @@ export class AdminInventoryController {
   ) {}
 
   /**
+   * Resolve the caller's seller-type scope from the permissions the
+   * AdminAuthGuard/PermissionsGuard resolved onto the request. Returns null for
+   * SUPER_ADMIN / unscoped admins (→ full marketplace, incl. franchise),
+   * ['D2C'] / ['RETAIL'] for a channel-restricted admin (→ that channel only,
+   * franchise stock excluded — gated in the service).
+   */
+  private scopeFromReq(req: Request): SellerType[] | null {
+    return resolveScopedTypes(
+      (req as Request & { user?: { permissions?: string[] } }).user?.permissions,
+    );
+  }
+
+  /**
    * GET /admin/inventory/overview
    * Returns aggregate inventory statistics.
    */
   @Get('overview')
   @HttpCode(HttpStatus.OK)
-  async getOverview() {
-    const overview = await this.inventoryService.getInventoryOverview();
+  async getOverview(@Req() req: Request) {
+    const overview = await this.inventoryService.getInventoryOverview(
+      this.scopeFromReq(req),
+    );
 
     return {
       success: true,
@@ -61,6 +80,7 @@ export class AdminInventoryController {
     @Query('sellerId') sellerId?: string,
     @Query('nodeType') nodeType?: string,
     @Query('status') status?: string,
+    @Req() req?: Request,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '20', 10) || 20));
@@ -83,6 +103,7 @@ export class AdminInventoryController {
       sellerId,
       nodeType: validNode,
       status: validStatus,
+      allowedSellerTypes: req ? this.scopeFromReq(req) : null,
     });
 
     return {
@@ -148,6 +169,7 @@ export class AdminInventoryController {
     @Query('limit') limit?: string,
     @Query('sellerId') sellerId?: string,
     @Query('nodeType') nodeType?: string,
+    @Req() req?: Request,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '20', 10) || 20));
@@ -162,6 +184,7 @@ export class AdminInventoryController {
       limitNum,
       sellerId,
       validNode,
+      req ? this.scopeFromReq(req) : null,
     );
 
     return {
@@ -189,6 +212,7 @@ export class AdminInventoryController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('nodeType') nodeType?: string,
+    @Req() req?: Request,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '20', 10) || 20));
@@ -202,6 +226,7 @@ export class AdminInventoryController {
       pageNum,
       limitNum,
       validNode,
+      req ? this.scopeFromReq(req) : null,
     );
 
     return {
@@ -278,6 +303,7 @@ export class AdminInventoryController {
     @Query('limit') limit?: string,
     @Query('mappingId') mappingId?: string,
     @Query('orderId') orderId?: string,
+    @Req() req?: Request,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(100, Math.max(1, parseInt(limit || '20', 10) || 20));
@@ -285,7 +311,7 @@ export class AdminInventoryController {
     const result = await this.inventoryService.getActiveReservations(
       pageNum,
       limitNum,
-      { mappingId, orderId },
+      { mappingId, orderId, allowedSellerTypes: req ? this.scopeFromReq(req) : null },
     );
 
     return {

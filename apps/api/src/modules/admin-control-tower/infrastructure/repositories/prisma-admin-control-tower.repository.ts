@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import type { SellerType } from '../../../../core/authorization/seller-scope';
 import {
   AdminControlTowerRepository,
   AdminControlTowerTxOperations,
@@ -39,61 +40,116 @@ export class PrismaAdminControlTowerRepository implements AdminControlTowerRepos
    *  Dashboard (KPIs)
    * ───────────────────────────────────────────────────────────────── */
 
-  async countMasterOrders(): Promise<number> {
-    return this.prisma.masterOrder.count();
+  // Seller-type scoping (2026-06-25). Each KPI below accepts an optional
+  // `allowedSellerTypes`; when it is a restricting set (non-empty), the query is
+  // filtered to those seller types so a D2C_ADMIN / RETAILER_ADMIN sees only
+  // their channel. null / undefined / empty = unrestricted (SUPER_ADMIN) → the
+  // clause is omitted and the query is byte-identical to the pre-scoping
+  // behavior (zero regression). The relation path differs per model:
+  //   MasterOrder  → subOrders.some.seller.sellerType (no direct seller column)
+  //   SubOrder / Product / CommissionRecord → seller.sellerType (direct relation)
+  //   Seller       → sellerType (direct enum column)
+  // `restrictedTo()` returns the filter is non-empty.
+  private static restricts(t?: SellerType[] | null): t is SellerType[] {
+    return Array.isArray(t) && t.length > 0;
   }
 
-  async sumPaidOrderRevenue(): Promise<number> {
-    const result = await this.prisma.masterOrder.aggregate({
-      _sum: { totalAmount: true },
-      where: { paymentStatus: 'PAID' },
-    });
-    return Number(result._sum.totalAmount || 0);
-  }
-
-  async countActiveProducts(): Promise<number> {
-    return this.prisma.product.count({
-      where: { status: 'ACTIVE', isDeleted: false },
-    });
-  }
-
-  async countActiveSellers(): Promise<number> {
-    return this.prisma.seller.count({
-      where: { status: 'ACTIVE', isDeleted: false },
-    });
-  }
-
-  async countUsers(): Promise<number> {
-    return this.prisma.user.count();
-  }
-
-  async countOrdersSince(since: Date): Promise<number> {
+  async countMasterOrders(allowedSellerTypes?: SellerType[] | null): Promise<number> {
     return this.prisma.masterOrder.count({
-      where: { createdAt: { gte: since } },
+      where: PrismaAdminControlTowerRepository.restricts(allowedSellerTypes)
+        ? { subOrders: { some: { seller: { sellerType: { in: allowedSellerTypes } } } } }
+        : undefined,
     });
   }
 
-  async sumPaidRevenueSince(since: Date): Promise<number> {
+  async sumPaidOrderRevenue(allowedSellerTypes?: SellerType[] | null): Promise<number> {
     const result = await this.prisma.masterOrder.aggregate({
       _sum: { totalAmount: true },
       where: {
         paymentStatus: 'PAID',
-        createdAt: { gte: since },
+        ...(PrismaAdminControlTowerRepository.restricts(allowedSellerTypes)
+          ? { subOrders: { some: { seller: { sellerType: { in: allowedSellerTypes } } } } }
+          : {}),
       },
     });
     return Number(result._sum.totalAmount || 0);
   }
 
-  async countPendingSubOrders(): Promise<number> {
-    return this.prisma.subOrder.count({
-      where: { acceptStatus: 'OPEN' },
+  async countActiveProducts(allowedSellerTypes?: SellerType[] | null): Promise<number> {
+    return this.prisma.product.count({
+      where: {
+        status: 'ACTIVE',
+        isDeleted: false,
+        ...(PrismaAdminControlTowerRepository.restricts(allowedSellerTypes)
+          ? { seller: { sellerType: { in: allowedSellerTypes } } }
+          : {}),
+      },
     });
   }
 
-  async sumPlatformMargin(): Promise<number> {
+  async countActiveSellers(allowedSellerTypes?: SellerType[] | null): Promise<number> {
+    return this.prisma.seller.count({
+      where: {
+        status: 'ACTIVE',
+        isDeleted: false,
+        ...(PrismaAdminControlTowerRepository.restricts(allowedSellerTypes)
+          ? { sellerType: { in: allowedSellerTypes } }
+          : {}),
+      },
+    });
+  }
+
+  // GLOBAL — customers (User) have no seller link, so this stays unscoped. A
+  // restricted admin sees the marketplace-wide customer count for this one KPI.
+  async countUsers(): Promise<number> {
+    return this.prisma.user.count();
+  }
+
+  async countOrdersSince(since: Date, allowedSellerTypes?: SellerType[] | null): Promise<number> {
+    return this.prisma.masterOrder.count({
+      where: {
+        createdAt: { gte: since },
+        ...(PrismaAdminControlTowerRepository.restricts(allowedSellerTypes)
+          ? { subOrders: { some: { seller: { sellerType: { in: allowedSellerTypes } } } } }
+          : {}),
+      },
+    });
+  }
+
+  async sumPaidRevenueSince(since: Date, allowedSellerTypes?: SellerType[] | null): Promise<number> {
+    const result = await this.prisma.masterOrder.aggregate({
+      _sum: { totalAmount: true },
+      where: {
+        paymentStatus: 'PAID',
+        createdAt: { gte: since },
+        ...(PrismaAdminControlTowerRepository.restricts(allowedSellerTypes)
+          ? { subOrders: { some: { seller: { sellerType: { in: allowedSellerTypes } } } } }
+          : {}),
+      },
+    });
+    return Number(result._sum.totalAmount || 0);
+  }
+
+  async countPendingSubOrders(allowedSellerTypes?: SellerType[] | null): Promise<number> {
+    return this.prisma.subOrder.count({
+      where: {
+        acceptStatus: 'OPEN',
+        ...(PrismaAdminControlTowerRepository.restricts(allowedSellerTypes)
+          ? { seller: { sellerType: { in: allowedSellerTypes } } }
+          : {}),
+      },
+    });
+  }
+
+  async sumPlatformMargin(allowedSellerTypes?: SellerType[] | null): Promise<number> {
     const result = await this.prisma.commissionRecord.aggregate({
       _sum: { platformMargin: true },
-      where: { status: { not: 'REFUNDED' } },
+      where: {
+        status: { not: 'REFUNDED' },
+        ...(PrismaAdminControlTowerRepository.restricts(allowedSellerTypes)
+          ? { seller: { sellerType: { in: allowedSellerTypes } } }
+          : {}),
+      },
     });
     return Number(result._sum.platformMargin || 0);
   }

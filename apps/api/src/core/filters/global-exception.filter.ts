@@ -425,6 +425,17 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       // "use your own portal" message instead of a generic 500.
       WRONG_SELLER_PORTAL: HttpStatus.FORBIDDEN,
       WRONG_ADMIN_PORTAL: HttpStatus.FORBIDDEN,
+      // Mandatory-MFA gate (2026-06-22) — an admin with no MFA enrolled is
+      // hard-blocked at login (AdminLoginUseCase). 403 (not 500) so the login
+      // screen can read the body's code and show the "enroll MFA" CTA + the
+      // clear message instead of a generic "Something went wrong". Without this
+      // entry the ForbiddenAppException's code fell through to 500.
+      ENFORCED_MFA_ENROLLMENT: HttpStatus.FORBIDDEN,
+      // Make-a-product-live is super-admin-only (admin-products.controller). 403
+      // so a seller-admin who tries it gets the clear "super admin only" message
+      // rather than a 500. Same class of bug as ENFORCED_MFA_ENROLLMENT: a new
+      // ForbiddenAppException code added without registering it here.
+      MAKE_LIVE_SUPER_ADMIN_ONLY: HttpStatus.FORBIDDEN,
     };
     return map[code] || HttpStatus.INTERNAL_SERVER_ERROR;
   }

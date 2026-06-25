@@ -104,32 +104,35 @@ function main() {
     }
   }
 
-  // 1–9 — reference data (order matters: catalog before metafields + menu).
-  run('1/10  Admin user + system roles', path.join(seedDir, 'seed-admin.ts'));
-  run('2/10  Scoped portal admins (D2C / Retail)', path.join(seedDir, 'seed-portal-admins.ts'));
-  run('3/10  Resource policies (ABAC)', path.join(seedDir, 'seed-resource-policies.ts'));
-  run('4/10  SLA policies', path.join(seedDir, 'seed-sla-policies.ts'));
-  run('5/10  Tax master (states, HSN, UQC, GST config)', path.join(seedDir, 'seed-tax-master.ts'));
-  run('6/10  Catalog (categories, brands, options)', path.join(seedDir, 'seed-catalog.ts'));
-  run('7/10  Category metafield definitions', path.join(seedDir, 'seed-metafields.ts'));
-  run('8/10  Storefront navigation menu', path.join(seedDir, 'seed-menu.ts'));
-  run('9/10  Support ticket categories', path.join(seedDir, 'seed-support-categories.ts'));
+  // 1–8 — reference data (order matters: catalog before metafields + menu).
+  // NOTE: the scoped portal admins (D2C / Retail) are deliberately NOT seeded.
+  // Per the single-bootstrap-admin model, the SUPER_ADMIN provisions every other
+  // admin through the Users UI (POST /admin/users), so each scoped admin carries
+  // a real createdBy audit trail instead of being materialized by a seed.
+  run('1/9  Admin user + system roles', path.join(seedDir, 'seed-admin.ts'));
+  run('2/9  Resource policies (ABAC)', path.join(seedDir, 'seed-resource-policies.ts'));
+  run('3/9  SLA policies', path.join(seedDir, 'seed-sla-policies.ts'));
+  run('4/9  Tax master (states, HSN, UQC, GST config)', path.join(seedDir, 'seed-tax-master.ts'));
+  run('5/9  Catalog (categories, brands, options)', path.join(seedDir, 'seed-catalog.ts'));
+  run('6/9  Category metafield definitions', path.join(seedDir, 'seed-metafields.ts'));
+  run('7/9  Storefront navigation menu', path.join(seedDir, 'seed-menu.ts'));
+  run('8/9  Support ticket categories', path.join(seedDir, 'seed-support-categories.ts'));
 
-  // 8 — pincodes (heavy, needs the India-Post CSV).
+  // 9 — pincodes (heavy, needs the India-Post CSV).
   if (skipPincodes) {
-    console.log(`\n${'═'.repeat(64)}\n  10/10  Pincodes — SKIPPED (--skip-pincodes)\n${'═'.repeat(64)}\n`);
+    console.log(`\n${'═'.repeat(64)}\n  9/9  Pincodes — SKIPPED (--skip-pincodes)\n${'═'.repeat(64)}\n`);
   } else {
     const csv = resolvePincodeCsv();
     if (!csv) {
       console.warn(
-        `\n${'═'.repeat(64)}\n  10/10  Pincodes — SKIPPED (no CSV found)\n${'═'.repeat(64)}\n` +
+        `\n${'═'.repeat(64)}\n  9/9  Pincodes — SKIPPED (no CSV found)\n${'═'.repeat(64)}\n` +
           `  No India-Post CSV located. Set PINCODE_CSV_PATH in apps/api/.env\n` +
           `  (or place the file at ~/Desktop/pincodes.csv), then run:\n` +
           `      pnpm --filter @sportsmart/api seed:pincodes\n`,
       );
     } else {
       console.log(`  (pincode CSV: ${csv})`);
-      run('10/10  Pincodes (165K+ rows)', path.join(seedDir, 'seed-pincodes.ts'), {
+      run('9/9  Pincodes (165K+ rows)', path.join(seedDir, 'seed-pincodes.ts'), {
         PINCODE_CSV_PATH: csv,
       });
     }

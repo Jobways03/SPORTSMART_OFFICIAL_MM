@@ -41,6 +41,20 @@ locals {
     # for product images. Requires the env-schema enum to allow 'r2' (api image
     # must be deployed with that fix BEFORE this value is applied).
     TAX_PDF_STORAGE_PROVIDER = "r2"
+    # MFA enrolment-invite links. AdminMfaService.createEnrollmentInvite builds the
+    # /mfa-enroll/<token> link it hands the super-admin from ADMIN_PORTAL_URL_<PORTAL>
+    # (SUPER/D2C/RETAIL/FRANCHISE/AFFILIATE = the invitee's home portal). Unset, it
+    # falls back to dev localhost ports (e.g. http://localhost:4008) — wrong in any
+    # deployed env. Point each at its real domain via the same service_hosts the ALB +
+    # Route53 records use, so the link always resolves to that portal's running page.
+    # ADMIN_PORTAL_URL (no suffix) is the generic admin base the support-ticket
+    # notification links use; point it at the platform (super-admin) portal.
+    ADMIN_PORTAL_URL           = "https://${local.service_hosts["web-admin-storefront"]}"
+    ADMIN_PORTAL_URL_SUPER     = "https://${local.service_hosts["web-admin-storefront"]}"
+    ADMIN_PORTAL_URL_D2C       = "https://${local.service_hosts["web-d2c-seller-admin"]}"
+    ADMIN_PORTAL_URL_RETAIL    = "https://${local.service_hosts["web-retail-seller-admin"]}"
+    ADMIN_PORTAL_URL_FRANCHISE = "https://${local.service_hosts["web-franchise-admin"]}"
+    ADMIN_PORTAL_URL_AFFILIATE = "https://${local.service_hosts["web-affiliate-admin"]}"
   }
   api_environment = [
     for k, v in merge(local.api_base_environment, var.api_extra_environment) : {

@@ -12,6 +12,7 @@ import {
   ReservationWithMapping,
   StockMovementRow,
 } from '../../domain/repositories/inventory-management.repository.interface';
+import { SellerType } from '../../../../core/authorization/seller-scope';
 
 @Injectable()
 export class PrismaInventoryManagementRepository implements InventoryManagementRepository {
@@ -77,9 +78,14 @@ export class PrismaInventoryManagementRepository implements InventoryManagementR
     }));
   }
 
-  async findAllActiveMappings(sellerId?: string): Promise<MappingRecord[]> {
+  async findAllActiveMappings(
+    sellerId?: string,
+    allowedSellerTypes?: SellerType[],
+  ): Promise<MappingRecord[]> {
     const where: any = { isActive: true };
     if (sellerId) where.sellerId = sellerId;
+    if (allowedSellerTypes?.length)
+      where.seller = { sellerType: { in: allowedSellerTypes } };
 
     const results = await this.prisma.sellerProductMapping.findMany({
       where,
@@ -108,9 +114,14 @@ export class PrismaInventoryManagementRepository implements InventoryManagementR
 
   /* ── Out-of-stock ────────────────────────────────────────────────── */
 
-  async findActiveMappingsForAggregation(): Promise<MappingForAggregation[]> {
+  async findActiveMappingsForAggregation(
+    allowedSellerTypes?: SellerType[],
+  ): Promise<MappingForAggregation[]> {
+    const where: any = { isActive: true };
+    if (allowedSellerTypes?.length)
+      where.seller = { sellerType: { in: allowedSellerTypes } };
     const results = await this.prisma.sellerProductMapping.findMany({
-      where: { isActive: true },
+      where,
       include: {
         product: { select: { id: true, title: true, productCode: true, hasVariants: true } },
         variant: { select: { id: true, sku: true, masterSku: true } },
@@ -171,27 +182,36 @@ export class PrismaInventoryManagementRepository implements InventoryManagementR
 
   /* ── Overview ────────────────────────────────────────────────────── */
 
-  async countDistinctMappedProducts(): Promise<number> {
+  async countDistinctMappedProducts(allowedSellerTypes?: SellerType[]): Promise<number> {
+    const where: any = { isActive: true };
+    if (allowedSellerTypes?.length)
+      where.seller = { sellerType: { in: allowedSellerTypes } };
     const result = await this.prisma.sellerProductMapping.findMany({
-      where: { isActive: true },
+      where,
       select: { productId: true },
       distinct: ['productId'],
     });
     return result.length;
   }
 
-  async countDistinctMappedVariants(): Promise<number> {
+  async countDistinctMappedVariants(allowedSellerTypes?: SellerType[]): Promise<number> {
+    const where: any = { isActive: true, variantId: { not: null } };
+    if (allowedSellerTypes?.length)
+      where.seller = { sellerType: { in: allowedSellerTypes } };
     const result = await this.prisma.sellerProductMapping.findMany({
-      where: { isActive: true, variantId: { not: null } },
+      where,
       select: { variantId: true },
       distinct: ['variantId'],
     });
     return result.length;
   }
 
-  async aggregateActiveStock(): Promise<StockAggResult> {
+  async aggregateActiveStock(allowedSellerTypes?: SellerType[]): Promise<StockAggResult> {
+    const where: any = { isActive: true };
+    if (allowedSellerTypes?.length)
+      where.seller = { sellerType: { in: allowedSellerTypes } };
     const result = await this.prisma.sellerProductMapping.aggregate({
-      where: { isActive: true },
+      where,
       _sum: { stockQty: true, reservedQty: true },
     });
     return {
@@ -200,9 +220,14 @@ export class PrismaInventoryManagementRepository implements InventoryManagementR
     };
   }
 
-  async findAllActiveMappingStockInfo(): Promise<MappingStockInfo[]> {
+  async findAllActiveMappingStockInfo(
+    allowedSellerTypes?: SellerType[],
+  ): Promise<MappingStockInfo[]> {
+    const where: any = { isActive: true };
+    if (allowedSellerTypes?.length)
+      where.seller = { sellerType: { in: allowedSellerTypes } };
     return this.prisma.sellerProductMapping.findMany({
-      where: { isActive: true },
+      where,
       select: { stockQty: true, reservedQty: true, lowStockThreshold: true },
     });
   }
@@ -212,11 +237,19 @@ export class PrismaInventoryManagementRepository implements InventoryManagementR
   async findActiveReservations(
     page: number,
     limit: number,
-    filters?: { mappingId?: string; orderId?: string },
+    filters?: {
+      mappingId?: string;
+      orderId?: string;
+      allowedSellerTypes?: SellerType[];
+    },
   ): Promise<{ reservations: ReservationWithMapping[]; total: number }> {
     const where: any = { status: 'RESERVED' };
     if (filters?.mappingId) where.mappingId = filters.mappingId;
     if (filters?.orderId) where.orderId = filters.orderId;
+    if (filters?.allowedSellerTypes?.length)
+      where.mapping = {
+        seller: { sellerType: { in: filters.allowedSellerTypes } },
+      };
 
     const [reservations, total] = await Promise.all([
       this.prisma.stockReservation.findMany({

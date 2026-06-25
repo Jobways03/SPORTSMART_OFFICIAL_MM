@@ -3,6 +3,7 @@ import {
   AdminControlTowerRepository,
   ADMIN_CONTROL_TOWER_REPOSITORY,
 } from '../../domain/repositories/admin-control-tower.repository.interface';
+import type { SellerType } from '../../../../core/authorization/seller-scope';
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -121,7 +122,13 @@ export class AdminDashboardService {
 
   // ── T1: KPIs ────────────────────────────────────────────────────────────
 
-  async getKpis(): Promise<DashboardKpis> {
+  // `allowedSellerTypes` scopes every KPI to a restricted admin's seller types
+  // (D2C_ADMIN → ['D2C'], RETAILER_ADMIN → ['RETAIL']); null/undefined =
+  // unrestricted (SUPER_ADMIN) → marketplace-wide, unchanged. Pass-through only —
+  // each repo method applies (or omits) the filter. `countUsers` (customers) is
+  // intentionally left unscoped (no seller link); avgOrderValue is derived from
+  // the already-scoped revenue/orders so it inherits scoping automatically.
+  async getKpis(allowedSellerTypes?: SellerType[] | null): Promise<DashboardKpis> {
     const todayStart = new Date();
     todayStart.setHours(0, 0, 0, 0);
 
@@ -136,15 +143,15 @@ export class AdminDashboardService {
       pendingOrders,
       totalPlatformMargin,
     ] = await Promise.all([
-      this.repo.countMasterOrders(),
-      this.repo.sumPaidOrderRevenue(),
-      this.repo.countActiveProducts(),
-      this.repo.countActiveSellers(),
+      this.repo.countMasterOrders(allowedSellerTypes),
+      this.repo.sumPaidOrderRevenue(allowedSellerTypes),
+      this.repo.countActiveProducts(allowedSellerTypes),
+      this.repo.countActiveSellers(allowedSellerTypes),
       this.repo.countUsers(),
-      this.repo.countOrdersSince(todayStart),
-      this.repo.sumPaidRevenueSince(todayStart),
-      this.repo.countPendingSubOrders(),
-      this.repo.sumPlatformMargin(),
+      this.repo.countOrdersSince(todayStart, allowedSellerTypes),
+      this.repo.sumPaidRevenueSince(todayStart, allowedSellerTypes),
+      this.repo.countPendingSubOrders(allowedSellerTypes),
+      this.repo.sumPlatformMargin(allowedSellerTypes),
     ]);
 
     const avgOrderValue = totalOrders > 0 ? Math.round((totalRevenue / totalOrders) * 100) / 100 : 0;

@@ -69,6 +69,10 @@ const STEPS: ReadonlyArray<{ label: string; script: string }> = [
   { label: 'Storefront navigation menu', script: 'seed-menu.ts' },
   { label: 'Catalog taxonomy (categories + brands)', script: 'seed-catalog.ts' },
   { label: 'Category metafield definitions', script: 'seed-metafields.ts' },
+  // Support ticket categories — the storefront "Open a ticket" Category dropdown
+  // reads ticket_categories; without this seed the dropdown is empty in a fresh
+  // env. Idempotent (upsert on name), so safe to re-run.
+  { label: 'Support ticket categories', script: 'seed-support-categories.ts' },
   // Pincode coordinates — the India-Post 165K-row directory. The checkout
   // allocator needs the customer pincode's coordinates to run the Retail →
   // Franchise → D2C distance cascade; with no coords it returns PINCODE_UNKNOWN

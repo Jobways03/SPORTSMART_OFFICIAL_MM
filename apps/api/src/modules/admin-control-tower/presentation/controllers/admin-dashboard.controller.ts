@@ -16,6 +16,7 @@ import { AdminAuthGuard, RolesGuard, PermissionsGuard } from '../../../../core/g
 import { Roles } from '../../../../core/decorators/roles.decorator';
 import { Permissions } from '../../../../core/decorators/permissions.decorator';
 import { Idempotent } from '../../../../core/decorators/idempotent.decorator';
+import { resolveScopedTypes } from '../../../../core/authorization/seller-scope';
 import { AdminDashboardService } from '../../application/services/admin-dashboard.service';
 import { AdminOperationsService, BulkPricingUpdate } from '../../application/services/admin-operations.service';
 import {
@@ -61,8 +62,15 @@ export class AdminDashboardController {
 
   @Get('dashboard/kpis')
   @Permissions('analytics.read')
-  async getKpis() {
-    const data = await this.dashboardService.getKpis();
+  async getKpis(@Req() req: Request) {
+    // Scope the KPIs to the admin's seller type. resolveScopedTypes reads the
+    // permissions the AdminAuthGuard/PermissionsGuard resolved onto req.user:
+    // null for SUPER_ADMIN / unscoped admins (→ marketplace-wide, unchanged),
+    // ['D2C'] / ['RETAIL'] for a channel-restricted admin.
+    const allowedSellerTypes = resolveScopedTypes(
+      (req as Request & { user?: { permissions?: string[] } }).user?.permissions,
+    );
+    const data = await this.dashboardService.getKpis(allowedSellerTypes);
     return { success: true, message: 'Dashboard KPIs retrieved', data };
   }
 

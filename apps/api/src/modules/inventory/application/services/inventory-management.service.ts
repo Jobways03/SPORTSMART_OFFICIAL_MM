@@ -13,6 +13,7 @@ import {
 } from '../../domain/repositories/inventory-management.repository.interface';
 import { FranchisePublicFacade } from '../../../franchise/application/facades/franchise-public.facade';
 import { StockMovementLedgerService } from './stock-movement-ledger.service';
+import { SellerType } from '../../../../core/authorization/seller-scope';
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -463,7 +464,10 @@ export class InventoryManagementService {
     limit: number,
     sellerId?: string,
     nodeType?: FulfillmentNodeType | 'ALL',
+    allowedSellerTypes?: SellerType[] | null,
   ): Promise<{ items: LowStockItem[]; total: number }> {
+    const scope = allowedSellerTypes ?? undefined;
+    const restricted = !!scope?.length;
     const wantSeller = !nodeType || nodeType === 'ALL' || nodeType === 'SELLER';
     const wantFranchise =
       !nodeType || nodeType === 'ALL' || nodeType === 'FRANCHISE';
@@ -471,8 +475,10 @@ export class InventoryManagementService {
     // sellerId filter only applies to SELLER node — kicking off both
     // queries in parallel to avoid sequential round-trips.
     const [sellerMappings, franchiseRows] = await Promise.all([
-      wantSeller ? this.repo.findAllActiveMappings(sellerId) : Promise.resolve([]),
-      wantFranchise && !sellerId
+      wantSeller
+        ? this.repo.findAllActiveMappings(sellerId, scope)
+        : Promise.resolve([]),
+      wantFranchise && !sellerId && !restricted
         ? this.franchiseFacade.findFranchiseLowStockRows()
         : Promise.resolve([]),
     ]);
@@ -536,16 +542,19 @@ export class InventoryManagementService {
     page: number,
     limit: number,
     nodeType?: FulfillmentNodeType | 'ALL',
+    allowedSellerTypes?: SellerType[] | null,
   ): Promise<{ items: OutOfStockProduct[]; total: number }> {
+    const scope = allowedSellerTypes ?? undefined;
+    const restricted = !!scope?.length;
     const wantSeller = !nodeType || nodeType === 'ALL' || nodeType === 'SELLER';
     const wantFranchise =
       !nodeType || nodeType === 'ALL' || nodeType === 'FRANCHISE';
 
     const [sellerMappings, franchiseRows] = await Promise.all([
       wantSeller
-        ? this.repo.findActiveMappingsForAggregation()
+        ? this.repo.findActiveMappingsForAggregation(scope)
         : Promise.resolve([]),
-      wantFranchise
+      wantFranchise && !restricted
         ? this.franchiseFacade.findFranchiseOutOfStockRows()
         : Promise.resolve([]),
     ]);
@@ -811,7 +820,13 @@ export class InventoryManagementService {
 
   // ── T6: Admin inventory overview ────────────────────────────────────
 
-  async getInventoryOverview(): Promise<InventoryOverview> {
+  async getInventoryOverview(
+    allowedSellerTypes?: SellerType[] | null,
+  ): Promise<InventoryOverview> {
+    // Restricted (D2C/RETAIL) admins see only their seller types' stock and NO
+    // franchise stock; SUPER_ADMIN (null/empty) sees the full marketplace union.
+    const scope = allowedSellerTypes ?? undefined;
+    const restricted = !!scope?.length;
     const [
       totalMappedProducts,
       totalMappedVariants,
@@ -819,11 +834,20 @@ export class InventoryManagementService {
       allActive,
       franchiseStats,
     ] = await Promise.all([
-      this.repo.countDistinctMappedProducts(),
-      this.repo.countDistinctMappedVariants(),
-      this.repo.aggregateActiveStock(),
-      this.repo.findAllActiveMappingStockInfo(),
-      this.franchiseFacade.getFranchiseInventoryStats(),
+      this.repo.countDistinctMappedProducts(scope),
+      this.repo.countDistinctMappedVariants(scope),
+      this.repo.aggregateActiveStock(scope),
+      this.repo.findAllActiveMappingStockInfo(scope),
+      restricted
+        ? Promise.resolve({
+            distinctProducts: 0,
+            distinctVariants: 0,
+            totalStock: 0,
+            totalReserved: 0,
+            lowStockCount: 0,
+            outOfStockCount: 0,
+          })
+        : this.franchiseFacade.getFranchiseInventoryStats(),
     ]);
 
     const sellerLowStockCount = allActive.filter(
@@ -867,6 +891,7 @@ export class InventoryManagementService {
     sellerId?: string;
     nodeType?: FulfillmentNodeType | 'ALL';
     status?: InventoryRowStatus | 'ALL';
+    allowedSellerTypes?: SellerType[] | null;
   }): Promise<{ items: InventoryRow[]; total: number }> {
     const {
       page,
@@ -875,14 +900,19 @@ export class InventoryManagementService {
       sellerId,
       nodeType = 'ALL',
       status = 'ALL',
+      allowedSellerTypes,
     } = opts;
 
+    const scope = allowedSellerTypes ?? undefined;
+    const restricted = !!scope?.length;
     const wantSeller = nodeType === 'ALL' || nodeType === 'SELLER';
     const wantFranchise = nodeType === 'ALL' || nodeType === 'FRANCHISE';
 
     const [sellerMappings, franchiseRows] = await Promise.all([
-      wantSeller ? this.repo.findAllActiveMappings(sellerId) : Promise.resolve([]),
-      wantFranchise && !sellerId
+      wantSeller
+        ? this.repo.findAllActiveMappings(sellerId, scope)
+        : Promise.resolve([]),
+      wantFranchise && !sellerId && !restricted
         ? this.franchiseFacade.findAllFranchiseRows()
         : Promise.resolve([]),
     ]);
@@ -1013,12 +1043,20 @@ export class InventoryManagementService {
   async getActiveReservations(
     page: number,
     limit: number,
-    filters?: { mappingId?: string; orderId?: string },
+    filters?: {
+      mappingId?: string;
+      orderId?: string;
+      allowedSellerTypes?: SellerType[] | null;
+    },
   ): Promise<{
     reservations: any[];
     total: number;
   }> {
-    const result = await this.repo.findActiveReservations(page, limit, filters);
+    const result = await this.repo.findActiveReservations(page, limit, {
+      mappingId: filters?.mappingId,
+      orderId: filters?.orderId,
+      allowedSellerTypes: filters?.allowedSellerTypes ?? undefined,
+    });
 
     return {
       reservations: result.reservations.map((r) => ({

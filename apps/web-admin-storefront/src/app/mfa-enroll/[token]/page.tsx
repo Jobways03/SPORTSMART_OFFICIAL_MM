@@ -72,8 +72,9 @@ export default function MfaEnrollPage() {
     }
   }, [token]);
 
-  // Optional fallback — set up an authenticator app instead of email codes.
-  const useAuthenticator = async () => {
+  // Primary factor — set up an authenticator app. Generates the TOTP secret and
+  // shows the setup key + QR immediately. Email is the opt-in fallback below.
+  const useAuthenticator = useCallback(async () => {
     setErr('');
     try {
       const data = await apiPost<BeginData>(
@@ -87,12 +88,17 @@ export default function MfaEnrollPage() {
       setPhase('setup');
     } catch (e: any) {
       setErr(e?.message ?? 'Could not start authenticator setup.');
+      setPhase('error');
     }
-  };
+  }, [token]);
 
   useEffect(() => {
-    if (token) requestEmail();
-  }, [token, requestEmail]);
+    // Default to the authenticator app so the setup key shows up front. Email is
+    // the opt-in fallback the user switches to from the setup screen ("Email me a
+    // code instead") — better UX (no dead-end on unreachable inboxes) and more
+    // secure than an emailed OTP.
+    if (token) useAuthenticator();
+  }, [token, useAuthenticator]);
 
   const complete = async () => {
     if (!/^\d{6}$/.test(code)) {
@@ -135,13 +141,13 @@ export default function MfaEnrollPage() {
         </p>
 
         {phase === 'loading' && (
-          <div style={styles.muted}>Emailing you a verification code…</div>
+          <div style={styles.muted}>Setting up your authenticator…</div>
         )}
 
         {phase === 'error' && (
           <>
             <div style={styles.error}>{err}</div>
-            <button onClick={requestEmail} style={styles.primaryBtn}>
+            <button onClick={useAuthenticator} style={styles.primaryBtn}>
               Try again
             </button>
           </>
@@ -232,7 +238,8 @@ export default function MfaEnrollPage() {
         {phase === 'done' && (
           <>
             <div style={styles.success}>
-              ✓ MFA is enabled. You can now sign in with your password and a 6-digit code emailed to you.
+              ✓ MFA is enabled. You can now sign in with your password and a 6-digit code{' '}
+              {emailMode ? 'emailed to you' : 'from your authenticator app'}.
             </div>
             <a href="/login" style={{ ...styles.primaryBtn, textAlign: 'center', textDecoration: 'none', display: 'block' }}>
               Go to sign in

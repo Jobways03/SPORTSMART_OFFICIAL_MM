@@ -4,6 +4,8 @@
  *  expressed as a technology-agnostic contract.
  * ──────────────────────────────────────────────────────────────────── */
 
+import type { SellerType } from '../../../../core/authorization/seller-scope';
+
 // ── Dashboard DTOs ────────────────────────────────────────────────
 
 export interface ProductPerformanceRow {
@@ -254,15 +256,19 @@ export interface AdminControlTowerTxOperations {
 
 export interface AdminControlTowerRepository {
   /* ── Dashboard (KPIs) ── */
-  countMasterOrders(): Promise<number>;
-  sumPaidOrderRevenue(): Promise<number>;
-  countActiveProducts(): Promise<number>;
-  countActiveSellers(): Promise<number>;
+  // Optional `allowedSellerTypes` scopes each KPI to a restricted admin's
+  // seller types (D2C_ADMIN → ['D2C'], RETAILER_ADMIN → ['RETAIL']); null /
+  // undefined / empty = unrestricted (SUPER_ADMIN) → no filter, current behavior.
+  // `countUsers` (customers) has no seller link, so it is intentionally unscoped.
+  countMasterOrders(allowedSellerTypes?: SellerType[] | null): Promise<number>;
+  sumPaidOrderRevenue(allowedSellerTypes?: SellerType[] | null): Promise<number>;
+  countActiveProducts(allowedSellerTypes?: SellerType[] | null): Promise<number>;
+  countActiveSellers(allowedSellerTypes?: SellerType[] | null): Promise<number>;
   countUsers(): Promise<number>;
-  countOrdersSince(since: Date): Promise<number>;
-  sumPaidRevenueSince(since: Date): Promise<number>;
-  countPendingSubOrders(): Promise<number>;
-  sumPlatformMargin(): Promise<number>;
+  countOrdersSince(since: Date, allowedSellerTypes?: SellerType[] | null): Promise<number>;
+  sumPaidRevenueSince(since: Date, allowedSellerTypes?: SellerType[] | null): Promise<number>;
+  countPendingSubOrders(allowedSellerTypes?: SellerType[] | null): Promise<number>;
+  sumPlatformMargin(allowedSellerTypes?: SellerType[] | null): Promise<number>;
 
   /* ── Dashboard (product performance) ── */
   getTopProductsByRevenue(periodStart: Date, limit: number): Promise<ProductPerformanceRow[]>;

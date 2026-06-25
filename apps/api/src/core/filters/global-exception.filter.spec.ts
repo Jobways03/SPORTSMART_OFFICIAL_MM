@@ -64,6 +64,25 @@ describe('GlobalExceptionFilter — AppException status mapping', () => {
     ).toBe(403);
   });
 
+  it('maps ENFORCED_MFA_ENROLLMENT to 403 (mandatory-MFA login gate)', () => {
+    // An un-enrolled admin is hard-blocked at login. Pre-fix this code was
+    // absent from the map and fell through to 500, so the login screen showed
+    // a generic "Something went wrong" instead of the "enroll MFA" message.
+    expect(
+      statusFor(
+        new ForbiddenAppException('enroll MFA', 'ENFORCED_MFA_ENROLLMENT'),
+      ),
+    ).toBe(403);
+  });
+
+  it('maps MAKE_LIVE_SUPER_ADMIN_ONLY to 403 (super-admin-only make-live gate)', () => {
+    expect(
+      statusFor(
+        new ForbiddenAppException('super only', 'MAKE_LIVE_SUPER_ADMIN_ONLY'),
+      ),
+    ).toBe(403);
+  });
+
   it('still maps the generic FORBIDDEN code to 403', () => {
     expect(statusFor(new ForbiddenAppException('nope'))).toBe(403);
   });
