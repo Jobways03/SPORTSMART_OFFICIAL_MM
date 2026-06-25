@@ -394,7 +394,16 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
       // none we fall through and throw the 401 as a plain error below.
       let hasSession = false;
       try {
-        hasSession = !!(await storage.getItem(config.refreshTokenKey));
+        // A session exists if EITHER a refresh token is in storage (legacy
+        // sessionStorage logins) OR the user profile is. Cookie-based logins
+        // keep the refresh token in an httpOnly cookie the browser sends
+        // automatically — so storage has no refresh token, but it DOES have
+        // `userKey`. Without this fallback, a cookie-mode session whose access
+        // token expired would never refresh and would surface every 401 as
+        // "Authentication required" instead of silently re-authing.
+        hasSession =
+          !!(await storage.getItem(config.refreshTokenKey)) ||
+          !!(await storage.getItem(config.userKey));
       } catch {
         hasSession = false;
       }
