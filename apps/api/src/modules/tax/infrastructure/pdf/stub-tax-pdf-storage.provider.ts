@@ -64,8 +64,15 @@ export class StubTaxPdfStorageProvider implements TaxPdfStorageProvider {
     private readonly fsAdapter: StubFsAdapter = defaultFs,
   ) {
     this.rootDir = rootDir ?? defaultStubTaxPdfDir();
+    // Public base for the tax-PDF download route. Prefer an explicit
+    // TAX_PDF_PUBLIC_BASE_URL / PUBLIC_API_BASE_URL, then fall back to APP_URL
+    // (the API's public URL, set per-environment) — NOT localhost, which leaks
+    // `http://localhost:<PORT>` into the invoice download link and refuses to
+    // connect from a browser. localhost is only the local-dev last resort.
     this.publicBaseUrl =
       process.env.TAX_PDF_PUBLIC_BASE_URL ||
+      process.env.PUBLIC_API_BASE_URL ||
+      process.env.APP_URL ||
       `http://localhost:${process.env.PORT || '8000'}`;
   }
 
