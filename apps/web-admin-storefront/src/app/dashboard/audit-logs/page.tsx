@@ -412,41 +412,91 @@ function Pagination({
 }
 
 function DetailDrawer({ row, onClose }: { row: AuditLogRow; onClose: () => void }) {
+  // Professional slide-over: close on Escape and lock background scroll while
+  // open so the panel reads as a focused modal layer (not a floating card).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    const prevOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+    };
+  }, [onClose]);
+
   return (
-    <div style={drawerOverlay} onClick={onClose}>
+    <div
+      style={drawerOverlay}
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+      aria-label="Audit row detail"
+    >
       <div style={drawerPanel} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0 }}>Audit row</h2>
-          <button type="button" onClick={onClose} style={btnLink}>Close ✕</button>
+        {/* Sticky header — stays pinned while the body scrolls. */}
+        <div style={drawerHeader}>
+          <div>
+            <h2 style={{ fontSize: 16, fontWeight: 700, margin: 0, color: '#111827' }}>Audit row</h2>
+            <p style={{ fontSize: 12, color: '#6b7280', margin: '2px 0 0' }}>
+              {formatWhen(row.createdAt)} · {row.module}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} style={btnIconClose} aria-label="Close">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                 strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M18 6 6 18M6 6l12 12" />
+            </svg>
+          </button>
         </div>
-        <dl style={{ display: 'grid', gridTemplateColumns: '120px 1fr', rowGap: 6, columnGap: 12, fontSize: 13 }}>
-          <dt style={dtStyle}>ID</dt>
-          <dd style={ddStyle}><code style={codeStyle}>{row.id}</code></dd>
-          <dt style={dtStyle}>When</dt>
-          <dd style={ddStyle}>{formatWhen(row.createdAt)}</dd>
-          <dt style={dtStyle}>Module</dt>
-          <dd style={ddStyle}>{row.module}</dd>
-          <dt style={dtStyle}>Resource</dt>
-          <dd style={ddStyle}>{row.resource}</dd>
-          <dt style={dtStyle}>Resource ID</dt>
-          <dd style={ddStyle}><code style={codeStyle}>{row.resourceId ?? '—'}</code></dd>
-          <dt style={dtStyle}>Action</dt>
-          <dd style={ddStyle}><code style={codeStyle}>{row.action}</code></dd>
-          <dt style={dtStyle}>Actor</dt>
-          <dd style={ddStyle}>
-            {row.actorRole ? <span style={{ color: '#6b7280' }}>{row.actorRole} · </span> : null}
-            <code style={codeStyle}>{row.actorId ?? '—'}</code>
-            {row.actorType ? <span style={{ color: '#6b7280' }}> ({row.actorType})</span> : null}
-          </dd>
-          <dt style={dtStyle}>Prev hash</dt>
-          <dd style={ddStyle}><code style={hashStyle}>{row.prevHash ?? '(genesis)'}</code></dd>
-          <dt style={dtStyle}>Hash</dt>
-          <dd style={ddStyle}><code style={hashStyle}>{row.hash}</code></dd>
-        </dl>
-        <h3 style={{ fontSize: 13, fontWeight: 600, marginTop: 16, marginBottom: 4 }}>Payload</h3>
-        <pre style={preStyle}>{JSON.stringify(row.payload, null, 2)}</pre>
+
+        <div style={drawerBody}>
+          <section style={drawerCard}>
+            <dl style={{ display: 'grid', gridTemplateColumns: '110px 1fr', rowGap: 0, columnGap: 0, fontSize: 13, margin: 0 }}>
+              <Field label="ID"><code style={codeStyle}>{row.id}</code></Field>
+              <Field label="When">{formatWhen(row.createdAt)}</Field>
+              <Field label="Module">{row.module}</Field>
+              <Field label="Resource">{row.resource}</Field>
+              <Field label="Resource ID"><code style={codeStyle}>{row.resourceId ?? '—'}</code></Field>
+              <Field label="Action"><code style={codeStyle}>{row.action}</code></Field>
+              <Field label="Actor">
+                {row.actorRole ? <span style={{ color: '#6b7280' }}>{row.actorRole} · </span> : null}
+                <code style={codeStyle}>{row.actorId ?? '—'}</code>
+                {row.actorType ? <span style={{ color: '#6b7280' }}> ({row.actorType})</span> : null}
+              </Field>
+              <Field label="Prev hash"><code style={hashStyle}>{row.prevHash ?? '(genesis)'}</code></Field>
+              <Field label="Hash" last><code style={hashStyle}>{row.hash}</code></Field>
+            </dl>
+          </section>
+
+          <h3 style={{ fontSize: 12, fontWeight: 600, color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.04em', margin: '18px 0 6px' }}>
+            Payload
+          </h3>
+          <pre style={preStyle}>{JSON.stringify(row.payload, null, 2)}</pre>
+        </div>
       </div>
     </div>
+  );
+}
+
+/** One label/value pair in the detail drawer with a hairline row divider. */
+function Field({
+  label,
+  children,
+  last = false,
+}: {
+  label: string;
+  children: React.ReactNode;
+  last?: boolean;
+}) {
+  const border = last ? 'none' : '1px solid #f1f3f5';
+  return (
+    <>
+      <dt style={{ ...dtStyle, padding: '9px 0', borderBottom: border }}>{label}</dt>
+      <dd style={{ ...ddStyle, padding: '9px 0', paddingLeft: 14, borderBottom: border, minWidth: 0 }}>{children}</dd>
+    </>
   );
 }
 
@@ -611,18 +661,57 @@ const errBanner: React.CSSProperties = {
 const drawerOverlay: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
-  background: 'rgba(15, 23, 42, 0.45)',
+  background: 'rgba(15, 23, 42, 0.5)',
   display: 'flex',
   justifyContent: 'flex-end',
-  zIndex: 60,
+  // Must sit above the fixed navbar (z-index 200) and sidebar (z-index 100)
+  // in dashboard.css — at the old z-index 60 the panel's header was clipped
+  // behind the navbar, which made the drawer look half-cut and unstyled.
+  zIndex: 1000,
 };
 const drawerPanel: React.CSSProperties = {
-  width: 'min(640px, 100%)',
+  width: 'min(560px, 100%)',
   height: '100%',
   background: '#fff',
-  padding: 20,
+  display: 'flex',
+  flexDirection: 'column',
+  overflow: 'hidden',
+  boxShadow: '-12px 0 40px rgba(15, 23, 42, 0.25)',
+};
+const drawerHeader: React.CSSProperties = {
+  flexShrink: 0,
+  display: 'flex',
+  justifyContent: 'space-between',
+  alignItems: 'flex-start',
+  gap: 12,
+  padding: '16px 20px',
+  borderBottom: '1px solid #e5e7eb',
+  background: '#fff',
+};
+const drawerBody: React.CSSProperties = {
+  flex: 1,
+  minHeight: 0,
   overflow: 'auto',
-  boxShadow: '-10px 0 30px rgba(15, 23, 42, 0.2)',
+  padding: 20,
+};
+const drawerCard: React.CSSProperties = {
+  border: '1px solid #e5e7eb',
+  borderRadius: 10,
+  padding: '4px 16px',
+  background: '#fff',
+};
+const btnIconClose: React.CSSProperties = {
+  flexShrink: 0,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  width: 32,
+  height: 32,
+  background: '#f3f4f6',
+  color: '#374151',
+  border: '1px solid #e5e7eb',
+  borderRadius: 8,
+  cursor: 'pointer',
 };
 
 function btnPrimary(disabled: boolean): React.CSSProperties {

@@ -4,8 +4,15 @@ export interface FranchiseReturnItem {
   id: string;
   quantity?: number;
   reasonCategory?: string | null;
+  reasonDetail?: string | null;
+  // Populated after a QC decision (optional — only present once QC'd).
+  qcOutcome?: string | null;
+  qcQuantityApproved?: number | null;
+  qcNotes?: string | null;
+  refundAmount?: string | number | null;
   orderItem?: {
     productTitle?: string | null;
+    variantTitle?: string | null;
     sku?: string | null;
     imageUrl?: string | null;
   } | null;
@@ -21,6 +28,7 @@ export interface FranchiseReturnListItem {
   items?: FranchiseReturnItem[];
   subOrder?: {
     id?: string;
+    fulfillmentNodeType?: string | null;
     masterOrder?: { orderNumber?: string } | null;
   } | null;
 }
@@ -28,6 +36,7 @@ export interface FranchiseReturnListItem {
 export interface FranchiseReturnDetail extends FranchiseReturnListItem {
   reason?: string | null;
   refundStatus?: string | null;
+  updatedAt?: string | null;
   evidence?: Array<{
     id: string;
     url?: string | null;

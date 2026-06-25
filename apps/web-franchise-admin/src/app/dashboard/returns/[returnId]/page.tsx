@@ -8,20 +8,13 @@ import {
   FranchiseShipmentEvidence,
 } from '@/services/franchise-returns.service';
 import SubmitQcModal from '../components/submit-qc-modal';
-
-const card: React.CSSProperties = {
-  background: '#fff',
-  border: '1px solid #e5e7eb',
-  borderRadius: 10,
-  padding: 20,
-  marginBottom: 16,
-};
-const h2: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 600,
-  color: '#111827',
-  marginBottom: 12,
-};
+import {
+  formatCurrency,
+  formatDateTime,
+  formatStatus,
+  getStatusBadgeClass,
+} from '../utils';
+import '../returns.css';
 
 export default function FranchiseAdminReturnDetailPage() {
   const params = useParams();
@@ -29,6 +22,7 @@ export default function FranchiseAdminReturnDetailPage() {
   const router = useRouter();
   const returnId = (params?.returnId as string) || '';
   const franchiseId = search?.get('franchiseId') || '';
+
   const [ret, setRet] = useState<FranchiseReturnDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -71,324 +65,477 @@ export default function FranchiseAdminReturnDetailPage() {
   }, [ret?.subOrder?.id]);
 
   if (loading)
-    return <p style={{ color: '#9ca3af', padding: 40 }}>Loading return...</p>;
+    return (
+      <div className="return-detail-page">
+        <div className="returns-loading">Loading return…</div>
+      </div>
+    );
+
   if (error || !ret)
     return (
-      <div style={{ padding: 24 }}>
+      <div className="return-detail-page">
         <button
+          className="return-detail-back"
           onClick={() => router.back()}
-          style={{
-            border: 'none',
-            background: 'none',
-            color: '#2563eb',
-            cursor: 'pointer',
-            marginBottom: 16,
-          }}
         >
-          &larr; Back to Returns
+          &larr; Back to returns
         </button>
-        <p style={{ color: '#9ca3af' }}>{error || 'Return not found'}</p>
+        <div className="returns-empty">
+          <h3>Return unavailable</h3>
+          <p>{error || 'Return not found'}</p>
+        </div>
       </div>
     );
 
   const items = ret.items ?? [];
   const history = ret.statusHistory ?? [];
   const evidence = ret.evidence ?? [];
+  const customerName =
+    `${ret.customer?.firstName ?? ''} ${ret.customer?.lastName ?? ''}`.trim();
+  const orderNumber = ret.subOrder?.masterOrder?.orderNumber ?? '—';
+  const refundValue = ret.refundAmount ?? ret.totalRefundAmount ?? null;
+  const hasRefund = refundValue != null || !!ret.refundStatus;
+  const totalQty = items.reduce((sum, i) => sum + (i.quantity || 0), 0);
 
   return (
-    <div style={{ maxWidth: 900 }}>
-      <button
-        onClick={() => router.back()}
-        style={{
-          border: 'none',
-          background: 'none',
-          color: '#2563eb',
-          cursor: 'pointer',
-          marginBottom: 12,
-          fontSize: 13,
-        }}
-      >
-        &larr; Back to Returns
+    <div className="return-detail-page">
+      <button className="return-detail-back" onClick={() => router.back()}>
+        &larr; Back to returns
       </button>
 
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: 16,
-          flexWrap: 'wrap',
-          gap: 8,
-        }}
-      >
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700 }}>
-            Return {ret.returnNumber || ret.id.slice(0, 8)}
+      <div className="return-detail-header">
+        <div className="return-detail-title">
+          <h1>
+            {ret.returnNumber || ret.id.slice(0, 8)}
+            <span className={getStatusBadgeClass(ret.status)}>
+              {formatStatus(ret.status)}
+            </span>
           </h1>
-          <p style={{ color: '#6b7280', fontSize: 13 }}>
-            Order {ret.subOrder?.masterOrder?.orderNumber ?? '—'} ·{' '}
-            {new Date(ret.createdAt).toLocaleString()}
-          </p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <span
-            style={{
-              fontSize: 12,
-              fontWeight: 600,
-              padding: '4px 12px',
-              borderRadius: 6,
-              background: '#dbeafe',
-              color: '#1d4ed8',
-            }}
-          >
-            {ret.status?.replace(/_/g, ' ')}
-          </span>
-          {/* QC decision is the marketplace admin's call once the parcel is
-              received back. */}
-          {ret.status === 'RECEIVED' && (
-            <button
-              type="button"
-              onClick={() => setQcOpen(true)}
-              style={{
-                fontSize: 13,
-                fontWeight: 600,
-                padding: '8px 16px',
-                borderRadius: 8,
-                border: 'none',
-                background: '#2563eb',
-                color: '#fff',
-                cursor: 'pointer',
-              }}
-            >
-              Submit QC Decision
-            </button>
-          )}
+          <div className="return-detail-meta">
+            <span>
+              Order <strong>{orderNumber}</strong>
+            </span>
+            <span>
+              Created <strong>{formatDateTime(ret.createdAt)}</strong>
+            </span>
+            <span>
+              Fulfilled by{' '}
+              <strong>{ret.subOrder?.fulfillmentNodeType || 'FRANCHISE'}</strong>
+            </span>
+          </div>
         </div>
       </div>
 
-      <div style={card}>
-        <h2 style={h2}>Returned Items</h2>
-        {items.length === 0 ? (
-          <p style={{ color: '#9ca3af', fontSize: 13 }}>No item rows</p>
-        ) : (
-          items.map((it) => (
-            <div
-              key={it.id}
-              style={{
-                display: 'flex',
-                gap: 12,
-                alignItems: 'center',
-                padding: '8px 0',
-                borderBottom: '1px solid #f3f4f6',
-              }}
-            >
-              <div style={{ flex: 1 }}>
-                <div style={{ fontWeight: 500, fontSize: 13 }}>
-                  {it.orderItem?.productTitle ?? 'Item'}
+      <div className="return-detail-layout">
+        {/* ── Main content ─────────────────────────────────────────── */}
+        <div className="return-detail-main">
+          {/* Customer */}
+          <div className="return-section">
+            <div className="return-section-header">
+              <h2>Customer</h2>
+            </div>
+            <div className="return-section-body">
+              <div className="return-info-grid">
+                <div className="return-info-item">
+                  <span className="return-info-label">Name</span>
+                  <span className="return-info-value">
+                    {customerName || <span className="muted">Unknown</span>}
+                  </span>
                 </div>
-                <div
-                  style={{
-                    fontSize: 12,
-                    color: '#6b7280',
-                    fontFamily: 'monospace',
-                  }}
-                >
-                  {it.orderItem?.sku ?? '—'}
+                <div className="return-info-item">
+                  <span className="return-info-label">Email</span>
+                  <span className="return-info-value">
+                    {ret.customer?.email || <span className="muted">—</span>}
+                  </span>
                 </div>
               </div>
-              <div style={{ fontSize: 13, color: '#374151' }}>
-                Qty {it.quantity ?? 1}
-              </div>
-              {it.reasonCategory && (
-                <div style={{ fontSize: 12, color: '#92400e' }}>
-                  {it.reasonCategory.replace(/_/g, ' ')}
+              {ret.reason && (
+                <div style={{ marginTop: 14 }}>
+                  <div className="return-info-label">Return Reason</div>
+                  <div className="return-info-value" style={{ marginTop: 4 }}>
+                    {ret.reason}
+                  </div>
                 </div>
               )}
             </div>
-          ))
-        )}
-        {ret.reason && (
-          <p style={{ fontSize: 13, color: '#374151', marginTop: 12 }}>
-            <strong>Reason:</strong> {ret.reason}
-          </p>
-        )}
-      </div>
+          </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-        <div style={card}>
-          <h2 style={h2}>Status History</h2>
-          {history.length === 0 ? (
-            <p style={{ color: '#9ca3af', fontSize: 13 }}>No history</p>
-          ) : (
-            history.map((hI) => (
-              <div
-                key={hI.id}
-                style={{
-                  fontSize: 13,
-                  color: '#374151',
-                  padding: '6px 0',
-                  borderBottom: '1px solid #f3f4f6',
-                }}
-              >
-                <span style={{ fontWeight: 600 }}>
-                  {hI.status?.replace(/_/g, ' ')}
-                </span>
-                <span style={{ color: '#9ca3af', marginLeft: 8, fontSize: 12 }}>
-                  {new Date(hI.createdAt).toLocaleString()}
-                </span>
-                {hI.note && (
-                  <div style={{ fontSize: 12, color: '#6b7280' }}>{hI.note}</div>
-                )}
-              </div>
-            ))
-          )}
-        </div>
-
-        <div style={card}>
-          <h2 style={h2}>Evidence</h2>
-          {evidence.length === 0 ? (
-            <p style={{ color: '#9ca3af', fontSize: 13 }}>No evidence uploaded</p>
-          ) : (
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {evidence.map((ev) => {
-                const url = ev.viewUrl || ev.url || null;
-                if (!url)
-                  return (
-                    <div
-                      key={ev.id}
-                      style={{
-                        width: 64,
-                        height: 64,
-                        borderRadius: 6,
-                        background: '#f3f4f6',
-                        border: '1px solid #e5e7eb',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: 18,
-                        color: '#9ca3af',
-                      }}
-                    >
-                      &#128247;
-                    </div>
-                  );
-                return (
-                  <a
-                    key={ev.id}
-                    href={url}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={{
-                      width: 64,
-                      height: 64,
-                      borderRadius: 6,
-                      overflow: 'hidden',
-                      border: '1px solid #e5e7eb',
-                      display: 'block',
-                    }}
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={url}
-                      alt=""
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                    />
-                  </a>
-                );
-              })}
+          {/* Items */}
+          <div className="return-section">
+            <div className="return-section-header">
+              <h2>Items ({items.length})</h2>
             </div>
-          )}
-        </div>
-
-        {/* Franchise's pre-ship evidence — proof-of-dispatch photos uploaded at
-            packing time (attached to the sub-order). The "as shipped" baseline:
-            compare against the customer's claim photos above before approving a
-            contested return. */}
-        {shipmentEvidence.length > 0 && (
-          <div style={card}>
-            <h2 style={h2}>
-              Franchise&apos;s Pre-ship Evidence ({shipmentEvidence.length})
-            </h2>
-            <p
-              style={{
-                color: '#6b7280',
-                fontSize: 12,
-                marginTop: -4,
-                marginBottom: 12,
-                lineHeight: 1.5,
-              }}
-            >
-              Photos the franchise uploaded <strong>before shipping</strong> (the
-              &ldquo;as shipped&rdquo; baseline). Compare against the
-              customer&apos;s evidence above before deciding a contested return.
-            </p>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {shipmentEvidence.map((att, i) => {
-                // SHIPMENT_EVIDENCE is PRIVATE → providerUrl is null; the admin
-                // endpoint enriches each row with a short-lived `viewUrl`.
-                const url = att.viewUrl ?? att.file?.providerUrl ?? null;
-                return url ? (
-                  <a
-                    key={att.id}
-                    href={url}
-                    target="_blank"
-                    rel="noreferrer"
-                    title={`Pre-ship photo ${i + 1} — opens in new tab`}
-                    style={{
-                      width: 96,
-                      height: 96,
-                      borderRadius: 6,
-                      overflow: 'hidden',
-                      border: '2px solid #8b5cf6',
-                      display: 'block',
-                    }}
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={url}
-                      alt={`Pre-ship evidence ${i + 1}`}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                    />
-                  </a>
-                ) : (
-                  <div
-                    key={att.id}
-                    style={{
-                      width: 96,
-                      height: 96,
-                      borderRadius: 6,
-                      background: '#f3f4f6',
-                      border: '1px solid #e5e7eb',
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      fontSize: 11,
-                      color: '#9ca3af',
-                      padding: 8,
-                      textAlign: 'center',
-                    }}
-                  >
-                    {att.file?.fileName ?? 'Photo'}
-                  </div>
-                );
-              })}
+            <div style={{ overflowX: 'auto' }}>
+              <table className="return-items-table">
+                <thead>
+                  <tr>
+                    <th>Product</th>
+                    <th>Qty</th>
+                    <th>Reason</th>
+                    <th>QC</th>
+                    <th style={{ textAlign: 'right' }}>Refund</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ textAlign: 'center', color: '#94a3b8' }}>
+                        No item rows
+                      </td>
+                    </tr>
+                  ) : (
+                    items.map((item) => (
+                      <tr key={item.id}>
+                        <td>
+                          <div className="return-item-product">
+                            {item.orderItem?.imageUrl ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img
+                                className="return-item-image"
+                                src={item.orderItem.imageUrl}
+                                alt=""
+                              />
+                            ) : (
+                              <div className="return-item-image-placeholder">
+                                &#128230;
+                              </div>
+                            )}
+                            <div>
+                              <div className="return-item-name">
+                                {item.orderItem?.productTitle || 'Item'}
+                              </div>
+                              {item.orderItem?.variantTitle && (
+                                <div className="return-item-variant">
+                                  {item.orderItem.variantTitle}
+                                </div>
+                              )}
+                              {item.orderItem?.sku && (
+                                <div className="return-item-variant">
+                                  SKU: {item.orderItem.sku}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </td>
+                        <td>{item.quantity ?? 1}</td>
+                        <td>
+                          <div style={{ fontSize: 13 }}>
+                            {formatStatus(item.reasonCategory)}
+                          </div>
+                          {item.reasonDetail && (
+                            <div
+                              style={{
+                                fontSize: 11,
+                                color: '#64748b',
+                                marginTop: 2,
+                              }}
+                            >
+                              {item.reasonDetail}
+                            </div>
+                          )}
+                        </td>
+                        <td>
+                          {item.qcOutcome ? (
+                            <div>
+                              <div style={{ fontWeight: 500, fontSize: 13 }}>
+                                {item.qcOutcome}
+                              </div>
+                              <div style={{ fontSize: 11, color: '#64748b' }}>
+                                Approved: {item.qcQuantityApproved ?? 0}/
+                                {item.quantity ?? 1}
+                              </div>
+                              {item.qcNotes && (
+                                <div
+                                  style={{
+                                    fontSize: 11,
+                                    color: '#64748b',
+                                    marginTop: 2,
+                                  }}
+                                >
+                                  {item.qcNotes}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <span style={{ color: '#94a3b8' }}>Pending</span>
+                          )}
+                        </td>
+                        <td style={{ textAlign: 'right', fontWeight: 500 }}>
+                          {item.refundAmount != null
+                            ? formatCurrency(Number(item.refundAmount))
+                            : '—'}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
-        )}
 
-        {qcOpen && (
-          <SubmitQcModal
-            returnId={ret.id}
-            returnNumber={ret.returnNumber || ret.id.slice(0, 8)}
-            items={ret.items ?? []}
-            onClose={() => setQcOpen(false)}
-            onSuccess={() => {
-              setQcOpen(false);
-              setRefreshKey((k) => k + 1);
-            }}
-          />
-        )}
+          {/* Refund */}
+          {hasRefund && (
+            <div className="return-section">
+              <div className="return-section-header">
+                <h2>Refund</h2>
+              </div>
+              <div className="return-section-body">
+                <div className="return-info-grid">
+                  <div className="return-info-item">
+                    <span className="return-info-label">Amount</span>
+                    <span className="return-info-value">
+                      {refundValue != null
+                        ? formatCurrency(Number(refundValue))
+                        : '—'}
+                    </span>
+                  </div>
+                  <div className="return-info-item">
+                    <span className="return-info-label">Status</span>
+                    <span className="return-info-value">
+                      {ret.refundStatus ? (
+                        formatStatus(ret.refundStatus)
+                      ) : (
+                        <span className="muted">—</span>
+                      )}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Evidence (customer) */}
+          <div className="return-section">
+            <div className="return-section-header">
+              <h2>Evidence ({evidence.length})</h2>
+            </div>
+            <div className="return-section-body">
+              {evidence.length === 0 ? (
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: '#64748b',
+                    textAlign: 'center',
+                    padding: '12px 0',
+                  }}
+                >
+                  No evidence uploaded yet.
+                </div>
+              ) : (
+                <div className="return-evidence-grid">
+                  {evidence.map((ev) => {
+                    const url = ev.viewUrl || ev.url || null;
+                    return (
+                      <a
+                        key={ev.id}
+                        href={url || '#'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="return-evidence-item"
+                      >
+                        {url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={url} alt={ev.description || 'Evidence'} />
+                        ) : (
+                          <div style={{ padding: 12, fontSize: 11, color: '#64748b' }}>
+                            &#128247;
+                          </div>
+                        )}
+                        {ev.description && (
+                          <div className="return-evidence-caption">
+                            {ev.description}
+                          </div>
+                        )}
+                      </a>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Franchise's pre-ship evidence — the "as shipped" baseline. */}
+          {shipmentEvidence.length > 0 && (
+            <div className="return-section">
+              <div className="return-section-header">
+                <h2>
+                  Franchise&apos;s Pre-ship Evidence ({shipmentEvidence.length})
+                </h2>
+              </div>
+              <div className="return-section-body">
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: '#64748b',
+                    marginBottom: 12,
+                    lineHeight: 1.5,
+                  }}
+                >
+                  Photos the franchise uploaded <strong>before shipping</strong>{' '}
+                  (the &ldquo;as shipped&rdquo; baseline). Compare against the
+                  customer&apos;s evidence above before deciding a contested
+                  return.
+                </div>
+                <div className="return-evidence-grid">
+                  {shipmentEvidence.map((att, i) => {
+                    const url = att.viewUrl ?? att.file?.providerUrl ?? '';
+                    return (
+                      <a
+                        key={att.id}
+                        href={url || '#'}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="return-evidence-item"
+                      >
+                        {url ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={url} alt={`Pre-ship evidence ${i + 1}`} />
+                        ) : (
+                          <div style={{ padding: 12, fontSize: 11, color: '#64748b' }}>
+                            {att.file?.fileName ?? 'Photo'}
+                          </div>
+                        )}
+                        <div className="return-evidence-caption">
+                          Franchise · before shipping
+                        </div>
+                      </a>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Status Timeline */}
+          <div className="return-section">
+            <div className="return-section-header">
+              <h2>Status Timeline</h2>
+            </div>
+            <div className="return-section-body">
+              {history.length > 0 ? (
+                <div className="return-timeline">
+                  {[...history]
+                    .sort(
+                      (a, b) =>
+                        new Date(b.createdAt).getTime() -
+                        new Date(a.createdAt).getTime(),
+                    )
+                    .map((entry, idx) => (
+                      <div key={entry.id} className="return-timeline-item">
+                        <div
+                          className={`return-timeline-dot${
+                            idx === 0 ? '' : ' neutral'
+                          }`}
+                        />
+                        <div className="return-timeline-content">
+                          <div className="return-timeline-status">
+                            {formatStatus(entry.status)}
+                          </div>
+                          <div className="return-timeline-time">
+                            {formatDateTime(entry.createdAt)}
+                          </div>
+                          {entry.note && (
+                            <div className="return-timeline-notes">
+                              {entry.note}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              ) : (
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: '#64748b',
+                    textAlign: 'center',
+                    padding: '12px 0',
+                  }}
+                >
+                  No status history available.
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* ── Sticky sidebar ───────────────────────────────────────── */}
+        <div className="return-detail-sidebar">
+          <div className="return-sidebar-card">
+            <h3>Actions</h3>
+            <div className="return-sidebar-actions">
+              {ret.status === 'RECEIVED' ? (
+                <button
+                  type="button"
+                  className="return-action-btn primary"
+                  onClick={() => setQcOpen(true)}
+                >
+                  Submit QC Decision
+                </button>
+              ) : (
+                <div
+                  style={{
+                    fontSize: 13,
+                    color: '#64748b',
+                    padding: '10px 0',
+                    textAlign: 'center',
+                  }}
+                >
+                  No actions available for this status.
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="return-sidebar-card" style={{ marginTop: 16 }}>
+            <h3>Summary</h3>
+            <div
+              style={{
+                display: 'flex',
+                flexDirection: 'column',
+                gap: 8,
+                fontSize: 13,
+              }}
+            >
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#64748b' }}>Items</span>
+                <span style={{ fontWeight: 600 }}>{items.length}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#64748b' }}>Total Qty</span>
+                <span style={{ fontWeight: 600 }}>{totalQty}</span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#64748b' }}>Refund</span>
+                <span style={{ fontWeight: 600 }}>
+                  {refundValue != null
+                    ? formatCurrency(Number(refundValue))
+                    : '—'}
+                </span>
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: '#64748b' }}>Status</span>
+                <span className={getStatusBadgeClass(ret.status)}>
+                  {formatStatus(ret.status)}
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
+
+      {qcOpen && (
+        <SubmitQcModal
+          returnId={ret.id}
+          returnNumber={ret.returnNumber || ret.id.slice(0, 8)}
+          items={ret.items ?? []}
+          onClose={() => setQcOpen(false)}
+          onSuccess={() => {
+            setQcOpen(false);
+            setRefreshKey((k) => k + 1);
+          }}
+        />
+      )}
     </div>
   );
 }

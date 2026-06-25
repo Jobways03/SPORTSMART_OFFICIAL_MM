@@ -11,6 +11,9 @@ grepping every actual read in the codebase.
 > - **70 optional** (integrations / set-to-enable)
 > - **279 defaulted** (tuning / feature flags)
 > - **14 declared but NOT consumed by code** (trimmable — see §8)
+>
+> Every key is also tagged **`S`** (secret → AWS Secrets Manager) or **`C`** (config →
+> repo / task-def `environment[]`). See the **S vs C** legend in §1.
 
 ---
 
@@ -26,20 +29,33 @@ The app only ever reads **`process.env`**.
 `env.service.ts` then runs `envSchema.parse(process.env)`. The `requiredInProd` /
 `requiredOnInProd` gates in `env.schema.ts` add the production-only requirements.
 
+### S vs C — where each key is stored in AWS (the marker used below)
+
+Every key below is tagged **`S`** or **`C`**:
+
+| Tag | Meaning | Lives in (AWS) | The test |
+|---|---|---|---|
+| **`S`** | **Secret** | **AWS Secrets Manager** (`secrets[]` → never in git) | *"Would leaking this value let someone log in as us, read our data, move money, or impersonate our service?"* → **yes** |
+| **`C`** | **Config** | task-def `environment[]` / SSM (committed in `infra/`) | …→ **no** (it's a URL, port, flag, threshold, model name, or public id) |
+
+Rule of thumb: **credentials, tokens, signing/encryption keys, passwords, and webhook HMAC secrets are `S`; everything else is `C`.** All ~280 feature flags / tuning numbers in §6 are `C`.
+
 ---
 
 ## 2. 🔴 Hard-required — app will NOT boot without these (every environment)
 
-| Key | Purpose | Generate |
-|---|---|---|
-| `DATABASE_URL` | Postgres connection | — |
-| `REDIS_URL` | Redis (idempotency, locks, OTPs) | — |
-| `JWT_CUSTOMER_SECRET` | customer token signing (≥32 chars) | `openssl rand -base64 32` |
-| `JWT_SELLER_SECRET` | seller token signing | `openssl rand -base64 32` |
-| `JWT_FRANCHISE_SECRET` | franchise token signing | `openssl rand -base64 32` |
-| `JWT_ADMIN_SECRET` | admin token signing | `openssl rand -base64 32` |
-| `JWT_AFFILIATE_SECRET` | affiliate token signing | `openssl rand -base64 32` |
-| `AFFILIATE_ENCRYPTION_KEY` | AES-256 for affiliate PII at rest | `openssl rand -hex 32` |
+**All 8 are `S` (secrets).**
+
+| S/C | Key | Purpose | Generate |
+|---|---|---|---|
+| **S** | `DATABASE_URL` | Postgres connection (has password) | — |
+| **S** | `REDIS_URL` | Redis (idempotency, locks, OTPs) — has password | — |
+| **S** | `JWT_CUSTOMER_SECRET` | customer token signing (≥32 chars) | `openssl rand -base64 32` |
+| **S** | `JWT_SELLER_SECRET` | seller token signing | `openssl rand -base64 32` |
+| **S** | `JWT_FRANCHISE_SECRET` | franchise token signing | `openssl rand -base64 32` |
+| **S** | `JWT_ADMIN_SECRET` | admin token signing | `openssl rand -base64 32` |
+| **S** | `JWT_AFFILIATE_SECRET` | affiliate token signing | `openssl rand -base64 32` |
+| **S** | `AFFILIATE_ENCRYPTION_KEY` | AES-256 for affiliate PII at rest | `openssl rand -hex 32` |
 
 ---
 
@@ -47,12 +63,14 @@ The app only ever reads **`process.env`**.
 
 Enforced only when `NODE_ENV=production` (`requiredInProd` gate). Optional in dev/staging.
 
+**All 8 are `S` (secrets):**
 `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`,
 `R2_ACCOUNT_ID`, `R2_BUCKET`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`,
 `ADMIN_MFA_ENCRYPTION_KEY`.
 
 > Conditionally required: if `SMS_PROVIDER` is `msg91`/`twilio` in prod, then
-> `SMS_AUTH_KEY` + `SMS_SENDER_ID` (+ `SMS_API_SECRET` for twilio) are required.
+> `SMS_AUTH_KEY` (**S**) + `SMS_SENDER_ID` (**C**) (+ `SMS_API_SECRET` (**S**) for
+> twilio) are required.
 
 ---
 
@@ -61,6 +79,7 @@ Enforced only when `NODE_ENV=production` (`requiredInProd` gate). Optional in de
 Default off in dev/test/staging; the `requiredOnInProd` gate refuses to boot prod
 unless each resolves `true`. Flip on in prod after each cron's staging soak.
 
+**All 18 are `C` (config flags — they're booleans, not secrets):**
 `CRON_HEARTBEAT_ENABLED`, `SLA_BREACH_DETECTOR_ENABLED`, `AUDIT_CHAIN_ANCHOR_ENABLED`,
 `IDEMPOTENCY_ENABLED`, `INTEGRITY_VERIFIER_ENABLED`, `ERASURE_PROCESSOR_ENABLED`,
 `WALLET_LEDGER_RECON_ENABLED`, `EVENT_DEDUP_ENABLED`, `OUTBOX_ENABLED`,
@@ -72,35 +91,42 @@ unless each resolves `true`. Flip on in prod after each cron's staging soak.
 
 ## 5. 🟢 Optional integrations — set only to enable the provider (70 keys)
 
-Each degrades/disables gracefully when unset (app still boots).
+Each degrades/disables gracefully when unset (app still boots). The **S/C** column
+marks which keys in the row are secrets (`S`) vs plain config (`C`).
 
-| Integration | Keys | If unset |
-|---|---|---|
-| **Razorpay** | `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` (`RAZORPAY_WEBHOOK_REPLAY_WINDOW_SECONDS` defaulted) | payments disabled (prod-required) |
-| **R2 storage** | `R2_ACCOUNT_ID/ENDPOINT/BUCKET/ACCESS_KEY_ID/SECRET_ACCESS_KEY/PUBLIC_BASE_URL` | uploads refused (prod-required) |
-| **Mail / SMTP** | `MAIL_USER`, `MAIL_PASS`, `MAIL_FROM` (`MAIL_HOST/PORT/SECURE` defaulted) | **"log-only" mail — no email sent** |
-| **Bank encryption** | `SELLER_BANK_ENCRYPTION_KEY`, `FRANCHISE_BANK_ENCRYPTION_KEY` | bank-detail writes return `BANK_DETAILS_UNAVAILABLE` |
-| **Admin MFA** | `ADMIN_MFA_ENCRYPTION_KEY` | MFA login 500s (prod-required) |
-| **AI** | `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` | AI features disabled |
-| **Captcha** | `CAPTCHA_SECRET` (`CAPTCHA_PROVIDER` defaulted `disabled`) | bot-protection off |
-| **OpenSearch** | `OPENSEARCH_NODE/USERNAME/PASSWORD` | falls back to Prisma search |
-| **WhatsApp** | `WHATSAPP_API_URL/API_TOKEN/PHONE_NUMBER_ID/WEBHOOK_VERIFY_TOKEN/APP_SECRET` | messaging skipped |
-| **SMS** | `SMS_PROVIDER/AUTH_KEY/API_SECRET/SENDER_ID/API_URL/DLT_ENFORCED` | `stub` (no SMS) |
-| **NIC GST e-way-bill** | `NIC_API_BASE_URL`, `NIC_GSP_USERNAME/PASSWORD/CLIENT_ID/CLIENT_SECRET`, `NIC_TAXPAYER_GSTIN` | e-way-bill provider falls back to `stub` |
-| **NIC GST e-invoice (IRP)** | `NIC_IRP_BASE_URL`, `NIC_IRP_GSP_USERNAME/PASSWORD/CLIENT_ID/CLIENT_SECRET`, `NIC_IRP_TAXPAYER_GSTIN` | e-invoice provider falls back to `stub` |
-| **Shiprocket webhook** | `SHIPROCKET_WEBHOOK_TOKEN/HMAC_SECRET/IP_ALLOWLIST` | webhook unverified |
-| **Delhivery webhook** | `DELHIVERY_WEBHOOK_HMAC_SECRET/TOKEN/IP_ALLOWLIST` (carrier creds live in **logistics-facade**, not here) | webhook unverified |
-| **Notifications** | `NOTIFICATION_DELIVERY_RECEIPT_SECRET`, `NOTIFICATION_UNSUBSCRIBE_SECRET` | DLR / unsubscribe links fail closed |
-| **Metrics** | `METRICS_BEARER_TOKEN` | `/metrics` unauthenticated/closed |
-| **Affiliate key rotation** | `AFFILIATE_ENCRYPTION_KEYS`, `AFFILIATE_ENCRYPTION_ACTIVE_VERSION` | single-key (no rotation) |
-| **JWT extras** | `JWT_FRANCHISE_STAFF_SECRET` (falls back to franchise secret), `AUTH_COOKIE_DOMAIN`, `RETURN_EVIDENCE_ALLOWED_HOSTS` | sensible fallback |
-| **Admin seed / escalation** | `ADMIN_SEED_NAME/EMAIL/PASSWORD` (seed script), `ADMIN_ESCALATION_EMAIL`, `AFFILIATE_KYC_GATE_ENABLED` | seed skipped / no escalation email |
+| Integration | Keys | S/C | If unset |
+|---|---|---|---|
+| **Razorpay** | `RAZORPAY_KEY_ID/SECRET/WEBHOOK_SECRET` (`RAZORPAY_WEBHOOK_REPLAY_WINDOW_SECONDS` defaulted) | **S** keys · C replay-window | payments disabled (prod-required) |
+| **R2 storage** | `R2_ACCOUNT_ID/ENDPOINT/BUCKET/ACCESS_KEY_ID/SECRET_ACCESS_KEY/PUBLIC_BASE_URL` | **S** `ACCESS_KEY_ID`/`SECRET_ACCESS_KEY` · C `ENDPOINT`/`PUBLIC_BASE_URL` (`ACCOUNT_ID`/`BUCKET` bundled as S in AWS) | uploads refused (prod-required) |
+| **Mail / SMTP** | `MAIL_USER`, `MAIL_PASS`, `MAIL_FROM` (`MAIL_HOST/PORT/SECURE` defaulted) | **S** `MAIL_USER`/`MAIL_PASS` · C the rest | **"log-only" mail — no email sent** |
+| **Bank encryption** | `SELLER_BANK_ENCRYPTION_KEY`, `FRANCHISE_BANK_ENCRYPTION_KEY` | **S** both | bank-detail writes return `BANK_DETAILS_UNAVAILABLE` |
+| **Admin MFA** | `ADMIN_MFA_ENCRYPTION_KEY` | **S** | MFA login 500s (prod-required) |
+| **AI** | `GEMINI_API_KEY`, `ANTHROPIC_API_KEY` | **S** both | AI features disabled |
+| **Captcha** | `CAPTCHA_SECRET` (`CAPTCHA_PROVIDER` defaulted `disabled`) | **S** `CAPTCHA_SECRET` · C provider | bot-protection off |
+| **OpenSearch** | `OPENSEARCH_NODE/USERNAME/PASSWORD` | **S** `PASSWORD` · C `NODE`/`USERNAME` | falls back to Prisma search |
+| **WhatsApp** | `WHATSAPP_API_URL/API_TOKEN/PHONE_NUMBER_ID/WEBHOOK_VERIFY_TOKEN/APP_SECRET` | **S** `API_TOKEN`/`WEBHOOK_VERIFY_TOKEN`/`APP_SECRET` · C `API_URL`/`PHONE_NUMBER_ID` | messaging skipped |
+| **SMS** | `SMS_PROVIDER/AUTH_KEY/API_SECRET/SENDER_ID/API_URL/DLT_ENFORCED` | **S** `AUTH_KEY`/`API_SECRET` · C the rest | `stub` (no SMS) |
+| **NIC GST e-way-bill** | `NIC_API_BASE_URL`, `NIC_GSP_USERNAME/PASSWORD/CLIENT_ID/CLIENT_SECRET`, `NIC_TAXPAYER_GSTIN` | **S** `GSP_USERNAME/PASSWORD/CLIENT_ID/CLIENT_SECRET` · C `BASE_URL`/`GSTIN` | e-way-bill provider falls back to `stub` |
+| **NIC GST e-invoice (IRP)** | `NIC_IRP_BASE_URL`, `NIC_IRP_GSP_USERNAME/PASSWORD/CLIENT_ID/CLIENT_SECRET`, `NIC_IRP_TAXPAYER_GSTIN` | **S** `GSP_USERNAME/PASSWORD/CLIENT_ID/CLIENT_SECRET` · C `BASE_URL`/`GSTIN` | e-invoice provider falls back to `stub` |
+| **Shiprocket webhook** | `SHIPROCKET_WEBHOOK_TOKEN/HMAC_SECRET/IP_ALLOWLIST` | **S** `TOKEN`/`HMAC_SECRET` · C `IP_ALLOWLIST` | webhook unverified |
+| **Delhivery webhook** | `DELHIVERY_WEBHOOK_HMAC_SECRET/TOKEN/IP_ALLOWLIST` (carrier creds live in **logistics-facade**, not here) | **S** `HMAC_SECRET`/`TOKEN` · C `IP_ALLOWLIST` | webhook unverified |
+| **Notifications** | `NOTIFICATION_DELIVERY_RECEIPT_SECRET`, `NOTIFICATION_UNSUBSCRIBE_SECRET` | **S** both | DLR / unsubscribe links fail closed |
+| **Metrics** | `METRICS_BEARER_TOKEN` | **S** | `/metrics` unauthenticated/closed |
+| **Affiliate key rotation** | `AFFILIATE_ENCRYPTION_KEYS`, `AFFILIATE_ENCRYPTION_ACTIVE_VERSION` | **S** `_KEYS` · C `_ACTIVE_VERSION` | single-key (no rotation) |
+| **JWT extras** | `JWT_FRANCHISE_STAFF_SECRET` (falls back to franchise secret), `AUTH_COOKIE_DOMAIN`, `RETURN_EVIDENCE_ALLOWED_HOSTS` | **S** `JWT_FRANCHISE_STAFF_SECRET` · C `AUTH_COOKIE_DOMAIN`/`RETURN_EVIDENCE_ALLOWED_HOSTS` | sensible fallback |
+| **Admin seed / escalation** | `ADMIN_SEED_NAME/EMAIL/PASSWORD` (seed script), `ADMIN_ESCALATION_EMAIL`, `AFFILIATE_KYC_GATE_ENABLED` | **S** `ADMIN_SEED_PASSWORD` · C the rest | seed skipped / no escalation email |
 
 ---
 
 ## 6. ⚪ Feature flags & tuning — all defaulted (override only when needed)
 
-**279 keys.** Listed in full by domain (key → default). `🟠T` = prod-required-true (§4).
+**279 keys — all `C` (Config).** These are flags, intervals, batch sizes, thresholds,
+model names, and TZ offsets — none is a credential, so the whole section goes in the
+task-def `environment[]` / repo, **not** Secrets Manager. **One exception:**
+`COUPON_ATTEMPT_IP_HASH_SALT` is **`S`** (a hash salt — leaking it lets someone
+reverse a hashed IP), tagged inline below.
+
+Listed in full by domain (key → default). `🟠T` = prod-required-true (§4).
 
 ### Core / app
 `NODE_ENV`=development · `PORT`=8000 · `APP_NAME`=sportsmart-api · `APP_URL` · `CORS_ORIGINS` · `TRUST_PROXY_HOPS`=0 (**set real hop count in prod**) · `CLUSTER_WORKERS`=1 · `SHUTDOWN_GRACE_MS`=30000 · `API_DEFAULT_RATE_PER_MINUTE`=60 · `ALLOW_ONLINE_PAYMENTS`=true · `RETAIL_LOCAL_RADIUS_KM`=50 · `HEALTH_EXTERNAL_PROBES_DEFAULT`=false · `HEALTH_PROBE_TIMEOUT_MS`=3000
@@ -130,7 +156,7 @@ Each degrades/disables gracefully when unset (app still boots).
 `OUTBOX_ENABLED`=true 🟠T · `OUTBOX_DUAL_WRITE`=false 🟠T · `OUTBOX_AUTHORITATIVE`=false · `OUTBOX_POLL_INTERVAL_MS`=1000 · `OUTBOX_BATCH_SIZE`=100 · `OUTBOX_MAX_ATTEMPTS`=10 · `OUTBOX_RETENTION_DAYS`=30 · `OUTBOX_DLQ_RETENTION_DAYS`=90 · `OUTBOX_MAX_PAYLOAD_BYTES`=262144 · `OUTBOX_FAILURE_ALERT_THRESHOLD`=25 · `OUTBOX_DEBOUNCE_DEFAULT_MS`=30000 · `EVENT_DEDUP_ENABLED`=false 🟠T · `IDEMPOTENCY_ENABLED`=false 🟠T · `IDEMPOTENCY_TTL_HOURS`=24 · `MONEY_DUAL_WRITE_ENABLED`=false 🟠T · `PROBLEM_DETAILS_ENABLED`=false · `PROBLEM_DETAILS_BASE_URI` · `CASE_DUPLICATE_PREVENTION_ENABLED`=true · `DOUBLE_ENTRY_VALIDATOR_ENABLED`=true
 
 ### Inventory / discounts / cart / POS
-`LOW_STOCK_SWEEP_CRON_ENABLED`=true · `LOW_STOCK_SWEEP_BATCH_SIZE`=1000 · `RESERVATION_EXPIRY_SWEEP_ENABLED`=true · `RESERVATION_EXPIRY_BATCH_SIZE`=500 · `FRANCHISE_RESERVATION_SWEEP_ENABLED`=true · `FRANCHISE_RESERVATION_CLEANUP_BATCH_SIZE`=500 · `DISCOUNT_RESERVATION_CRON_ENABLED`=true · `DISCOUNT_RELEASE_EXPIRED_BATCH_SIZE`=500 · `DISCOUNT_ALLOCATION_ENABLED`=false · `DISCOUNT_FRAUD_TRACKING_ENABLED`=true (+ `_WINDOW_MINUTES`=15, `_INVALID_THRESHOLD`=10) · `COUPON_ATTEMPT_IP_HASH_SALT` · `COUPON_ATTEMPTS_CLEANUP_ENABLED`=true (+ `_RETENTION_DAYS`=30) · `CART_ABANDONMENT_SWEEP_ENABLED`=true · `CART_ABANDONMENT_CUTOFF_DAYS`=90 · `POS_VOID_WINDOW_HOURS`=24 · `POS_RECON_MATCH_TOLERANCE_PAISE`=100 · `SEARCH_OPENSEARCH_ENABLED`=false · `OPENSEARCH_INDEX_PRODUCTS`=sportsmart_products
+`LOW_STOCK_SWEEP_CRON_ENABLED`=true · `LOW_STOCK_SWEEP_BATCH_SIZE`=1000 · `RESERVATION_EXPIRY_SWEEP_ENABLED`=true · `RESERVATION_EXPIRY_BATCH_SIZE`=500 · `FRANCHISE_RESERVATION_SWEEP_ENABLED`=true · `FRANCHISE_RESERVATION_CLEANUP_BATCH_SIZE`=500 · `DISCOUNT_RESERVATION_CRON_ENABLED`=true · `DISCOUNT_RELEASE_EXPIRED_BATCH_SIZE`=500 · `DISCOUNT_ALLOCATION_ENABLED`=false · `DISCOUNT_FRAUD_TRACKING_ENABLED`=true (+ `_WINDOW_MINUTES`=15, `_INVALID_THRESHOLD`=10) · `COUPON_ATTEMPT_IP_HASH_SALT` **(S)** · `COUPON_ATTEMPTS_CLEANUP_ENABLED`=true (+ `_RETENTION_DAYS`=30) · `CART_ABANDONMENT_SWEEP_ENABLED`=true · `CART_ABANDONMENT_CUTOFF_DAYS`=90 · `POS_VOID_WINDOW_HOURS`=24 · `POS_RECON_MATCH_TOLERANCE_PAISE`=100 · `SEARCH_OPENSEARCH_ENABLED`=false · `OPENSEARCH_INDEX_PRODUCTS`=sportsmart_products
 
 ### Tax (e-way-bill / e-invoice / GSTN / PDFs)
 `EWAY_BILL_PROVIDER`=stub · `EINVOICE_PROVIDER`=stub · `GSTN_PROVIDER`=stub · `GSTN_REVERIFY_CRON_ENABLED`=false (+ `_COOLDOWN_HOURS`=0, `_STALE_DAYS`=90) · `TAX_PDF_STORAGE_PROVIDER`=stub · `TAX_PDF_RETRY_CRON_ENABLED`=true (+ `_CAP`=5, `_COOLDOWN_MINUTES`=5, `_SCAN_LIMIT`=50) · `TAX_EINVOICE_RETRY_CRON_ENABLED`=true (+ `_CAP`=5, `_COOLDOWN_MINUTES`=5, `_SCAN_LIMIT`=50) · `TAX_EINVOICE_TURNOVER_THRESHOLD_PAISE`=0 · `TAX_DOWNLOAD_RATE_LIMIT_PER_WINDOW`=20 (+ `_WINDOW_MINUTES`=5) · `TAX_DOWNLOAD_SIGNED_URL_TTL_SECONDS`=300 · `TAX_DOCUMENT_RETENTION_YEARS`=8 · `TAX_CREDIT_NOTE_TIMEBAR_CRON_ENABLED`=true (+ `_APPROACHING_DAYS`=7, `_SCAN_LIMIT`=500) · `TAX_AUDIT_MODE`=false · `TAX_STRICT_MODE`=false · `TAX_AUDIT_READINESS_ACTIVE_SELLER_WINDOW_DAYS`=90 · `TAX_AUDIT_READINESS_DRAFT_STALE_HOURS`=24 · `TAX_READINESS_CACHE_TTL_SECONDS`=30 · `TAX_READINESS_SNAPSHOT_CRON_ENABLED`=true
@@ -149,6 +175,10 @@ Each degrades/disables gracefully when unset (app still boots).
 
 ## 7. AWS — where each value comes from (`infra/aws/terraform/`)
 
+This is the concrete home of the **S/C** tags above: every **`S`** key lands in one of
+the two Secrets Manager bundles; every **`C`** key lands in `environment[]` (or SSM for
+build-time public web config).
+
 | Source | Holds | Defined in |
 |---|---|---|
 | ECS task-def `environment[]` | non-secret runtime config | `ecs.tf` `api_base_environment` |
@@ -163,7 +193,10 @@ Mechanism: `secrets: [{ name, valueFrom: "<ARN>:<KEY>::" }]` → ECS agent calls
 
 ## 8. ⚠️ Declared but NOT consumed by code (14 — trimmable)
 
-Code-verified: no `env.getX('KEY')` / `process.env.KEY` read anywhere.
+Code-verified: no `env.getX('KEY')` / `process.env.KEY` read anywhere. **None needs
+provisioning** (unread) — but for completeness, had they been wired the secrets among
+them would be `JWT_REFRESH_SECRET`, `LOGISTICS_FACADE_API_KEY`, `WEBHOOK_HMAC_SECRET`,
+`SHIPROCKET_PASSWORD` (**S**); the rest are intervals/limits/flags (`C`).
 
 **Superseded interval/limit vars** (the `@Cron` decorators use fixed expressions; the
 processor reads no interval env): `COMMISSION_PROCESSOR_INTERVAL_MS`,
@@ -200,7 +233,7 @@ each toggleable) — adjusting the seller's net payout, not the commission base.
 Commission env (all defaulted, none required): `COMMISSION_PROCESSOR_ENABLED` (cron
 kill-switch), `COMMISSION_PROCESSOR_BATCH_SIZE`, `COMMISSION_PROCESSOR_CONCURRENCY`,
 `COMMISSION_REQUIRE_COD_PAID`, `COMMISSION_REVERSAL_WINDOW_DAYS`,
-`AFFILIATE_COMMISSION_CAP_PER_ORDER`. *(The rate itself is a DB row, not env.)*
+`AFFILIATE_COMMISSION_CAP_PER_ORDER`. **All `C`** *(the rate itself is a DB row, not env)*.
 
 ### Return window (`RETURN_WINDOW_DAYS`, default 14, local `.env`=7)
 `returnWindowEndsAt = deliveredAt + RETURN_WINDOW_DAYS`. Read in 3 services:

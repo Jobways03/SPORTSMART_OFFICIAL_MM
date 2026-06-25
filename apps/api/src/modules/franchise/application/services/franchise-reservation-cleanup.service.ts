@@ -205,19 +205,93 @@ export class FranchiseReservationCleanupService {
         continue;
       }
 
-      // Phase 159p (audit #3) — THE oversell fix. If this reservation is linked
-      // to a placed order (its correlation id is stamped on an OrderItem), the
-      // order's own lifecycle owns the stock — shipment consumes the hold,
-      // cancellation releases it. The sweeper must never touch it. Pre-159p the
-      // cron released committed-but-unshipped holds because it couldn't see this
-      // link, freeing stock that a paid order still needed → oversell.
+      // Phase 159p (audit #3) — oversell guard, now order-STATUS aware (mirrors
+      // the seller-side StockRestoreService, which branches on the reservation's
+      // status). The reservation's correlation id is stamped on an OrderItem at
+      // placement, so a linked OrderItem means a real order owns this hold —
+      // but WHICH state that order is in decides what the sweeper may do:
+      //
+      //   • Order still LIVE → its own lifecycle owns the stock (shipment
+      //     consumes the hold, cancellation releases it). The sweeper must NOT
+      //     touch it: releasing a committed, unshipped hold is an oversell.
+      //   • Order CANCELLED/REJECTED → the cancel path is *supposed* to release
+      //     the franchise hold (orders.service / franchise-orders.service, keyed
+      //     by MASTER-ORDER id), but that call is best-effort and silently leaks
+      //     the hold when it throws. The pre-this-change code skipped these
+      //     forever because it checked order-line EXISTENCE, not order STATUS —
+      //     stranding reservedQty (units locked out of sale). Recover them here,
+      //     idempotently against the SAME master-order id the cancel path uses,
+      //     so we never double-release a hold the cancel already freed (which
+      //     would oversell a LIVE hold sharing this SKU's reservedQty counter).
       const placedOrderItem = await this.prisma.orderItem.findFirst({
         where: { stockReservationId: reservation.referenceId },
-        select: { id: true },
+        select: {
+          id: true,
+          subOrder: {
+            select: {
+              masterOrderId: true,
+              fulfillmentStatus: true,
+              acceptStatus: true,
+              masterOrder: { select: { orderStatus: true } },
+            },
+          },
+        },
       });
-      if (placedOrderItem) continue;
 
-      // No order was ever placed → abandoned checkout. It may already have been
+      if (placedOrderItem) {
+        const so = placedOrderItem.subOrder;
+        // `subOrder` is a required relation, but if it's somehow unreadable we
+        // can't classify the order — skip rather than risk releasing a live
+        // hold (uncertainty must never cause an oversell).
+        if (!so) continue;
+        const orderIsDead =
+          so.fulfillmentStatus === 'CANCELLED' ||
+          so.acceptStatus === 'CANCELLED' ||
+          so.acceptStatus === 'REJECTED' ||
+          so.masterOrder?.orderStatus === 'CANCELLED' ||
+          so.masterOrder?.orderStatus === 'REJECTED';
+
+        // Live order → its lifecycle owns the hold. Never touch (oversell guard).
+        if (!orderIsDead) continue;
+
+        // Cancelled/rejected order whose hold leaked. Release ONLY if the cancel
+        // path hasn't already freed it — idempotency keyed on the master-order
+        // id the cancel path passes to unreserveStock, so a SKU with a LIVE hold
+        // sharing the counter can never be over-released.
+        const cancelAlreadyReleased =
+          await this.prisma.franchiseInventoryLedger.findFirst({
+            where: {
+              franchiseId: reservation.franchiseId,
+              productId: reservation.productId,
+              variantId: reservation.variantId,
+              movementType: { in: ['ORDER_UNRESERVE', 'ORDER_SHIP', 'ORDER_CANCEL'] },
+              referenceId: so.masterOrderId,
+            },
+            select: { id: true },
+          });
+        if (cancelAlreadyReleased) continue;
+
+        try {
+          await this.inventoryService.unreserveStock(
+            reservation.franchiseId,
+            reservation.productId,
+            reservation.variantId,
+            Math.abs(reservation.quantityDelta),
+            // Tag with the cancel path's id → idempotent against it AND future ticks.
+            so.masterOrderId,
+          );
+          releasedCount++;
+        } catch (err) {
+          this.logger.warn(
+            `Failed to release cancelled-order franchise reservation ` +
+              `(master order ${so.masterOrderId}): ${(err as Error).message}`,
+          );
+        }
+        continue;
+      }
+
+      // No order line at all → abandoned checkout / deleted order. It may already
+      // have been
       // released by a checkout re-run / placeOrder rollback; the follow-up
       // (now correlated by the shared id) prevents a double release.
       const followUp = await this.prisma.franchiseInventoryLedger.findFirst({

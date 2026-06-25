@@ -478,9 +478,9 @@ export default function AdminFranchiseDetailPage() {
     if (!franchiseId) return;
     setInventoryLoading(true);
     try {
-      const res = await adminFranchisesService.getInventory(franchiseId);
-      if (res.data?.inventory) {
-        setInventory(res.data.inventory);
+      const res = await adminFranchisesService.getInventory(franchiseId, { limit: 200 });
+      if (res.data?.stocks) {
+        setInventory(res.data.stocks);
       } else if (Array.isArray((res.data as unknown) as FranchiseInventoryItem[])) {
         setInventory((res.data as unknown) as FranchiseInventoryItem[]);
       }
@@ -1370,11 +1370,11 @@ export default function AdminFranchiseDetailPage() {
                     <tbody>
                       {inventory.map(i => (
                         <tr key={i.id}>
-                          <td style={{ fontWeight: 500 }}>{i.productTitle}</td>
+                          <td style={{ fontWeight: 500 }}>{i.product?.title ?? i.globalSku ?? '\u2014'}</td>
                           <td style={{ color: 'var(--color-text-secondary)' }}>
-                            {i.sku || '\u2014'}
+                            {i.franchiseSku || i.globalSku || '\u2014'}
                           </td>
-                          <td style={{ textAlign: 'right' }}>{i.stockQty}</td>
+                          <td style={{ textAlign: 'right' }}>{i.onHandQty}</td>
                           <td style={{ textAlign: 'right' }}>{i.reservedQty}</td>
                           <td style={{ textAlign: 'right', fontWeight: 500 }}>{i.availableQty}</td>
                           <td

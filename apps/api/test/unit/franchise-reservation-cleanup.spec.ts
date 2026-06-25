@@ -25,9 +25,31 @@ function build(opts: {
         Promise.resolve(followUpSet.has(where.referenceId) ? { id: 'follow' } : null),
       ),
     },
+    // Legacy NULL-ref rows are classified by their stock's current reservedQty
+    // (>0 = still-held → "pending manual review"; 0 = already reconciled).
+    franchiseStock: {
+      findFirst: jest.fn().mockResolvedValue({ reservedQty: 5 }),
+    },
     orderItem: {
+      // A linked OrderItem now also carries its sub-order/master-order status so
+      // the sweeper can tell a LIVE placed order (leave the hold) from a
+      // CANCELLED one (recover the leaked hold). These cases model a live,
+      // accepted order — the committed-but-unshipped hold the oversell fix
+      // must never touch.
       findFirst: jest.fn().mockImplementation(({ where }: any) =>
-        Promise.resolve(orderItemSet.has(where.stockReservationId) ? { id: 'oi' } : null),
+        Promise.resolve(
+          orderItemSet.has(where.stockReservationId)
+            ? {
+                id: 'oi',
+                subOrder: {
+                  masterOrderId: 'mo',
+                  fulfillmentStatus: 'UNFULFILLED',
+                  acceptStatus: 'ACCEPTED',
+                  masterOrder: { orderStatus: 'PLACED' },
+                },
+              }
+            : null,
+        ),
       ),
     },
   };

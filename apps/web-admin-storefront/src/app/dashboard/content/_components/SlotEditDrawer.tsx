@@ -423,7 +423,10 @@ const overlay: React.CSSProperties = {
   position: 'fixed',
   inset: 0,
   background: 'rgba(15, 17, 21, 0.4)',
-  zIndex: 50,
+  // Above the dashboard navbar (z-index 200) + sidebar (z-index 100) in
+  // dashboard.css — otherwise this right slide-over's header clips behind the
+  // fixed navbar and the panel looks half-cut.
+  zIndex: 1000,
   display: 'flex',
   justifyContent: 'flex-end',
 };
