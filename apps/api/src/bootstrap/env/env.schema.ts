@@ -1114,7 +1114,12 @@ export const envSchema = z.object({
   // the file directly; 'r2' wires real cloud storage (Cloudflare R2)
   // via the tax-PDF storage provider. Switching is single-line at boot
   // — the service-layer code is identical across providers.
-  TAX_PDF_STORAGE_PROVIDER: z.enum(['stub', 's3']).default('stub'),
+  // 'stub' = local disk (dev/test only — EPHEMERAL on Fargate, lost on every
+  // restart). 'r2' = persistent Cloudflare R2 (presigned GET URLs) — required in
+  // any deployed env so invoice PDFs survive task rolls. Must match the switch in
+  // tax/module.ts (was wrongly ['stub','s3'] — 's3' had no branch, so the R2
+  // provider was unreachable).
+  TAX_PDF_STORAGE_PROVIDER: z.enum(['stub', 'r2']).default('stub'),
   // Phase 19 GST — PDF render retry cron. ON by default in dev so a
   // freshly-generated invoice has its PDF rendered within ~5 minutes
   // without manual intervention; ops disables during incidents.

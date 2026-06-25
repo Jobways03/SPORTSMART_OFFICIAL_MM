@@ -35,6 +35,12 @@ locals {
     # Setting this enables the API's logistics integration; the matching API
     # key is injected as a secret below. Unset = integration disabled.
     LOGISTICS_FACADE_URL = local.logistics_facade_url
+    # Persistent tax-PDF storage (Cloudflare R2). The 'stub' default writes PDFs
+    # to the container's local disk, which is EPHEMERAL on Fargate — invoice PDFs
+    # 404 ("Not found") after any task roll. R2 reuses the R2_* creds already set
+    # for product images. Requires the env-schema enum to allow 'r2' (api image
+    # must be deployed with that fix BEFORE this value is applied).
+    TAX_PDF_STORAGE_PROVIDER = "r2"
   }
   api_environment = [
     for k, v in merge(local.api_base_environment, var.api_extra_environment) : {
