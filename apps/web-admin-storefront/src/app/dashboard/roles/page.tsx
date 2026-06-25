@@ -1,6 +1,13 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
 import {
   adminRolesService,
   PermissionEntry,
@@ -433,22 +440,39 @@ function RoleActionMenu({
   // shown but greyed out with an explanatory title.
   const isSuperAdminRole = role.isSystem && role.name === 'Super Admin';
   const toggleLabel = role.isActive ? 'Disable role' : 'Enable role';
+
+  // Flip the menu ABOVE the trigger when there isn't room below it (e.g. the
+  // last row near the bottom of the viewport). Otherwise it renders off-screen
+  // and the user has to scroll to reach "Edit role" / "Disable role".
+  // useLayoutEffect measures + flips before paint, so there's no visible jump.
+  const ref = useRef<HTMLDivElement>(null);
+  const [openUp, setOpenUp] = useState(false);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    if (rect.bottom > window.innerHeight - 8) setOpenUp(true);
+  }, []);
+
   return (
     <div
+      ref={ref}
       role="menu"
       onClick={(e) => e.stopPropagation()}
       style={{
         position: 'absolute',
-        top: '100%',
-        right: 12,
-        marginTop: 4,
-        minWidth: 180,
+        right: 8,
+        ...(openUp
+          ? { bottom: '100%', marginBottom: 6 }
+          : { top: '100%', marginTop: 6 }),
+        minWidth: 184,
         background: '#fff',
         border: '1px solid #e2e8f0',
-        borderRadius: 8,
-        boxShadow: '0 8px 20px rgba(15, 23, 42, 0.08)',
-        padding: 4,
-        zIndex: 10,
+        borderRadius: 10,
+        boxShadow:
+          '0 10px 30px rgba(15, 23, 42, 0.12), 0 2px 6px rgba(15, 23, 42, 0.06)',
+        padding: 6,
+        zIndex: 20,
       }}
     >
       <button
