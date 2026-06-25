@@ -24,10 +24,29 @@ function buildService(opts: {
     quantityDelta: number;
     referenceId: string | null;
   }>;
-  /** referenceIds that DO have a follow-up entry (won't be released). */
+  /**
+   * referenceIds that DO have a follow-up ledger entry (won't be released).
+   * Doubles as the "cancel already released this master order" set for the
+   * order-status-aware path (that check also goes through
+   * franchiseInventoryLedger.findFirst, keyed by master-order id).
+   */
   followedUpRefIds?: string[];
   /** reservedQty the franchise_stock lookup returns for legacy NULL-ref rows. */
   stockReservedQty?: number;
+  /**
+   * Maps a reservation referenceId → the placed OrderItem it is stamped on,
+   * plus that item's sub-order / master-order status. Absent ref = no order
+   * line (abandoned-cart orphan), matching the default `findFirst → null`.
+   */
+  orderItemsByRef?: Record<
+    string,
+    {
+      masterOrderId: string;
+      fulfillmentStatus?: string;
+      acceptStatus?: string;
+      masterOrderStatus?: string;
+    }
+  >;
 }) {
   const findManyExpired = jest
     .fn()
@@ -46,11 +65,24 @@ function buildService(opts: {
       findMany: findManyExpired,
       findFirst: findFirstFollowUp,
     },
-    // Phase 159p — the sweeper now also checks whether a placed order references
-    // the reservation (skip-if-order-linked, the oversell fix). These tests
-    // exercise abandoned-cart orphans (no order), so default to null.
+    // Phase 159p — the sweeper checks whether a placed order references the
+    // reservation, and (this change) branches on that order's STATUS: a live
+    // order is left alone (oversell guard); a cancelled/rejected order's leaked
+    // hold is recovered. Absent ref → null = abandoned-cart orphan.
     orderItem: {
-      findFirst: jest.fn().mockResolvedValue(null),
+      findFirst: jest.fn(async ({ where }: any) => {
+        const entry = (opts.orderItemsByRef ?? {})[where.stockReservationId];
+        if (!entry) return null;
+        return {
+          id: `oi-${where.stockReservationId}`,
+          subOrder: {
+            masterOrderId: entry.masterOrderId,
+            fulfillmentStatus: entry.fulfillmentStatus ?? 'UNFULFILLED',
+            acceptStatus: entry.acceptStatus ?? 'OPEN',
+            masterOrder: { orderStatus: entry.masterOrderStatus ?? 'PLACED' },
+          },
+        };
+      }),
     },
     // Sweeper classifies legacy NULL-ref rows by their stock's reservedQty:
     // a reconciled (0) stock means the row is immutable history, not a
@@ -176,6 +208,81 @@ describe('FranchiseReservationCleanupService — PR 1.8', () => {
         },
       ],
       followedUpRefIds: ['order-completed'],
+    });
+
+    await service.tick();
+
+    expect(unreserveStock).not.toHaveBeenCalled();
+  });
+
+  // ── Order-status-aware release (cancelled-order leaked holds) ──────
+  //
+  // The cancel path (orders.service / franchise-orders.service) releases a
+  // franchise hold best-effort, keyed by master-order id. When that silently
+  // fails the hold leaks; the sweeper now recovers it — but only for dead
+  // orders, and idempotently, so a LIVE hold sharing the SKU's reservedQty
+  // counter is never over-released.
+
+  it('does NOT release a hold whose linked order is still LIVE (oversell guard)', async () => {
+    const { service, unreserveStock } = buildService({
+      expiredReservations: [
+        { id: 'led-live', franchiseId: 'f-1', productId: 'p-1', variantId: 'v-1', globalSku: 'sku-1', quantityDelta: -2, referenceId: 'res-live' },
+      ],
+      orderItemsByRef: {
+        // Placed + accepted, not yet shipped → the order owns this hold.
+        'res-live': { masterOrderId: 'mo-live', fulfillmentStatus: 'UNFULFILLED', acceptStatus: 'ACCEPTED', masterOrderStatus: 'SELLER_ACCEPTED' },
+      },
+    });
+
+    await service.tick();
+
+    expect(unreserveStock).not.toHaveBeenCalled();
+  });
+
+  it('RELEASES a leaked hold whose linked order is CANCELLED, keyed by master-order id', async () => {
+    const { service, unreserveStock } = buildService({
+      expiredReservations: [
+        { id: 'led-cxl', franchiseId: 'f-1', productId: 'p-9', variantId: null, globalSku: 'sku-9', quantityDelta: -1, referenceId: 'res-cxl' },
+      ],
+      orderItemsByRef: {
+        'res-cxl': { masterOrderId: 'mo-cxl', acceptStatus: 'CANCELLED', masterOrderStatus: 'CANCELLED' },
+      },
+      followedUpRefIds: [], // cancel path's release never landed → must recover
+    });
+
+    await service.tick();
+
+    // Released the held qty, tagged with the MASTER-ORDER id (the cancel path's
+    // correlation id) — not the reserve's referenceId — so it's idempotent.
+    expect(unreserveStock).toHaveBeenCalledWith('f-1', 'p-9', null, 1, 'mo-cxl');
+  });
+
+  it('also releases when only the SUB-ORDER is cancelled (acceptStatus REJECTED on a partial cancel)', async () => {
+    const { service, unreserveStock } = buildService({
+      expiredReservations: [
+        { id: 'led-rej', franchiseId: 'f-2', productId: 'p-3', variantId: 'v-3', globalSku: 'sku-3', quantityDelta: -1, referenceId: 'res-rej' },
+      ],
+      orderItemsByRef: {
+        // Master is PARTIALLY_CANCELLED, but THIS sub-order was rejected.
+        'res-rej': { masterOrderId: 'mo-part', acceptStatus: 'REJECTED', masterOrderStatus: 'PARTIALLY_CANCELLED' },
+      },
+    });
+
+    await service.tick();
+
+    expect(unreserveStock).toHaveBeenCalledWith('f-2', 'p-3', 'v-3', 1, 'mo-part');
+  });
+
+  it('does NOT double-release when the cancel path already freed the hold (idempotent — no oversell)', async () => {
+    const { service, unreserveStock } = buildService({
+      expiredReservations: [
+        { id: 'led-done', franchiseId: 'f-1', productId: 'p-1', variantId: null, globalSku: 'sku-1', quantityDelta: -1, referenceId: 'res-done' },
+      ],
+      orderItemsByRef: {
+        'res-done': { masterOrderId: 'mo-done', acceptStatus: 'CANCELLED', masterOrderStatus: 'CANCELLED' },
+      },
+      // A release row already exists for the master-order id → cancel path won.
+      followedUpRefIds: ['mo-done'],
     });
 
     await service.tick();

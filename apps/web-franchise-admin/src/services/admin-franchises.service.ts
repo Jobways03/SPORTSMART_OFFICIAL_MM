@@ -152,18 +152,37 @@ export interface ListFranchiseCatalogParams {
   search?: string;
 }
 
+// Mirrors the real backend stock row from
+// franchise-inventory.service.getStockOverview → repo.findStockByFranchise
+// ({ stocks: [...], total }). The earlier shape (productTitle/sku/stockQty +
+// a top-level `inventory` key) never matched the API, which is why the
+// Inventory surfaces always rendered "No inventory records".
 export interface FranchiseInventoryItem {
   id: string;
   productId: string;
   variantId: string | null;
-  productTitle: string;
-  productCode?: string;
-  sku: string | null;
-  stockQty: number;
+  globalSku: string | null;
+  franchiseSku: string | null;
+  onHandQty: number;
   reservedQty: number;
   availableQty: number;
+  damagedQty: number;
+  inTransitQty: number;
   lowStockThreshold: number;
+  lastRestockedAt: string | null;
   updatedAt: string;
+  product: {
+    id: string;
+    title: string;
+    baseSku: string | null;
+    productCode: string | null;
+  } | null;
+  variant: {
+    id: string;
+    title: string | null;
+    sku: string | null;
+    masterSku: string | null;
+  } | null;
 }
 
 export interface FranchiseInventoryLedgerEntry {
@@ -429,9 +448,16 @@ export const adminFranchisesService = {
   },
 
   // Inventory
-  getInventory(franchiseId: string): Promise<ApiResponse<{ inventory: FranchiseInventoryItem[] }>> {
-    return apiClient<{ inventory: FranchiseInventoryItem[] }>(
-      `/admin/franchises/${franchiseId}/inventory`,
+  getInventory(
+    franchiseId: string,
+    params: { limit?: number; search?: string } = {},
+  ): Promise<ApiResponse<{ stocks: FranchiseInventoryItem[]; total: number }>> {
+    const qs = new URLSearchParams();
+    if (params.limit) qs.set('limit', String(params.limit));
+    if (params.search) qs.set('search', params.search);
+    const query = qs.toString();
+    return apiClient<{ stocks: FranchiseInventoryItem[]; total: number }>(
+      `/admin/franchises/${franchiseId}/inventory${query ? `?${query}` : ''}`,
     );
   },
 
