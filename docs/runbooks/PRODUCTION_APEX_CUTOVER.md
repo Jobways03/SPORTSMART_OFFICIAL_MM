@@ -17,14 +17,16 @@ merged. Email and the store must stay up throughout.
 | **Apex serving** (gated `var.serve_apex`, default false; **`true` only in `production.tfvars`** so staging is untouched) | apex added as ACM **SAN** (`*.sportsmart.com` does not cover the bare apex; `www` is covered by the wildcard); validation `for_each` rekeyed to the record name to dedup the shared apex/wildcard CNAME; apex host-header listener rule → `web-storefront` TG; `www`→apex 301 rule; apex+www **A and AAAA** alias to the (dual-stack) ALB; apex+www added to `CORS_ORIGINS` | `infra/aws/terraform/{variables,alb,locals,production.tfvars}.tf`, new `apex.tf` |
 | **Storefront canonical URL** (was `http://localhost:4005` in prod — SEO bug) | `NEXT_PUBLIC_STOREFRONT_URL` now baked at build time per env (apex in prod, `shop.<env>` otherwise) via a new SSM param | `locals.tf`, `migrate.tf`, `outputs.tf`, `Dockerfile.web`, `.github/workflows/deploy.yml` |
 | **Deferred admin-MFA + step-up migrations** (unrelated to Shopify — real platform debt) | additive `ADD COLUMN IF NOT EXISTS` migration for the 8 `admins` MFA columns + `admin_sessions.step_up_verified_at`; `prisma generate` + removal of the `as any` casts | `apps/api/prisma/schema/migrations/20260626120000_add_admin_mfa_and_step_up/`, admin-mfa code |
+| **Legacy URL → classic redirect** (opt-in, OFF until populated) | storefront middleware 301s an **allow-list** of old Shopify paths to the same path on `classic.<domain>`. Allow-list (not prefix) because the new catalog reuses the same `/products//collections/` URL shape — a prefix redirect would clobber live new-platform pages | `apps/web-storefront/src/middleware.ts`, `apps/web-storefront/src/data/shopify-legacy-redirect.json` |
 
 `auth_cookie_domain=".sportsmart.com"` already covers the apex; `NEXT_PUBLIC_API_URL=https://api.sportsmart.com` is unchanged.
 
 > **Not included (clean launch):** no Shopify catalog import, no customer import,
-> no `mustResetPassword`, no Shopify→platform 301 redirect map. Old inbound links
-> to `sportsmart.com/products/...` will **404** on the new platform (the catalog
-> is different). If that link equity matters, add a host/path redirect to
-> `classic.sportsmart.com` — decide in Phase 6 (optional, not built).
+> no `mustResetPassword`. The new catalog is all-new, so old inbound links to
+> `sportsmart.com/products/...` would otherwise **404** — covered by the opt-in
+> legacy→classic redirect above (allow-list in
+> `apps/web-storefront/src/data/shopify-legacy-redirect.json`, empty/no-op until
+> you populate it at cutover — see Phase 6).
 
 ---
 
@@ -97,7 +99,7 @@ gh workflow run deploy.yml -f target=production -f services=all -f run_seed=true
 ## Phase 6 — Soak & decommission
 - [ ] Soak with short HSTS; keep `classic` as a fallback ops URL.
 - [ ] 301 `shop.` → apex; drop the soak `noindex` on apex; keep `classic` noindex/canonical→? to avoid duplicate content.
-- [ ] **Optional SEO:** if old `sportsmart.com/...` inbound links matter, add a redirect from old paths to `classic.sportsmart.com` (the new catalog can't satisfy them) — decide and build separately.
+- [ ] **Legacy URL redirect (built — populate now):** export the old Shopify URLs (products/collections/pages/blog articles) and put their exact pathnames in `apps/web-storefront/src/data/shopify-legacy-redirect.json` with `classicHost: "https://classic.sportsmart.com"`; redeploy the storefront. Each listed path then 301s to the same path on `classic`. Leave new-platform paths out of the list.
 - [ ] Re-implement analytics/pixels fresh on the new platform.
 - [ ] Only after soak: remove `sportsmart.com` + `www` from Shopify; re-enable Route53 DNSSEC. Keep Shopify admin/billing to fulfill pre-cutover orders + the returns window; gift cards / store credit stay on Shopify (not migrated).
 

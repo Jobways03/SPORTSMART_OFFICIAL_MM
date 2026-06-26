@@ -1,0 +1,5 @@
+{
+  "_comment": "Legacy Shopify URL -> classic redirect (clean launch — no catalog migrated). EMPTY = no-op. At cutover: set classicHost to https://classic.sportsmart.com and fill `paths` with the EXACT list of OLD Shopify pathnames from the Shopify export — e.g. /products/<handle>, /collections/<handle>, /collections/<c>/products/<p>, /pages/<handle>, /blogs/<blog>/<article>. Each listed path 301s to the SAME path on classicHost (query preserved). Trailing slashes are ignored. Do NOT add any path that exists on the NEW platform (the new catalog reuses the same /products//collections/ structure) — only genuinely-legacy URLs. Update + redeploy the storefront; no env or infra change needed.",
+  "classicHost": "",
+  "paths": []
+}
