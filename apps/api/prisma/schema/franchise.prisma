@@ -1171,6 +1171,12 @@ model FranchiseSettlement {
   tcsDeductedInPaise BigInt  @default(0) @map("tcs_deducted_in_paise")
   tcsRateBpsSnapshot Int     @default(100) @map("tcs_rate_bps_snapshot")
   tcsFilingPeriod    String? @map("tcs_filing_period")
+  // Phase 253 (CA-approved model) — net TAXABLE supply (ex-GST) of this
+  // settlement's ONLINE tax invoices; the §52 TCS base (tcsDeducted = 1% ×
+  // totalTaxableSupply). Mirrors SellerSettlement; stamped at approval from the
+  // same tax documents the franchise TCS ledger uses.
+  totalTaxableSupply        Decimal @default(0) @map("total_taxable_supply") @db.Decimal(12, 2)
+  totalTaxableSupplyInPaise BigInt  @default(0) @map("total_taxable_supply_in_paise")
 
   tdsLedgerId        String? @map("tds_ledger_id")
   tdsDeductedInPaise BigInt  @default(0) @map("tds_deducted_in_paise")

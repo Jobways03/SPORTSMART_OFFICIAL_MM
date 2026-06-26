@@ -24,7 +24,8 @@ import {
 const BASE_LABEL: Record<TaxBaseType, string> = {
   COMMISSION: 'Commission',
   PRICE_OF_GOODS_SOLD: 'Price of Goods Sold',
-  GST: 'GST (commission GST amount)',
+  GST: 'GST (commission GST amount) — legacy',
+  TAXABLE_SUPPLY: 'Taxable supply (net of GST) — §52 base',
 };
 
 // Editable draft: rate as a % string (for the input), base as the enum.
@@ -161,6 +162,7 @@ export default function SettlementChargesPage() {
             <BaseField
               value={draft.tcsBase}
               onChange={(v) => set({ tcsBase: v })}
+              includeTaxableSupply
               includeGst
             />
           </TaxCard>
@@ -324,10 +326,13 @@ function BaseField({
   value,
   onChange,
   includeGst = false,
+  includeTaxableSupply = false,
 }: {
   value: TaxBaseType;
   onChange: (v: TaxBaseType) => void;
   includeGst?: boolean;
+  // Phase 253 — the §52 TCS base (taxable supply ex-GST); shown for TCS.
+  includeTaxableSupply?: boolean;
 }) {
   return (
     <label style={fieldStyle}>
@@ -339,6 +344,9 @@ function BaseField({
       >
         <option value="COMMISSION">{BASE_LABEL.COMMISSION}</option>
         <option value="PRICE_OF_GOODS_SOLD">{BASE_LABEL.PRICE_OF_GOODS_SOLD}</option>
+        {includeTaxableSupply && (
+          <option value="TAXABLE_SUPPLY">{BASE_LABEL.TAXABLE_SUPPLY}</option>
+        )}
         {includeGst && <option value="GST">{BASE_LABEL.GST}</option>}
       </select>
     </label>

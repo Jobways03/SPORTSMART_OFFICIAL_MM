@@ -43,6 +43,9 @@ interface EligibleSellerGroup {
   totalPlatformAmount: Prisma.Decimal;
   totalSettlementAmount: Prisma.Decimal;
   totalPlatformMargin: Prisma.Decimal;
+  // Phase 253 — Σ net taxable supply (ex-GST) of this seller's lines this cycle,
+  // from each line's OrderItemTaxSnapshot. The §52 TCS base (1% × this).
+  totalTaxableSupplyInPaise: bigint;
   totalItems: number;
   orderIds: Set<string>;
 }
@@ -105,6 +108,42 @@ export class SettlementService {
       },
     });
 
+    // Phase 253 — per-line net taxable supply (ex-GST) for the §52 TCS base.
+    // ONE query over every eligible record's order item; a line with no snapshot
+    // (legacy / zero-rated edge) simply contributes 0 to its seller's taxable
+    // total (TCS under-counts that line rather than crashing — forward-only rows
+    // all carry a snapshot). Keyed by orderItemId (CommissionRecord.orderItemId
+    // is @unique, so one record per item → no double count).
+    const eligibleItemIds = pendingRecords
+      .map((r) => r.orderItemId)
+      .filter((id): id is string => !!id);
+    const taxableByItem = new Map<string, bigint>();
+    if (eligibleItemIds.length > 0) {
+      const snaps = await this.prisma.orderItemTaxSnapshot.findMany({
+        where: { orderItemId: { in: eligibleItemIds } },
+        select: { orderItemId: true, taxableAmountInPaise: true },
+      });
+      for (const s of snaps) {
+        if (s.orderItemId != null)
+          taxableByItem.set(s.orderItemId, s.taxableAmountInPaise);
+      }
+    }
+    // Phase 253 — observability: a line with no tax snapshot contributes 0 to its
+    // seller's §52 TCS base (forward-only rows all carry one, but a cycle built
+    // before OrderFinalizationRecoveryCron backfills would silently under-withhold).
+    // Surface it loudly rather than under-withhold in silence.
+    const missingTaxable = eligibleItemIds.filter((id) => !taxableByItem.has(id));
+    if (missingTaxable.length > 0) {
+      this.logger.warn(
+        `Settlement aggregation: ${missingTaxable.length}/${eligibleItemIds.length} ` +
+          `eligible order item(s) have no OrderItemTaxSnapshot — their §52 TCS ` +
+          `taxable base counts as 0 (under-withholding risk). Sample: ` +
+          `${missingTaxable.slice(0, 5).join(', ')}`,
+      );
+    }
+    const taxableOf = (rec: { orderItemId: string | null }): bigint =>
+      (rec.orderItemId ? taxableByItem.get(rec.orderItemId) : undefined) ?? 0n;
+
     const sellerMap = new Map<string, EligibleSellerGroup>();
     for (const rec of pendingRecords) {
       const existing = sellerMap.get(rec.sellerId);
@@ -119,6 +158,7 @@ export class SettlementService {
         existing.totalPlatformMargin = existing.totalPlatformMargin.plus(
           rec.platformMargin,
         );
+        existing.totalTaxableSupplyInPaise += taxableOf(rec);
         existing.totalItems += rec.quantity;
         existing.orderIds.add(rec.subOrderId);
       } else {
@@ -129,6 +169,7 @@ export class SettlementService {
           totalPlatformAmount: new Prisma.Decimal(rec.totalPlatformAmount),
           totalSettlementAmount: new Prisma.Decimal(rec.totalSettlementAmount),
           totalPlatformMargin: new Prisma.Decimal(rec.platformMargin),
+          totalTaxableSupplyInPaise: taxableOf(rec),
           totalItems: rec.quantity,
           orderIds: new Set([rec.subOrderId]),
         });
@@ -321,6 +362,15 @@ export class SettlementService {
             // balance breakdown can show earnings vs adjustments separately.
             approvedSettlementAmount: data.totalSettlementAmount.toFixed(2),
             totalPlatformMargin: data.totalPlatformMargin.toFixed(2),
+            // Phase 253 — net taxable supply (§52 TCS base). Written as both the
+            // Decimal and its paise sibling explicitly (independent of the
+            // dual-write flag) so the TCS hook's 1%×taxable always has its base.
+            totalTaxableSupply: new Prisma.Decimal(
+              data.totalTaxableSupplyInPaise.toString(),
+            )
+              .div(100)
+              .toFixed(2),
+            totalTaxableSupplyInPaise: data.totalTaxableSupplyInPaise,
             status: 'PENDING',
             // Phase 28 — commission-GST denorm columns. Rate stored
             // even when total is 0 so the historical rate snapshot is

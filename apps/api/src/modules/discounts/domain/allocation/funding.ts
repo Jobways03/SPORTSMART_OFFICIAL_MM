@@ -44,6 +44,13 @@ export interface FundingConfig {
 export interface FundingShare {
   liabilityParty: LiabilityParty;
   amountInPaise: bigint;
+  // Phase 251 — per-line attribution ids resolved together with the party
+  // (see resolveItemFundingShares). Written straight onto the ledger row so a
+  // SELLER-funded line that a franchise actually fulfils is attributed to that
+  // franchise. Undefined/null when the party carries no id of that kind.
+  sellerId?: string | null;
+  franchiseId?: string | null;
+  brandId?: string | null;
 }
 
 /**
@@ -194,4 +201,79 @@ export function validateFundingConfig(config: FundingConfig): void {
     default:
       throw new Error(`Unknown fundingType: ${config.fundingType}`);
   }
+}
+
+/**
+ * Phase 251 — funding shares for ONE order line, with per-line routing of a
+ * SELLER-funded discount to the line's ACTUAL fulfiller.
+ *
+ * Why this exists: the allocation cascade (Retail → Franchise → D2C) decides
+ * which node fulfils each line AFTER the coupon is created, so a "seller-funded"
+ * discount cannot be pinned to one party at creation. It must charge whichever
+ * node ends up selling each line:
+ *   - line fulfilled by a marketplace seller → SELLER liability  (sellerId)
+ *   - line fulfilled by a franchise          → FRANCHISE liability (franchiseId)
+ *   - neither resolvable (platform-direct / unknown fulfiller) → PLATFORM-
+ *     absorbed, NOT a SELLER row with a null sellerId that no settlement
+ *     pipeline can recover (the pre-Phase-251 silent-loss bug this fixes).
+ *
+ * Every other fundingType keeps its exact pre-Phase-251 attribution: the party
+ * set comes from splitFundingShares; sellerId is carried from the line on every
+ * row; FRANCHISE uses the discount's pinned franchise (else the line's); BRAND
+ * uses the discount's funded brand. Conservation holds in every branch (the
+ * SELLER branch returns a single full-amount share; the rest delegate to
+ * splitFundingShares which already conserves).
+ */
+export function resolveItemFundingShares(
+  allocationInPaise: bigint,
+  config: FundingConfig,
+  fulfiller: { sellerId?: string | null; franchiseId?: string | null },
+): FundingShare[] {
+  if (config.fundingType === 'SELLER') {
+    if (allocationInPaise <= 0n) return [];
+    if (fulfiller.franchiseId) {
+      return [
+        {
+          liabilityParty: 'FRANCHISE',
+          amountInPaise: allocationInPaise,
+          sellerId: null,
+          franchiseId: fulfiller.franchiseId,
+          brandId: null,
+        },
+      ];
+    }
+    if (fulfiller.sellerId) {
+      return [
+        {
+          liabilityParty: 'SELLER',
+          amountInPaise: allocationInPaise,
+          sellerId: fulfiller.sellerId,
+          franchiseId: null,
+          brandId: null,
+        },
+      ];
+    }
+    // No fulfiller resolvable → platform absorbs rather than stranding the cost.
+    return [
+      {
+        liabilityParty: 'PLATFORM',
+        amountInPaise: allocationInPaise,
+        sellerId: null,
+        franchiseId: null,
+        brandId: null,
+      },
+    ];
+  }
+
+  // PLATFORM / BRAND / FRANCHISE / SHARED / NONE — unchanged party split, with
+  // attribution attached exactly as the pre-Phase-251 ledger-write did.
+  return splitFundingShares(allocationInPaise, config).map((s) => ({
+    ...s,
+    sellerId: fulfiller.sellerId ?? null,
+    franchiseId:
+      s.liabilityParty === 'FRANCHISE'
+        ? (config.franchiseId ?? fulfiller.franchiseId ?? null)
+        : null,
+    brandId: s.liabilityParty === 'BRAND' ? (config.brandId ?? null) : null,
+  }));
 }

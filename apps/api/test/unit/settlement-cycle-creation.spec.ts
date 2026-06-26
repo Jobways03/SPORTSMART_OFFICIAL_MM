@@ -18,6 +18,7 @@ function build(opts: {
   pending?: any[];
   cancelCycle?: any;
   pendingDebits?: any[];
+  taxSnapshots?: any[];
 } = {}) {
   const tx = {
     settlementCycle: {
@@ -48,12 +49,24 @@ function build(opts: {
     },
     commissionRecord: { findMany: jest.fn().mockResolvedValue(opts.pending ?? []) },
     platformGstProfile: { findFirst: jest.fn().mockResolvedValue({ gstStateCode: '29' }) },
+    // Phase 253 — aggregateEligibleCommissions sums the §52 TCS taxable base.
+    orderItemTaxSnapshot: {
+      findMany: jest.fn().mockResolvedValue(opts.taxSnapshots ?? []),
+    },
     // Phase 150 — previewCycle reads pending debits for the claw-back preview.
     sellerDebit: { findMany: jest.fn().mockResolvedValue(opts.pendingDebits ?? []) },
     $transaction: jest.fn(async (fn: any) => fn(tx)),
   };
   const audit = { writeAuditLog: jest.fn().mockResolvedValue(undefined) };
   const moneyDualWrite = { applyPaise: (_k: string, d: any) => d };
+  // Phase 252/253 — createCycle reads commission-GST rate/base from tax_config.
+  const taxConfig = {
+    getSettlementTaxConfig: jest.fn().mockResolvedValue({
+      gst: { rateBps: 1800, baseType: 'COMMISSION', enabled: true },
+      tcs: { rateBps: 100, baseType: 'TAXABLE_SUPPLY', enabled: true },
+      tds: { rateBps: 100, baseType: 'COMMISSION', enabled: false },
+    }),
+  };
   const svc = new SettlementService(
     prisma as any,
     audit as any,
@@ -61,6 +74,7 @@ function build(opts: {
     {} as any, // tcsHook
     {} as any, // tdsHook
     { applyToCycleOnApprove: jest.fn().mockResolvedValue(undefined) } as any, // commissionInvoice
+    taxConfig as any, // Phase 252 — taxConfig (7th ctor arg)
   );
   (svc as any).logger = { error: jest.fn(), log: jest.fn(), warn: jest.fn() };
   return { svc, prisma, tx, audit };
@@ -115,6 +129,21 @@ describe('SettlementService.createCycle (Phase 141)', () => {
     const res = await svc.createCycle(start, end, { adminId: 'a1' });
     expect(res.cycle).toBeNull();
     expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  // Phase 253 — the §52 TCS base (net taxable supply) is summed from each line's
+  // OrderItemTaxSnapshot and written onto the settlement at creation, so the TCS
+  // hook later deducts 1% × this.
+  it('aggregates the §52 taxable base from OrderItemTaxSnapshot onto the settlement', async () => {
+    const recWithItem = [{ ...oneRecord[0], orderItemId: 'oi1' }];
+    const { svc, tx } = build({
+      pending: recWithItem,
+      taxSnapshots: [{ orderItemId: 'oi1', taxableAmountInPaise: 476190n }], // ₹4761.90
+    });
+    await svc.createCycle(start, end, { adminId: 'a1' });
+    const data = tx.sellerSettlement.create.mock.calls[0][0].data;
+    expect(data.totalTaxableSupplyInPaise).toBe(476190n);
+    expect(data.totalTaxableSupply).toBe('4761.90');
   });
 });
 
@@ -303,9 +332,15 @@ describe('SettlementService.cancelCycle (Phase 141)', () => {
     );
   });
 
-  it('refuses to cancel an APPROVED cycle', async () => {
+  // Phase 253 — an APPROVED cycle may now be rejected as long as no settlement
+  // is paid; the guard moved from "APPROVED is frozen" to "paid money is frozen".
+  it('refuses to reject a cycle that already has a paid settlement', async () => {
     const { svc, tx } = build({
-      cancelCycle: { id: 'cyc1', status: 'APPROVED', sellerSettlements: [] },
+      cancelCycle: {
+        id: 'cyc1',
+        status: 'APPROVED',
+        sellerSettlements: [{ id: 'ss1', status: 'PAID' }],
+      },
     });
     await expect(
       svc.cancelCycle('cyc1', { adminId: 'a1' }, 'too late'),

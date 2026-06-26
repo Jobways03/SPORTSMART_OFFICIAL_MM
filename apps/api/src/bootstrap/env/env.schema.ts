@@ -772,6 +772,16 @@ export const envSchema = z.object({
   // sub-order is an independent atomic-claimed transaction; the cap bounds
   // DB-connection pressure.
   COMMISSION_PROCESSOR_CONCURRENCY: z.coerce.number().int().min(1).default(5),
+  // Phase 252 — charge rate-based seller/franchise-online commission on the
+  // GST-EXCLUSIVE taxable supply (like TCS §52) instead of the inclusive price.
+  // OFF by default (legacy inclusive base). Stageable: flip to 'true' on
+  // staging, soak, then prod. Reversible (flip back). Only the percentage/
+  // fallback-rate path moves — contracted settlement-price margins are
+  // unaffected (no rate/base). The optional EFFECTIVE_FROM (ISO date) limits
+  // the new base to orders placed on/after that date, so in-flight pre-cutover
+  // orders that lock after the flip keep the old base.
+  COMMISSION_BASE_TAXABLE: z.string().default('false'),
+  COMMISSION_BASE_TAXABLE_EFFECTIVE_FROM: z.string().default(''),
   // Phase 174 — COD cash-in-hand gate. When ON, a DELIVERED COD sub-order's
   // commission is deferred until its SubOrder.paymentStatus = PAID (cash
   // collected). Default OFF preserves pay-on-delivery; flip after finance

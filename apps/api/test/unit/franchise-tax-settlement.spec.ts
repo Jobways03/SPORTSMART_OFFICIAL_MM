@@ -29,9 +29,11 @@ function makeHook(): { hook: SettlementTds194OHookService; prisma: MockPrisma; t
   // Phase 252 — TDS slice reads the configured base; default to product (PGS).
   const taxConfig = {
     getSettlementTaxConfig: jest.fn().mockResolvedValue({
-      gst: { rateBps: 1800, baseType: 'COMMISSION' },
-      tcs: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
-      tds: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
+      // Phase 253 — `enabled` must be present or the franchise hook's master-
+      // toggle gate skips computation. These tests exercise the deduction path.
+      gst: { rateBps: 1800, baseType: 'COMMISSION', enabled: true },
+      tcs: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD', enabled: true },
+      tds: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD', enabled: true },
     }),
   };
   const hook = new SettlementTds194OHookService(
@@ -224,7 +226,7 @@ describe('FranchiseSettlementService.markSettlementPaid — net-of-tax paidAmoun
       tcsHook,
     );
 
-    await svc.markSettlementPaid('fs-1', 'UTR-FR-12345');
+    await svc.markSettlementPaid('fs-1', { paymentReference: 'UTR-FR-12345' });
 
     // 100_000 − 18_000 − 5_000 − 5_000 = 72_000 paise (₹720).
     expect(flipData.paidAmountInPaise).toBe(72_000n);
@@ -275,7 +277,7 @@ describe('FranchiseSettlementService.markSettlementPaid — net-of-tax paidAmoun
       tcsHook,
     );
 
-    await svc.markSettlementPaid('fs-2', 'UTR-FR-67890');
+    await svc.markSettlementPaid('fs-2', { paymentReference: 'UTR-FR-67890' });
     expect(flipData.paidAmountInPaise).toBe(0n);
   });
 });
@@ -308,9 +310,10 @@ function makeTcsHook(): {
   // unchanged/statutory, so a default stub suffices here).
   const taxConfig = {
     getSettlementTaxConfig: jest.fn().mockResolvedValue({
-      gst: { rateBps: 1800, baseType: 'COMMISSION' },
-      tcs: { rateBps: 100, baseType: 'GST' },
-      tds: { rateBps: 100, baseType: 'COMMISSION' },
+      // Phase 253 — `enabled` required or the franchise TCS gate skips compute.
+      gst: { rateBps: 1800, baseType: 'COMMISSION', enabled: true },
+      tcs: { rateBps: 100, baseType: 'TAXABLE_SUPPLY', enabled: true },
+      tds: { rateBps: 100, baseType: 'COMMISSION', enabled: false },
     }),
   };
   const hook = new SettlementTcsHookService(

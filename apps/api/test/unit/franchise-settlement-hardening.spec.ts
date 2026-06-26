@@ -161,11 +161,12 @@ describe('FranchiseSettlementService.markSettlementPaid — B3 / #16 (atomic CAS
 
   it('flips APPROVED→PAID and SETTLES the ledger in one transaction (CAS wins)', async () => {
     const { svc, tx, eventBus } = build('APPROVED', 1);
-    await svc.markSettlementPaid('s1', 'UTR1234567890');
+    await svc.markSettlementPaid('s1', { paymentReference: 'UTR1234567890' });
 
     expect(tx.franchiseSettlement.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 's1', status: 'APPROVED' },
+        // CAS now also admits a FAILED settlement (a payout retry), not APPROVED only.
+        where: { id: 's1', status: { in: ['APPROVED', 'FAILED'] } },
         data: expect.objectContaining({ status: 'PAID' }),
       }),
     );
@@ -180,7 +181,7 @@ describe('FranchiseSettlementService.markSettlementPaid — B3 / #16 (atomic CAS
 
   it('a concurrent loser (CAS count 0) aborts WITHOUT settling the ledger', async () => {
     const { svc, ledgerUpdate } = build('APPROVED', 0);
-    await expect(svc.markSettlementPaid('s1', 'UTR1234567890')).rejects.toBeInstanceOf(
+    await expect(svc.markSettlementPaid('s1', { paymentReference: 'UTR1234567890' })).rejects.toBeInstanceOf(
       BadRequestAppException,
     );
     expect(ledgerUpdate).not.toHaveBeenCalled();
@@ -188,7 +189,7 @@ describe('FranchiseSettlementService.markSettlementPaid — B3 / #16 (atomic CAS
 
   it('rejects a non-APPROVED settlement up front', async () => {
     const { svc } = build('PAID', 1);
-    await expect(svc.markSettlementPaid('s1', 'UTR1234567890')).rejects.toBeInstanceOf(
+    await expect(svc.markSettlementPaid('s1', { paymentReference: 'UTR1234567890' })).rejects.toBeInstanceOf(
       BadRequestAppException,
     );
   });

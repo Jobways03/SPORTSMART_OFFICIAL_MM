@@ -55,6 +55,14 @@ locals {
     ADMIN_PORTAL_URL_RETAIL    = "https://${local.service_hosts["web-retail-seller-admin"]}"
     ADMIN_PORTAL_URL_FRANCHISE = "https://${local.service_hosts["web-franchise-admin"]}"
     ADMIN_PORTAL_URL_AFFILIATE = "https://${local.service_hosts["web-affiliate-admin"]}"
+    # Phase 252 — charge rate-based seller + franchise-online commission on the
+    # GST-EXCLUSIVE taxable base (like TCS §52) instead of the inclusive price.
+    # ON in staging to soak the new policy; OFF in production (still under
+    # review). INERT until the API image carrying the commission-on-taxable code
+    # is deployed — the old image never reads this flag. Reversible: flip the
+    # value (or the condition) and re-apply. Forward-only — existing locked
+    # commission records keep their inclusive-base values.
+    COMMISSION_BASE_TAXABLE = var.env == "production" ? "false" : "true"
   }
   api_environment = [
     for k, v in merge(local.api_base_environment, var.api_extra_environment) : {

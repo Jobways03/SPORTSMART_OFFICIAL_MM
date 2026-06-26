@@ -23,6 +23,30 @@ import {
   SellerProductMapping,
 } from '../../domain/repositories/commission.repository.interface';
 
+/**
+ * Phase 252 — pure money math for charging rate-based commission on the
+ * GST-EXCLUSIVE taxable supply instead of the inclusive price. `taxablePaise`
+ * is the per-line taxable value from the tax snapshot (already net of any
+ * pre-supply discount); `totalPlatformAmount` is the inclusive line revenue
+ * (kept as the revenue figure — only the commission/settlement split moves).
+ * Commission is clamped to never exceed revenue. Returns 2dp Decimals.
+ */
+export function rateCommissionOnTaxable(args: {
+  totalPlatformAmount: Prisma.Decimal;
+  taxablePaise: bigint;
+  ratePercent: number;
+}): { commission: Prisma.Decimal; settlement: Prisma.Decimal } {
+  const taxableLine = new Prisma.Decimal(args.taxablePaise.toString()).div(100);
+  let commission = taxableLine
+    .mul(args.ratePercent)
+    .div(100)
+    .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+  if (commission.gt(args.totalPlatformAmount)) {
+    commission = args.totalPlatformAmount;
+  }
+  return { commission, settlement: args.totalPlatformAmount.minus(commission) };
+}
+
 const LOCK_KEY = 'lock:commission-processor';
 const LOCK_TTL = 30; // 30 seconds lock
 // Cluster-B — instrumentation job name (cron_runs + Prometheus labels).
@@ -276,6 +300,13 @@ export class CommissionProcessorService {
       const mappings =
         await this.commissionRepo.getSellerProductMappingsBatch(keys);
 
+      // Phase 252 — prefetch the per-line GST-exclusive taxable base for the
+      // whole tick (one query), but only when the policy is enabled — no point
+      // querying when commission stays on the inclusive base.
+      const taxableByItem = this.env.getBoolean('COMMISSION_BASE_TAXABLE', false)
+        ? await this.prefetchTaxableByItem(subOrders)
+        : new Map<string, bigint>();
+
       // Phase 135 — bounded-parallel processing. Each sub-order is independent
       // (per-sub-order atomic-claim), so concurrency is safe; the cap bounds
       // DB-connection pressure. A failing sub-order is isolated → DLQ + skip,
@@ -291,6 +322,7 @@ export class CommissionProcessorService {
             fallbackRatePercent,
             'cron',
             mappings,
+            taxableByItem,
           );
           if (didProcess) processed++;
         } catch (err) {
@@ -327,6 +359,63 @@ export class CommissionProcessorService {
   }
 
   /**
+   * Phase 252 — should rate-based commission be charged on the GST-EXCLUSIVE
+   * taxable supply (vs the legacy inclusive price)? Config-gated so the policy
+   * switch is stageable + reversible. `COMMISSION_BASE_TAXABLE` is the master
+   * flag; the optional `COMMISSION_BASE_TAXABLE_EFFECTIVE_FROM` (ISO date)
+   * limits it to orders placed on/after that date so a pre-cutover order that
+   * locks after the flip keeps the old base. Only the percentage/fallback-rate
+   * path is affected — contracted settlement-price margins have no rate/base.
+   */
+  private commissionOnTaxableBase(so: any): boolean {
+    if (!this.env.getBoolean('COMMISSION_BASE_TAXABLE', false)) return false;
+    const fromStr = this.env.getString(
+      'COMMISSION_BASE_TAXABLE_EFFECTIVE_FROM',
+      '',
+    );
+    if (!fromStr) return true;
+    const from = new Date(fromStr);
+    if (Number.isNaN(from.getTime())) return true; // misconfigured → don't block the policy
+    const orderDate = so?.masterOrder?.createdAt ?? so?.createdAt ?? null;
+    return orderDate ? new Date(orderDate) >= from : true;
+  }
+
+  /**
+   * Phase 252 — Map<orderItemId, taxableAmountInPaise> for every item in the
+   * given sub-orders, in ONE query (no N+1). The taxable amount is the per-line
+   * GST-exclusive value the tax engine snapshotted at order placement (already
+   * net of any pre-supply discount). Items with no snapshot are simply absent
+   * → the caller falls back to the inclusive base, never to zero.
+   */
+  private async prefetchTaxableByItem(
+    subOrders: any[],
+  ): Promise<Map<string, bigint>> {
+    const itemIds = subOrders.flatMap((so: any) =>
+      ((so.items ?? []) as any[]).map((it) => it.id as string),
+    );
+    const map = new Map<string, bigint>();
+    if (itemIds.length === 0) return map;
+    try {
+      const snaps = await this.prisma.orderItemTaxSnapshot.findMany({
+        where: { orderItemId: { in: itemIds } },
+        select: { orderItemId: true, taxableAmountInPaise: true },
+      });
+      for (const s of snaps) {
+        if (s.orderItemId != null) map.set(s.orderItemId, s.taxableAmountInPaise);
+      }
+    } catch (err) {
+      // Never let a snapshot-read failure break commission locking — fall back
+      // to the inclusive base (an absent item is treated as inclusive).
+      this.logger.warn(
+        `prefetchTaxableByItem failed; commission falls back to inclusive base: ${
+          (err as Error)?.message
+        }`,
+      );
+    }
+    return map;
+  }
+
+  /**
    * Builds + persists commission records for a single sub-order, then
    * publishes commission.locked. Pulled out of processCommissions() so
    * the same path is reused by the immediate-trigger entry point on
@@ -341,9 +430,15 @@ export class CommissionProcessorService {
     // Phase 135 — settlement mappings prefetched once for the whole tick
     // (kills the per-item N+1). Keyed by sellerId:productId:variantId.
     mappings: Map<string, SellerProductMapping>,
+    // Phase 252 — per-line GST-exclusive taxable base, keyed by orderItemId.
+    // Empty/absent → fall back to the inclusive base (legacy behavior).
+    taxableByItem: Map<string, bigint> = new Map(),
   ): Promise<boolean> {
     const sellerName = so.seller?.sellerShopName || 'Unknown';
     const orderNumber = so.masterOrder.orderNumber;
+
+    // Phase 252 — evaluate the taxable-base policy once per sub-order.
+    const taxableBaseOn = this.commissionOnTaxableBase(so);
 
     const records: CreateCommissionRecordData[] = [];
     // Phase 135 — accumulate per-sub-order event totals as exact Decimals
@@ -399,8 +494,36 @@ export class CommissionProcessorService {
       }
 
       const totalPlatformAmount = platformPrice.mul(quantity);
-      const totalSettlementAmount = settlementPrice.mul(quantity);
-      const platformMargin = totalPlatformAmount.minus(totalSettlementAmount);
+      let totalSettlementAmount = settlementPrice.mul(quantity);
+      let platformMargin = totalPlatformAmount.minus(totalSettlementAmount);
+
+      // Phase 252 — charge the RATE-based commission on the GST-EXCLUSIVE
+      // taxable supply (the snapshot's taxableAmountInPaise, already net of any
+      // pre-supply discount) instead of the inclusive price, matching TCS §52.
+      // Only the fallback/global-RATE path is touched (usedFallbackRate);
+      // contracted settlement-price margins are a fixed rupee figure with no
+      // rate/base and are left exactly as negotiated. Revenue
+      // (totalPlatformAmount) is NOT changed — the reconciliation invariant
+      // platformMargin = revenue − settlement is preserved. No snapshot for an
+      // item → keep the inclusive base (never zero).
+      if (usedFallbackRate && taxableBaseOn) {
+        const taxablePaise = taxableByItem.get(item.id);
+        if (taxablePaise != null) {
+          const { commission, settlement } = rateCommissionOnTaxable({
+            totalPlatformAmount,
+            taxablePaise,
+            ratePercent: fallbackRatePercent,
+          });
+          platformMargin = commission;
+          totalSettlementAmount = settlement;
+          // Re-derive the per-unit fields so the persisted record stays
+          // internally consistent (the line-level totals above are
+          // authoritative for the money + the reconciliation invariant).
+          settlementPrice =
+            quantity > 0 ? totalSettlementAmount.div(quantity) : settlementPrice;
+          unitMargin = quantity > 0 ? commission.div(quantity) : commission;
+        }
+      }
 
       // Legacy / label fields.
       const totalItemPrice = new Prisma.Decimal(item.totalPrice);
@@ -562,7 +685,18 @@ export class CommissionProcessorService {
     const mappings =
       await this.commissionRepo.getSellerProductMappingsBatch(keys);
 
-    await this.lockSubOrderCommission(so, fallbackRatePercent, reason, mappings);
+    // Phase 252 — taxable base for this one sub-order's items (only when on).
+    const taxableByItem = this.env.getBoolean('COMMISSION_BASE_TAXABLE', false)
+      ? await this.prefetchTaxableByItem([so])
+      : new Map<string, bigint>();
+
+    await this.lockSubOrderCommission(
+      so,
+      fallbackRatePercent,
+      reason,
+      mappings,
+      taxableByItem,
+    );
   }
 
   /* ── Admin: commission records ──────────────────────────────────── */

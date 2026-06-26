@@ -211,25 +211,28 @@ export class TaxConfigService {
       const v = await this.getString(key, fallback);
       return isSettlementTaxBaseType(v) ? v : fallback;
     };
-    // enabled flags default to true (missing key => on). The saved rate is
-    // returned as-is even when disabled, so the editor still shows it and the
-    // toggle is a pure on/off — the calc paths (commission-GST at settlement
-    // creation, TCS / TDS hooks) check `enabled` and skip when it's false.
+    // enabled flags fall back to the DEFAULT_SETTLEMENT_TAX_CONFIG value when the
+    // tax_config key is absent (Phase 253: gst/tcs on, §194-O TDS off per the
+    // CA-approved model). The saved rate is returned as-is even when disabled, so
+    // the editor still shows it and the toggle is a pure on/off — the calc paths
+    // (commission-GST at settlement creation, TCS / TDS hooks) check `enabled`
+    // and skip when it's false. (Previously these fell back to a hardcoded `true`
+    // which would have kept §194-O on regardless of the default.)
     return {
       gst: {
         rateBps: await this.getNumber('commission_gst_rate_bps', d.gst.rateBps),
         baseType: await baseOf('commission_gst_base_type', d.gst.baseType),
-        enabled: await this.getBoolean('commission_gst_enabled', true),
+        enabled: await this.getBoolean('commission_gst_enabled', d.gst.enabled),
       },
       tcs: {
         rateBps: await this.getNumber('tcs_rate_bps', d.tcs.rateBps),
         baseType: await baseOf('tcs_base_type', d.tcs.baseType),
-        enabled: await this.getBoolean('tcs_enabled', true),
+        enabled: await this.getBoolean('tcs_enabled', d.tcs.enabled),
       },
       tds: {
         rateBps: await this.getNumber('tds_rate_bps', d.tds.rateBps),
         baseType: await baseOf('tds_base_type', d.tds.baseType),
-        enabled: await this.getBoolean('tds_enabled', true),
+        enabled: await this.getBoolean('tds_enabled', d.tds.enabled),
       },
     };
   }
@@ -253,7 +256,9 @@ export class TaxConfigService {
     const base = (v: string | undefined, label: string): string | undefined => {
       if (v === undefined) return undefined;
       if (!isSettlementTaxBaseType(v)) {
-        throw new Error(`${label} base must be COMMISSION or PRICE_OF_GOODS_SOLD`);
+        throw new Error(
+          `${label} base must be one of COMMISSION, PRICE_OF_GOODS_SOLD, GST, TAXABLE_SUPPLY`,
+        );
       }
       return v;
     };

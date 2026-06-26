@@ -39,6 +39,13 @@ function build(opts: {
     {} as any,
     {} as any,
     { applyToCycleOnApprove: jest.fn().mockResolvedValue(undefined) } as any, // commissionInvoice
+    {
+      getSettlementTaxConfig: jest.fn().mockResolvedValue({
+        gst: { rateBps: 1800, baseType: 'COMMISSION', enabled: true },
+        tcs: { rateBps: 100, baseType: 'TAXABLE_SUPPLY', enabled: true },
+        tds: { rateBps: 100, baseType: 'COMMISSION', enabled: false },
+      }),
+    } as any, // Phase 252 — taxConfig (7th ctor arg)
   );
   (svc as any).logger = { error: jest.fn(), log: jest.fn(), warn: jest.fn() };
   return { svc, sellerFindMany, franchiseFindMany };

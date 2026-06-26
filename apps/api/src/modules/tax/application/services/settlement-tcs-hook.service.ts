@@ -32,6 +32,7 @@
 //   - apps/api/src/modules/tax/application/services/tcs.service.ts
 
 import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import type { SellerSettlement } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { TcsService } from './tcs.service';
@@ -243,10 +244,15 @@ export class SettlementTcsHookService {
     settlementId: string,
     rateBps: number,
   ): Promise<bigint> {
-    // Phase 252 — TCS slice on the CONFIGURED base, computed from the
-    // settlement's own columns so it reconciles with the monthly ledger (which
-    // aggregates the same columns). Default base = GST (the commission-GST
-    // amount), i.e. "TCS on GST".
+    // Phase 253 (CA-approved model) — TCS slice on the CONFIGURED base, computed
+    // from the settlement's own columns so it reconciles with the monthly ledger.
+    // Default base = TAXABLE_SUPPLY (the net taxable value of the supplies, ex-
+    // GST), i.e. the legally-correct §52 base: 1% × ₹4761.90 = ₹47.62 on a ₹5000
+    // incl @5% sale. totalTaxableSupplyInPaise is stamped at cycle creation from
+    // each line's OrderItemTaxSnapshot — the SAME taxable the monthly GSTR-8
+    // ledger uses, so Σ(per-settlement slices) reconciles to the monthly deposit.
+    // (The legacy 'GST' base levied 1% on the tiny commission-GST figure, under-
+    // withholding while the ledger correctly deposited 1% of the taxable supply.)
     const cfg = (await this.taxConfig.getSettlementTaxConfig()).tcs;
     const s = await this.prisma.sellerSettlement.findUnique({
       where: { id: settlementId },
@@ -254,6 +260,7 @@ export class SettlementTcsHookService {
         totalPlatformMarginInPaise: true,
         totalPlatformAmountInPaise: true,
         totalCommissionGstInPaise: true,
+        totalTaxableSupplyInPaise: true,
       },
     });
     if (!s) return 0n;
@@ -261,6 +268,7 @@ export class SettlementTcsHookService {
       commissionInPaise: s.totalPlatformMarginInPaise,
       priceOfGoodsSoldInPaise: s.totalPlatformAmountInPaise,
       gstInPaise: s.totalCommissionGstInPaise,
+      taxableSupplyInPaise: s.totalTaxableSupplyInPaise,
     });
     if (base <= 0n) return 0n;
     // rate is in basis points (100 = 1%); round half-up.
@@ -294,6 +302,14 @@ export class SettlementTcsHookService {
       return { stamped: false, skipped: true, tcsInPaise: 0n };
     }
 
+    // Phase 253 — master toggle parity with the seller path (applyToCycleOnApprove
+    // line ~89): when §52 TCS is OFF in the settlement tax config, skip the
+    // franchise settlement entirely — no GSTR-8 ledger, no deduction. (The seller
+    // path gated; the franchise path did not.)
+    if (!(await this.taxConfig.getSettlementTaxConfig()).tcs.enabled) {
+      return { stamped: false, skipped: true, tcsInPaise: 0n };
+    }
+
     const filingPeriod = TcsService.filingPeriodOf(s.cycle.periodEnd);
     // Monthly GSTR-8 ledger (deposited once for the period). NOT the amount
     // deducted from this single settlement.
@@ -305,11 +321,12 @@ export class SettlementTcsHookService {
         `Franchise settlement ${s.id} approved → filing period ${filingPeriod}`,
     });
 
-    const perSettlementTcsInPaise = await this.computeFranchiseSettlementTcs(
-      s.id,
-      s.franchiseId,
-      ledger.tcsRateBps,
-    );
+    const { tcsInPaise: perSettlementTcsInPaise, taxableInPaise } =
+      await this.computeFranchiseSettlementTcs(
+        s.id,
+        s.franchiseId,
+        ledger.tcsRateBps,
+      );
     await this.prisma.franchiseSettlement.update({
       where: { id: s.id },
       data: {
@@ -317,6 +334,12 @@ export class SettlementTcsHookService {
         tcsDeductedInPaise: perSettlementTcsInPaise,
         tcsRateBpsSnapshot: ledger.tcsRateBps,
         tcsFilingPeriod: filingPeriod,
+        // Phase 253 — stamp the §52 TCS base (net taxable supply) for the payout
+        // statement + reconciliation, mirroring SellerSettlement.
+        totalTaxableSupply: new Prisma.Decimal(taxableInPaise.toString())
+          .div(100)
+          .toFixed(2),
+        totalTaxableSupplyInPaise: taxableInPaise,
       },
     });
     return { stamped: true, skipped: false, tcsInPaise: perSettlementTcsInPaise };
@@ -333,7 +356,7 @@ export class SettlementTcsHookService {
     settlementId: string,
     franchiseId: string,
     rateBps: number,
-  ): Promise<bigint> {
+  ): Promise<{ tcsInPaise: bigint; taxableInPaise: bigint }> {
     const entries = await this.prisma.franchiseFinanceLedger.findMany({
       where: { settlementBatchId: settlementId, sourceType: 'ONLINE_ORDER' },
       select: { sourceId: true },
@@ -341,7 +364,8 @@ export class SettlementTcsHookService {
     const subOrderIds = entries
       .map((e) => e.sourceId)
       .filter((id): id is string => !!id);
-    if (subOrderIds.length === 0) return 0n;
+    if (subOrderIds.length === 0)
+      return { tcsInPaise: 0n, taxableInPaise: 0n };
 
     const docs = await this.prisma.taxDocument.findMany({
       where: {
@@ -365,8 +389,11 @@ export class SettlementTcsHookService {
       if (d.documentType === 'CREDIT_NOTE') taxable -= d.taxableAmountInPaise;
       else taxable += d.taxableAmountInPaise;
     }
-    if (taxable <= 0n) return 0n;
-    return (taxable * BigInt(rateBps) + 5000n) / 10000n;
+    if (taxable <= 0n) return { tcsInPaise: 0n, taxableInPaise: 0n };
+    return {
+      tcsInPaise: (taxable * BigInt(rateBps) + 5000n) / 10000n,
+      taxableInPaise: taxable,
+    };
   }
 
   /**

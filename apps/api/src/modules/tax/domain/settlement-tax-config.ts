@@ -15,7 +15,17 @@
 export const SETTLEMENT_TAX_BASE_TYPES = [
   'COMMISSION', // the platform's commission / margin on the seller's sales
   'PRICE_OF_GOODS_SOLD', // the gross order value the platform facilitated (net of refunds)
-  'GST', // the commission-GST amount (TCS is levied on this — "TCS on GST")
+  'GST', // the commission-GST amount ("TCS on GST" — LEGACY, superseded; see below)
+  // Phase 253 (CA-approved model) — the net TAXABLE supply value (sale ex-GST).
+  // This is the legally-correct §52 TCS base: 1% of the taxable value of the
+  // supplies the operator facilitated, NOT the commission-GST. The CA-approved
+  // worked example (₹5000 incl @5% → taxable ₹4761.90 → TCS ₹47.62) levies §52
+  // TCS on this. Sourced per-settlement from each line's OrderItemTaxSnapshot
+  // (the same taxable value the monthly GSTR-8 ledger uses), so the per-payout
+  // slice now reconciles to the monthly deposit by construction. The earlier
+  // 'GST' default under-withheld TCS on the tiny commission-GST figure while the
+  // GSTR-8 ledger correctly deposited 1% of the taxable supply.
+  'TAXABLE_SUPPLY',
 ] as const;
 export type SettlementTaxBaseType = (typeof SETTLEMENT_TAX_BASE_TYPES)[number];
 
@@ -44,13 +54,20 @@ export interface SettlementTaxConfig {
   tds: OneTaxConfig;
 }
 
-// Defaults: GST 18% on commission; TCS 1% on the commission-GST amount ("TCS on
-// GST", per the team); TDS 1% on commission (per the CA). These are read by the
-// statutory engine and editable in the admin "Settlement Charges" page.
+// Defaults (Phase 253 — CA-approved model):
+//   GST 18% on commission (vendor reclaims as ITC);
+//   §52 TCS 1% on the net TAXABLE supply (sale ex-GST) — the legally-correct
+//     base, replacing the earlier 'GST'/commission-GST base that under-withheld;
+//   §194-O TDS DISABLED — the CA-approved settlement model deducts only
+//     commission + commission-GST + TCS (no TDS line). Reversible: flip
+//     `tds.enabled` back on (admin "Settlement Charges" page or the tds_enabled
+//     tax_config key) to restore §194-O withholding on the saved rate/base.
+// These are read by the statutory engine and editable in the admin "Settlement
+// Charges" page.
 export const DEFAULT_SETTLEMENT_TAX_CONFIG: SettlementTaxConfig = {
   gst: { rateBps: 1800, baseType: 'COMMISSION', enabled: true },
-  tcs: { rateBps: 100, baseType: 'GST', enabled: true },
-  tds: { rateBps: 100, baseType: 'COMMISSION', enabled: true },
+  tcs: { rateBps: 100, baseType: 'TAXABLE_SUPPLY', enabled: true },
+  tds: { rateBps: 100, baseType: 'COMMISSION', enabled: false },
 };
 
 /**
@@ -64,6 +81,8 @@ export function resolveTaxBaseInPaise(
     commissionInPaise: bigint;
     priceOfGoodsSoldInPaise: bigint;
     gstInPaise: bigint;
+    // Phase 253 — net taxable supply (ex-GST); the §52 TCS base.
+    taxableSupplyInPaise: bigint;
   },
 ): bigint {
   switch (baseType) {
@@ -73,6 +92,8 @@ export function resolveTaxBaseInPaise(
       return bases.priceOfGoodsSoldInPaise;
     case 'GST':
       return bases.gstInPaise;
+    case 'TAXABLE_SUPPLY':
+      return bases.taxableSupplyInPaise;
     default:
       return bases.commissionInPaise;
   }

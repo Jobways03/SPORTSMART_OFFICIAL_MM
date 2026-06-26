@@ -1027,203 +1027,58 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
             <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4, display: 'block' }}>
               Funding type
             </label>
-            <select
-              value={fundingType}
-              onChange={(e) => {
-                const v = e.target.value as
-                  | 'PLATFORM'
-                  | 'SELLER'
-                  | 'BRAND'
-                  | 'FRANCHISE'
-                  | 'SHARED';
-                setFundingType(v);
-                // Auto-fill the percent fields to match the chosen type.
-                if (v === 'PLATFORM') {
-                  setPlatformFundingPercent('100');
-                  setSellerFundingPercent('0');
-                  setBrandFundingPercent('0');
-                  setFranchiseFundingPercent('0');
-                  setCommissionBasis('GROSS');
-                } else if (v === 'SELLER') {
-                  setPlatformFundingPercent('0');
-                  setSellerFundingPercent('100');
-                  setBrandFundingPercent('0');
-                  setFranchiseFundingPercent('0');
-                  setCommissionBasis('NET_AFTER_DISCOUNT');
-                } else if (v === 'BRAND') {
-                  setPlatformFundingPercent('0');
-                  setSellerFundingPercent('0');
-                  setBrandFundingPercent('100');
-                  setFranchiseFundingPercent('0');
-                  setCommissionBasis('GROSS');
-                } else if (v === 'FRANCHISE') {
-                  setPlatformFundingPercent('0');
-                  setSellerFundingPercent('0');
-                  setBrandFundingPercent('0');
-                  setFranchiseFundingPercent('100');
-                  setCommissionBasis('GROSS');
-                } else {
-                  // SHARED — leave as user-entered; default to 50/50 if empty
-                  if (
-                    parseFloat(platformFundingPercent) +
-                      parseFloat(sellerFundingPercent) +
-                      parseFloat(brandFundingPercent) +
-                      parseFloat(franchiseFundingPercent) ===
-                    0
-                  ) {
-                    setPlatformFundingPercent('50');
-                    setSellerFundingPercent('50');
+            {fundingType !== 'PLATFORM' && fundingType !== 'SELLER' ? (
+              // Legacy funding type (BRAND / FRANCHISE / SHARED) is no longer
+              // offered for new discounts. Show it read-only so editing other
+              // fields doesn't silently coerce the value (the 2-option select
+              // would have no matching option). To change funding, recreate the
+              // discount.
+              <div
+                style={{
+                  ...input,
+                  marginBottom: 12,
+                  display: 'flex',
+                  alignItems: 'center',
+                  color: '#6b7280',
+                  background: '#f9fafb',
+                }}
+              >
+                {`(legacy) ${fundingType.charAt(0)}${fundingType
+                  .slice(1)
+                  .toLowerCase()} funded — read-only`}
+              </div>
+            ) : (
+              <select
+                value={fundingType}
+                onChange={(e) => {
+                  const v = e.target.value as 'PLATFORM' | 'SELLER';
+                  setFundingType(v);
+                  // Auto-fill the percent fields + commission basis to match.
+                  if (v === 'PLATFORM') {
+                    setPlatformFundingPercent('100');
+                    setSellerFundingPercent('0');
+                    setBrandFundingPercent('0');
+                    setFranchiseFundingPercent('0');
+                    setCommissionBasis('GROSS');
+                  } else {
+                    // SELLER — the node that fulfills each line (a marketplace
+                    // seller or a franchise) bears the discount; routed per line
+                    // to that node's settlement by the allocation engine.
+                    setPlatformFundingPercent('0');
+                    setSellerFundingPercent('100');
+                    setBrandFundingPercent('0');
+                    setFranchiseFundingPercent('0');
+                    setCommissionBasis('NET_AFTER_DISCOUNT');
                   }
-                  setCommissionBasis('SELLER_FUNDED_NET');
-                }
-              }}
-              style={{ ...input, marginBottom: 12 }}
-            >
-              <option value="PLATFORM">Platform funded (marketing expense)</option>
-              <option value="SELLER">Seller funded</option>
-              <option value="BRAND">Brand funded</option>
-              <option value="FRANCHISE">Franchise funded</option>
-              <option value="SHARED">Shared (split percentages)</option>
-            </select>
-
-            {fundingType === 'SHARED' && (
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10, marginBottom: 12 }}>
-                <div>
-                  <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Platform %</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={platformFundingPercent}
-                    onChange={(e) => setPlatformFundingPercent(e.target.value)}
-                    style={input}
-                  />
-                </div>
-                <div>
-                  <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Seller %</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={sellerFundingPercent}
-                    onChange={(e) => setSellerFundingPercent(e.target.value)}
-                    style={input}
-                  />
-                </div>
-                <div>
-                  <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Brand %</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={brandFundingPercent}
-                    onChange={(e) => setBrandFundingPercent(e.target.value)}
-                    style={input}
-                  />
-                </div>
-                <div>
-                  <label style={{ fontSize: 11, color: '#6b7280', fontWeight: 600 }}>Franchise %</label>
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={franchiseFundingPercent}
-                    onChange={(e) => setFranchiseFundingPercent(e.target.value)}
-                    style={input}
-                  />
-                </div>
-              </div>
+                }}
+                style={{ ...input, marginBottom: 12 }}
+              >
+                <option value="PLATFORM">Platform funded (default)</option>
+                <option value="SELLER">
+                  Seller funded (fulfilling seller/franchise bears it)
+                </option>
+              </select>
             )}
-
-            {/* Franchise picker — shown for FRANCHISE funding or a SHARED split
-                with a franchise share. franchiseId is optional (blank = the
-                fulfilling franchise pays). */}
-            {(fundingType === 'FRANCHISE' ||
-              (fundingType === 'SHARED' && (parseFloat(franchiseFundingPercent) || 0) > 0)) && (
-              <div style={{ marginBottom: 12 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4, display: 'block' }}>
-                  Funding franchise
-                </label>
-                {franchises.length > 0 ? (
-                  <select
-                    value={franchiseId}
-                    onChange={(e) => setFranchiseId(e.target.value)}
-                    style={input}
-                  >
-                    <option value="">The fulfilling franchise pays</option>
-                    {franchises.map((f) => (
-                      <option key={f.id} value={f.id}>
-                        {[f.franchiseCode, f.businessName].filter(Boolean).join(' — ') || f.id}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    value={franchiseId}
-                    onChange={(e) => setFranchiseId(e.target.value)}
-                    placeholder="Franchise ID (optional)"
-                    style={input}
-                  />
-                )}
-                <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
-                  Leave blank = the fulfilling franchise pays.
-                </div>
-              </div>
-            )}
-
-            {/* Brand picker — shown (and REQUIRED) for BRAND funding or a SHARED
-                split with a brand share. */}
-            {(fundingType === 'BRAND' ||
-              (fundingType === 'SHARED' && (parseFloat(brandFundingPercent) || 0) > 0)) && (
-              <div style={{ marginBottom: 12 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4, display: 'block' }}>
-                  Funding brand <span style={{ color: '#dc2626' }}>*</span>
-                </label>
-                {brands.length > 0 ? (
-                  <select
-                    value={brandId}
-                    onChange={(e) => setBrandId(e.target.value)}
-                    style={input}
-                  >
-                    <option value="">Select a brand…</option>
-                    {brands.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name || b.id}
-                      </option>
-                    ))}
-                  </select>
-                ) : (
-                  <input
-                    type="text"
-                    value={brandId}
-                    onChange={(e) => setBrandId(e.target.value)}
-                    placeholder="Brand ID (required)"
-                    style={input}
-                  />
-                )}
-                <div style={{ fontSize: 11, color: '#6b7280', marginTop: 4 }}>
-                  Required — the brand whose co-funding budget absorbs this discount.
-                </div>
-              </div>
-            )}
-
-            <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4, display: 'block' }}>
-              Commission basis
-            </label>
-            <select
-              value={commissionBasis}
-              onChange={(e) =>
-                setCommissionBasis(
-                  e.target.value as 'GROSS' | 'NET_AFTER_DISCOUNT' | 'SELLER_FUNDED_NET',
-                )
-              }
-              style={{ ...input, marginBottom: 12 }}
-            >
-              <option value="GROSS">Gross — commission on pre-discount price</option>
-              <option value="NET_AFTER_DISCOUNT">Net after discount</option>
-              <option value="SELLER_FUNDED_NET">Net of seller-funded share only</option>
-            </select>
 
             <label style={{ fontSize: 12, fontWeight: 600, color: '#374151', marginBottom: 4, display: 'block' }}>
               Internal notes (not shown to customer)
@@ -1238,13 +1093,10 @@ export default function DiscountForm({ discountId, discountType }: { discountId?
 
             <div style={{ marginTop: 8, fontSize: 11, color: '#6b7280', lineHeight: 1.5 }}>
               <div>
-                <strong>Platform-funded:</strong> seller is paid as if customer paid full price; platform absorbs the discount.
+                <strong>Platform-funded:</strong> seller is paid as if the customer paid full price; the platform absorbs the discount.
               </div>
               <div>
-                <strong>Seller-funded:</strong> seller settlement reduced by the discount amount.
-              </div>
-              <div>
-                <strong>Franchise-funded:</strong> the franchise bears the discount cost; deducted from its settlement (blank franchise = the fulfilling franchise pays).
+                <strong>Seller-funded:</strong> the node that fulfills each line — a marketplace seller or a franchise — bears the discount; it&apos;s deducted from that node&apos;s settlement.
               </div>
             </div>
           </section>

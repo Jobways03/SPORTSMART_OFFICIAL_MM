@@ -57,6 +57,8 @@ export const MONEY_FIELD_REGISTRY: Readonly<
       paise: 'totalSettlementAmountInPaise',
     },
     { decimal: 'totalPlatformMargin', paise: 'totalPlatformMarginInPaise' },
+    // Phase 253 — net taxable supply (§52 TCS base).
+    { decimal: 'totalTaxableSupply', paise: 'totalTaxableSupplyInPaise' },
   ],
   settlementAdjustment: [{ decimal: 'amount', paise: 'amountInPaise' }],
 

@@ -46,9 +46,11 @@ function makeService(): {
   // so these tests keep computing on totalPlatformAmountInPaise.
   const taxConfig = {
     getSettlementTaxConfig: jest.fn().mockResolvedValue({
-      gst: { rateBps: 1800, baseType: 'COMMISSION' },
-      tcs: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
-      tds: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD' },
+      // Phase 253 — `enabled` required or the master-toggle gate skips compute;
+      // these tests exercise the §194-O deduction path, so TDS is enabled here.
+      gst: { rateBps: 1800, baseType: 'COMMISSION', enabled: true },
+      tcs: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD', enabled: true },
+      tds: { rateBps: 100, baseType: 'PRICE_OF_GOODS_SOLD', enabled: true },
     }),
   };
   const service = new SettlementTds194OHookService(

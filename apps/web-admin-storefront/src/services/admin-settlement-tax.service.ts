@@ -6,7 +6,14 @@ import { apiClient } from '@/lib/api-client';
 // commission, not product") is a config edit that flows to BOTH the payout AND
 // the GSTR-8 / Form-26Q / GSTR-1 filings.
 
-export type TaxBaseType = 'COMMISSION' | 'PRICE_OF_GOODS_SOLD' | 'GST';
+// Phase 253 — TAXABLE_SUPPLY is the legally-correct §52 TCS base (net taxable
+// value of the supplies, ex-GST) and the CA-approved default. 'GST'
+// (commission-GST) is retained for back-compat but is superseded for TCS.
+export type TaxBaseType =
+  | 'COMMISSION'
+  | 'PRICE_OF_GOODS_SOLD'
+  | 'GST'
+  | 'TAXABLE_SUPPLY';
 
 export interface OneTaxConfig {
   rateBps: number;

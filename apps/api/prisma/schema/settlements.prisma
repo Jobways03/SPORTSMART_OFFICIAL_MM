@@ -118,6 +118,15 @@ model SellerSettlement {
   approvedSettlementAmountInPaise BigInt @default(0) @map("approved_settlement_amount_in_paise")
   totalPlatformMarginInPaise   BigInt  @default(0) @map("total_platform_margin_in_paise")
 
+  // Phase 253 (CA-approved model) — net TAXABLE supply (ex-GST) this cycle's
+  // sales represent, aggregated from each line's OrderItemTaxSnapshot at cycle
+  // build. This is the §52 TCS base: tcsDeducted = 1% × totalTaxableSupply
+  // (per the CA model, ₹4761.90 → ₹47.62 on a ₹5000 incl @5% sale). Sourced from
+  // the same taxable value the monthly GSTR-8 ledger uses, so the per-settlement
+  // TCS slice reconciles to the monthly deposit.
+  totalTaxableSupply        Decimal @default(0) @map("total_taxable_supply") @db.Decimal(12, 2)
+  totalTaxableSupplyInPaise BigInt  @default(0) @map("total_taxable_supply_in_paise")
+
   // Phase 17 GST — TCS (Section 52) deduction snapshot. The TCS
   // amount lives in the linked `gst_tcs_settlement_ledger` row; we
   // denormalise the paise amount + the historical rate here so the

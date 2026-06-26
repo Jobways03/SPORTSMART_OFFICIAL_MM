@@ -2,6 +2,7 @@
 
 import {
   splitFundingShares,
+  resolveItemFundingShares,
   validateFundingConfig,
   type FundingConfig,
 } from './funding';
@@ -283,5 +284,119 @@ describe('splitFundingShares — FRANCHISE (Phase 247-FB)', () => {
       liabilityParty: 'FRANCHISE',
       amountInPaise: 10_000n,
     });
+  });
+});
+
+describe('resolveItemFundingShares (Phase 251 — per-line SELLER routing)', () => {
+  const SELLER: FundingConfig = {
+    fundingType: 'SELLER',
+    sellerFundingPercent: 100,
+  };
+
+  it('SELLER-funded line fulfilled by a marketplace seller → SELLER liability + sellerId', () => {
+    const shares = resolveItemFundingShares(10_000n, SELLER, {
+      sellerId: 'seller-1',
+      franchiseId: null,
+    });
+    expect(shares).toEqual([
+      {
+        liabilityParty: 'SELLER',
+        amountInPaise: 10_000n,
+        sellerId: 'seller-1',
+        franchiseId: null,
+        brandId: null,
+      },
+    ]);
+  });
+
+  it('SELLER-funded line fulfilled by a FRANCHISE → FRANCHISE liability + franchiseId (the bug this fixes)', () => {
+    const shares = resolveItemFundingShares(10_000n, SELLER, {
+      sellerId: null,
+      franchiseId: 'fr-1',
+    });
+    expect(shares).toEqual([
+      {
+        liabilityParty: 'FRANCHISE',
+        amountInPaise: 10_000n,
+        sellerId: null,
+        franchiseId: 'fr-1',
+        brandId: null,
+      },
+    ]);
+    // The pre-fix behavior wrote a SELLER row with a null sellerId — assert
+    // that NEVER happens now.
+    expect(shares.some((s) => s.liabilityParty === 'SELLER')).toBe(false);
+  });
+
+  it('franchise takes precedence when a line somehow carries both ids', () => {
+    const shares = resolveItemFundingShares(10_000n, SELLER, {
+      sellerId: 'seller-1',
+      franchiseId: 'fr-1',
+    });
+    expect(shares[0]!.liabilityParty).toBe('FRANCHISE');
+    expect(shares[0]!.franchiseId).toBe('fr-1');
+  });
+
+  it('SELLER-funded line with NO resolvable fulfiller → PLATFORM-absorbed (never stranded)', () => {
+    const shares = resolveItemFundingShares(10_000n, SELLER, {
+      sellerId: null,
+      franchiseId: null,
+    });
+    expect(shares).toEqual([
+      {
+        liabilityParty: 'PLATFORM',
+        amountInPaise: 10_000n,
+        sellerId: null,
+        franchiseId: null,
+        brandId: null,
+      },
+    ]);
+  });
+
+  it('PLATFORM funding unchanged — full amount to PLATFORM, line sellerId carried', () => {
+    const shares = resolveItemFundingShares(
+      10_000n,
+      { fundingType: 'PLATFORM', platformFundingPercent: 100 },
+      { sellerId: 'seller-1', franchiseId: null },
+    );
+    expect(shares).toEqual([
+      {
+        liabilityParty: 'PLATFORM',
+        amountInPaise: 10_000n,
+        sellerId: 'seller-1',
+        franchiseId: null,
+        brandId: null,
+      },
+    ]);
+  });
+
+  it('FRANCHISE funding (pinned) uses the discount franchiseId, not the line', () => {
+    const shares = resolveItemFundingShares(
+      10_000n,
+      { fundingType: 'FRANCHISE', franchiseFundingPercent: 100, franchiseId: 'pinned-fr' },
+      { sellerId: null, franchiseId: 'line-fr' },
+    );
+    expect(shares).toEqual([
+      {
+        liabilityParty: 'FRANCHISE',
+        amountInPaise: 10_000n,
+        sellerId: null,
+        franchiseId: 'pinned-fr',
+        brandId: null,
+      },
+    ]);
+  });
+
+  it('conserves the full amount in every SELLER-routing branch', () => {
+    const fulfillers = [
+      { sellerId: 's', franchiseId: null },
+      { sellerId: null, franchiseId: 'f' },
+      { sellerId: null, franchiseId: null },
+    ];
+    for (const f of fulfillers) {
+      const shares = resolveItemFundingShares(12_345n, SELLER, f);
+      const sum = shares.reduce((acc, s) => acc + s.amountInPaise, 0n);
+      expect(sum).toBe(12_345n);
+    }
   });
 });

@@ -31,7 +31,15 @@ export class FranchiseCommissionService {
     franchiseId: string;
     subOrderId: string;
     orderNumber: string;
-    items: Array<{ unitPrice: number; quantity: number }>;
+    // Phase 252 — `taxableAmountInPaise` (the GST-exclusive per-line value from
+    // the tax snapshot) is populated by the caller ONLY when the taxable-base
+    // commission policy is on; when absent the base falls back to the inclusive
+    // unitPrice × quantity (legacy behavior).
+    items: Array<{
+      unitPrice: number;
+      quantity: number;
+      taxableAmountInPaise?: number | bigint | null;
+    }>;
     commissionRate: number;
   }) {
     // Phase 159v (audit #9) — Decimal money math. The Σ(unitPrice × qty) reduce
@@ -40,8 +48,17 @@ export class FranchiseCommissionService {
     // invariant base = computedAmount + franchiseEarning true at 2dp.
     const D = (n: unknown) => new Prisma.Decimal((n as any) ?? 0);
     const HALF_UP = Prisma.Decimal.ROUND_HALF_UP;
+    // Phase 252 — base = Σ GST-exclusive taxable line value when provided
+    // (matches TCS / the marketplace-seller policy), else the inclusive
+    // unitPrice × quantity.
     const baseAmountD = params.items
-      .reduce((sum, item) => sum.plus(D(item.unitPrice).times(D(item.quantity))), D(0))
+      .reduce((sum, item) => {
+        const lineBase =
+          item.taxableAmountInPaise != null
+            ? D(item.taxableAmountInPaise.toString()).dividedBy(100)
+            : D(item.unitPrice).times(D(item.quantity));
+        return sum.plus(lineBase);
+      }, D(0))
       .toDecimalPlaces(2, HALF_UP);
     const computedAmountD = baseAmountD
       .times(D(params.commissionRate).dividedBy(100))

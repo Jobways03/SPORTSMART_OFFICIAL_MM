@@ -44,13 +44,14 @@ function makeService(): {
     computeForSeller: jest.fn(),
     markCollected: jest.fn(),
   };
-  // Phase 252 — TCS slice now reads the configured base off the settlement;
-  // default base = GST (the commission-GST amount, "TCS on GST").
+  // Phase 253 — TCS slice reads the configured base off the settlement; the
+  // CA-approved default is TAXABLE_SUPPLY (net taxable value, ex-GST). `enabled`
+  // must be present or the master-toggle gate skips the whole cycle.
   const taxConfig = {
     getSettlementTaxConfig: jest.fn().mockResolvedValue({
-      gst: { rateBps: 1800, baseType: 'COMMISSION' },
-      tcs: { rateBps: 100, baseType: 'GST' },
-      tds: { rateBps: 100, baseType: 'COMMISSION' },
+      gst: { rateBps: 1800, baseType: 'COMMISSION', enabled: true },
+      tcs: { rateBps: 100, baseType: 'TAXABLE_SUPPLY', enabled: true },
+      tds: { rateBps: 100, baseType: 'COMMISSION', enabled: false },
     }),
   };
   const service = new SettlementTcsHookService(
@@ -62,10 +63,11 @@ function makeService(): {
 }
 
 /**
- * Phase 252 — wire sellerSettlement.findUnique so the per-settlement TCS slice
- * (now base × rate on the configured settlement column — default GST) returns a
- * deterministic base per settlement. `baseBySettlement` maps a settlementId to
- * the commission-GST amount (paise); the per-settlement TCS is rate × that.
+ * Phase 253 — wire sellerSettlement.findUnique so the per-settlement TCS slice
+ * (base × rate on the configured settlement column — default TAXABLE_SUPPLY)
+ * returns a deterministic base per settlement. `baseBySettlement` maps a
+ * settlementId to its net taxable supply (paise); the per-settlement TCS is
+ * rate × that.
  */
 function mockPerSettlementTaxable(
   prisma: MockPrisma,
@@ -75,7 +77,8 @@ function mockPerSettlementTaxable(
     async ({ where }: any) => ({
       totalPlatformMarginInPaise: 0n,
       totalPlatformAmountInPaise: 0n,
-      totalCommissionGstInPaise: baseBySettlement[where.id] ?? 0n,
+      totalCommissionGstInPaise: 0n,
+      totalTaxableSupplyInPaise: baseBySettlement[where.id] ?? 0n,
     }),
   );
 }

@@ -43,12 +43,19 @@ function build() {
     error: jest.fn(),
   };
 
+  // Phase 252 — EnvService gates the GST-exclusive commission base; OFF here so
+  // these tests keep the legacy inclusive-base behaviour.
+  const env = {
+    getBoolean: jest.fn().mockReturnValue(false),
+    getString: jest.fn().mockReturnValue(''),
+  };
   const service = new FranchiseCommissionProcessorService(
     prisma as any,
     redis as any,
     commissionService as any,
     eventBus as any,
     logger as any,
+    env as any,
   );
   return { service, redis, prisma, commissionService, eventBus };
 }

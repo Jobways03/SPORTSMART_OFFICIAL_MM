@@ -4,6 +4,7 @@ import { RedisService } from '../../../../bootstrap/cache/redis.service';
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { FranchiseCommissionService } from './franchise-commission.service';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
+import { EnvService } from '../../../../bootstrap/env/env.service';
 
 const LOCK_KEY = 'lock:franchise-commission-processor';
 const LOCK_TTL = 30;
@@ -18,8 +19,45 @@ export class FranchiseCommissionProcessorService implements OnModuleInit, OnModu
     private readonly commissionService: FranchiseCommissionService,
     private readonly eventBus: EventBusService,
     private readonly logger: AppLoggerService,
+    // Phase 252 — config gate for the GST-exclusive commission base.
+    private readonly env: EnvService,
   ) {
     this.logger.setContext('FranchiseCommissionProcessorService');
+  }
+
+  /**
+   * Phase 252 — mirror of the seller side: charge franchise-online commission
+   * on the GST-EXCLUSIVE taxable supply (vs the inclusive price) when
+   * `COMMISSION_BASE_TAXABLE` is on, optionally limited to orders placed on/
+   * after `COMMISSION_BASE_TAXABLE_EFFECTIVE_FROM`.
+   */
+  private commissionOnTaxableBase(subOrder: any): boolean {
+    if (!this.env.getBoolean('COMMISSION_BASE_TAXABLE', false)) return false;
+    const fromStr = this.env.getString(
+      'COMMISSION_BASE_TAXABLE_EFFECTIVE_FROM',
+      '',
+    );
+    if (!fromStr) return true;
+    const from = new Date(fromStr);
+    if (Number.isNaN(from.getTime())) return true;
+    const orderDate = subOrder?.createdAt ?? subOrder?.masterOrder?.createdAt ?? null;
+    return orderDate ? new Date(orderDate) >= from : true;
+  }
+
+  /** Phase 252 — Map<orderItemId, taxableAmountInPaise> for the given items. */
+  private async prefetchTaxableByItem(
+    itemIds: string[],
+  ): Promise<Map<string, bigint>> {
+    const map = new Map<string, bigint>();
+    if (itemIds.length === 0) return map;
+    const snaps = await this.prisma.orderItemTaxSnapshot.findMany({
+      where: { orderItemId: { in: itemIds } },
+      select: { orderItemId: true, taxableAmountInPaise: true },
+    });
+    for (const s of snaps) {
+      if (s.orderItemId != null) map.set(s.orderItemId, s.taxableAmountInPaise);
+    }
+    return map;
   }
 
   onModuleInit() {
@@ -93,9 +131,16 @@ export class FranchiseCommissionProcessorService implements OnModuleInit, OnModu
           const commissionRate = subOrder.commissionRateSnapshot
             ? Number(subOrder.commissionRateSnapshot)
             : Number(subOrder.franchise.onlineFulfillmentRate);
+          // Phase 252 — when the taxable-base policy is on, attach the
+          // GST-exclusive per-line taxable so recordOnlineOrderCommission
+          // charges commission on it (else it falls back to the inclusive base).
+          const taxableByItem = this.commissionOnTaxableBase(subOrder)
+            ? await this.prefetchTaxableByItem(subOrder.items.map((i) => i.id))
+            : new Map<string, bigint>();
           const items = subOrder.items.map((item) => ({
             unitPrice: Number(item.unitPrice),
             quantity: item.quantity,
+            taxableAmountInPaise: taxableByItem.get(item.id) ?? null,
           }));
 
           // Record FIRST, then mark. recordOnlineOrderCommission is idempotent

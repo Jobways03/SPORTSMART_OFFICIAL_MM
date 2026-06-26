@@ -301,6 +301,15 @@ export class SettlementTds194OHookService {
       return { stamped: false, skipped: true, tdsInPaise: 0n };
     }
 
+    // Phase 253 — master toggle parity with the seller path (applyToCycleOnApprove
+    // line ~74): when §194-O TDS is OFF in the settlement tax config (the
+    // CA-approved model default), skip the franchise settlement entirely — no
+    // Form-26Q ledger, no deduction. Without this the franchise approval ignored
+    // the toggle and still withheld §194-O the CA model requires to be zero.
+    if (!(await this.taxConfig.getSettlementTaxConfig()).tds.enabled) {
+      return { stamped: false, skipped: true, tdsInPaise: 0n };
+    }
+
     const filingPeriod = Tds194OService.filingPeriodOf(s.cycle.periodEnd);
     const result = await this.tds.computeForFranchise({
       franchiseId: s.franchiseId,

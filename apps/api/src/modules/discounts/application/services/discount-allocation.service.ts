@@ -38,7 +38,7 @@ import type {
   ItemAllocation,
 } from '../../domain/allocation/types';
 import {
-  splitFundingShares,
+  resolveItemFundingShares,
   type FundingConfig,
 } from '../../domain/allocation/funding';
 import {
@@ -713,24 +713,22 @@ export class DiscountAllocationService {
       // 6. Write liability ledger — funding split per allocated item.
       for (const a of result.allocations) {
         if (a.discountInPaise === 0n) continue;
-        const shares = splitFundingShares(a.discountInPaise, ctx.funding);
+        // Phase 251 — route a SELLER-funded line to the node that ACTUALLY
+        // fulfils it (marketplace seller → SELLER; franchise → FRANCHISE;
+        // neither → PLATFORM-absorbed), since the allocation cascade picks the
+        // fulfiller after the coupon was created. Every other funding type
+        // keeps its prior attribution. The resolved share carries its own
+        // sellerId/franchiseId/brandId so the ledger row is written
+        // consistently with the party.
+        const shares = resolveItemFundingShares(a.discountInPaise, ctx.funding, {
+          sellerId: a.sellerId,
+          franchiseId: a.franchiseId,
+        });
         for (const share of shares) {
-          // Idempotency key: deterministic from order + item +
-          // discount + party. A retried allocation tx will hit the
-          // unique constraint on this key and silently dedupe.
+          // Idempotency key: deterministic from order + item + discount +
+          // resolved party. A retried allocation tx hits the unique
+          // constraint on this key and silently dedupes.
           const idemKey = `${ctx.masterOrderId}:${a.orderItemId}:${ctx.discountId}:${share.liabilityParty}`;
-          // Phase 247-FB — attribute the row to the party that bears it.
-          // FRANCHISE: the discount's pinned funding franchise, else the
-          // fulfilling franchise on this item's sub-order. BRAND: the
-          // discount's funded brand. Others: null.
-          const rowFranchiseId =
-            share.liabilityParty === 'FRANCHISE'
-              ? (ctx.funding.franchiseId ?? a.franchiseId ?? null)
-              : null;
-          const rowBrandId =
-            share.liabilityParty === 'BRAND'
-              ? (ctx.funding.brandId ?? null)
-              : null;
           await tx.discountLiabilityLedger.upsert({
             where: {
               // Composite uniqueness via the `idem_key` partial index;
@@ -744,9 +742,9 @@ export class DiscountAllocationService {
               masterOrderId: ctx.masterOrderId,
               subOrderId: a.subOrderId,
               orderItemId: a.orderItemId,
-              sellerId: a.sellerId ?? null,
-              franchiseId: rowFranchiseId,
-              brandId: rowBrandId,
+              sellerId: share.sellerId ?? null,
+              franchiseId: share.franchiseId ?? null,
+              brandId: share.brandId ?? null,
               discountId: ctx.discountId,
               discountCodeId: ctx.discountCodeId ?? null,
               discountCode: ctx.discountCode,
@@ -759,8 +757,8 @@ export class DiscountAllocationService {
             update: {
               amountInPaise: share.amountInPaise,
               status: 'APPLIED',
-              franchiseId: rowFranchiseId,
-              brandId: rowBrandId,
+              franchiseId: share.franchiseId ?? null,
+              brandId: share.brandId ?? null,
             },
           });
 
