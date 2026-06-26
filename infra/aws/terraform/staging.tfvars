@@ -24,6 +24,12 @@ auth_cookie_domain = ".staging.sportsmart.com"
 # Actions deploy fails at AssumeRole.
 github_repo = "Jobways03/SPORTSMART_OFFICIAL_MM"
 
+# Public Google OAuth Web Client ID for storefront "Sign in with Google" — baked
+# into the web build (NEXT_PUBLIC_GOOGLE_CLIENT_ID) + used by the API as the
+# ID-token verify audience (GOOGLE_CLIENT_ID). Public value, safe to commit; the
+# one client's Authorized JS origins cover localhost/staging/prod.
+google_client_id = "187571482262-6e2u007g6n8ctlsrsvnti8ng5ruta1et.apps.googleusercontent.com"
+
 image_tag                  = "staging-latest"
 logistics_facade_image_tag = "staging-latest"
 
@@ -45,9 +51,9 @@ elasticache_node_type     = "cache.t4g.micro"
 redis_ha                    = false
 nat_per_az                  = false
 use_nat_instance            = true
-nat_instance_az_index       = 1          # 1a was capacity-constrained; place in 1b
-nat_instance_type           = "t3.nano"  # t4g.nano had no capacity in ap-south-1; t3.nano (x86) does
-nat_instance_arch           = "x86_64"   # must match nat_instance_type
+nat_instance_az_index       = 1         # 1a was capacity-constrained; place in 1b
+nat_instance_type           = "t3.nano" # t4g.nano had no capacity in ap-south-1; t3.nano (x86) does
+nat_instance_arch           = "x86_64"  # must match nat_instance_type
 enable_vpc_endpoints        = false
 secret_recovery_window_days = 0
 log_retention_days          = 3

@@ -63,6 +63,11 @@ locals {
     # value (or the condition) and re-apply. Forward-only — existing locked
     # commission records keep their inclusive-base values.
     COMMISSION_BASE_TAXABLE = var.env == "production" ? "false" : "true"
+    # Public Google OAuth client id — the API verifies storefront Google ID
+    # tokens against this audience (integrations/google/google-id-token-verifier
+    # .service.ts). Same value baked into the storefront build; empty string =
+    # Google login disabled (verifier returns "not configured").
+    GOOGLE_CLIENT_ID = var.google_client_id
   }
   api_environment = [
     for k, v in merge(local.api_base_environment, var.api_extra_environment) : {

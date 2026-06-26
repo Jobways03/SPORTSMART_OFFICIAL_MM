@@ -21,6 +21,12 @@ auth_cookie_domain = ".sportsmart.com"
 # Actions deploy fails at AssumeRole.
 github_repo = "Jobways03/SPORTSMART_OFFICIAL_MM"
 
+# Public Google OAuth Web Client ID for storefront "Sign in with Google" — baked
+# into the web build (NEXT_PUBLIC_GOOGLE_CLIENT_ID) + used by the API as the
+# ID-token verify audience (GOOGLE_CLIENT_ID). Public value, safe to commit; the
+# one client's Authorized JS origins cover localhost/staging/prod.
+google_client_id = "187571482262-6e2u007g6n8ctlsrsvnti8ng5ruta1et.apps.googleusercontent.com"
+
 image_tag                  = "production-latest"
 logistics_facade_image_tag = "production-latest"
 

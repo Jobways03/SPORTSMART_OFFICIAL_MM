@@ -77,6 +77,12 @@ ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ARG NEXT_PUBLIC_RAZORPAY_KEY_ID=""
 ENV NEXT_PUBLIC_RAZORPAY_KEY_ID=${NEXT_PUBLIC_RAZORPAY_KEY_ID}
 
+# Google OAuth PUBLIC client id for the storefront "Sign in with Google" button.
+# Public (safe to inline into the client bundle); empty default hides the button.
+# deploy.yml reads it from SSM and passes it per target.
+ARG NEXT_PUBLIC_GOOGLE_CLIENT_ID=""
+ENV NEXT_PUBLIC_GOOGLE_CLIENT_ID=${NEXT_PUBLIC_GOOGLE_CLIENT_ID}
+
 # Build via Next.js. The transpilePackages config in each app's
 # next.config.js handles the workspace packages.
 RUN pnpm --filter @sportsmart/${APP} run build

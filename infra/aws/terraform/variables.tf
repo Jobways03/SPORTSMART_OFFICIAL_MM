@@ -301,3 +301,9 @@ variable "github_oidc_provider_arn" {
   type        = string
   default     = ""
 }
+
+variable "google_client_id" {
+  description = "Public Google OAuth Web Client ID for the storefront 'Sign in with Google'. Baked into the storefront build (NEXT_PUBLIC_GOOGLE_CLIENT_ID) AND injected into the API task env (GOOGLE_CLIENT_ID) as the ID-token verify audience — the SAME value for both, since it is the PUBLIC client id (no secret). Empty disables the feature everywhere (the button is hidden and /auth/google returns not-configured)."
+  type        = string
+  default     = ""
+}

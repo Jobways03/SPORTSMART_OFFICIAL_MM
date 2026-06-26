@@ -52,6 +52,7 @@ jobs:
       image_tag: ${{ steps.tag.outputs.tag }}
       api_url: ${{ steps.cfg.outputs.api_url }}
       razorpay_key: ${{ steps.cfg.outputs.razorpay_key }}
+      google_client_id: ${{ steps.cfg.outputs.google_client_id }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
@@ -125,6 +126,14 @@ jobs:
             --name "/sportsmart/${{ inputs.target }}/deploy/razorpay_key_id" \
             --query 'Parameter.Value' --output text 2>/dev/null || echo '')"
           echo "razorpay_key=${razorpay_key}" >> "$GITHUB_OUTPUT"
+          # Google OAuth PUBLIC client id — OPTIONAL (mirrors razorpay_key_id).
+          # Terraform writes this param only when google_client_id is set, so a
+          # missing param resolves to empty => the storefront hides the "Sign in
+          # with Google" button (and the API treats it as not-configured).
+          google_client_id="$(aws ssm get-parameter \
+            --name "/sportsmart/${{ inputs.target }}/deploy/google_client_id" \
+            --query 'Parameter.Value' --output text 2>/dev/null || echo '')"
+          echo "google_client_id=${google_client_id}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build + push (${{ matrix.name }})
@@ -177,6 +186,7 @@ jobs:
             ${{ matrix.app != '' && format('APP={0}', matrix.app) || '' }}
             ${{ matrix.app != '' && format('NEXT_PUBLIC_API_URL={0}', needs.prep.outputs.api_url) || '' }}
             ${{ matrix.app != '' && format('NEXT_PUBLIC_RAZORPAY_KEY_ID={0}', needs.prep.outputs.razorpay_key) || '' }}
+            ${{ matrix.app != '' && format('NEXT_PUBLIC_GOOGLE_CLIENT_ID={0}', needs.prep.outputs.google_client_id) || '' }}
           tags: |
             ${{ steps.ecr.outputs.registry }}/sportsmart-${{ inputs.target }}/${{ matrix.name }}:${{ needs.prep.outputs.image_tag }}
             ${{ steps.ecr.outputs.registry }}/sportsmart-${{ inputs.target }}/${{ matrix.name }}:${{ inputs.target }}-latest
