@@ -111,6 +111,17 @@ resource "aws_ssm_parameter" "deploy_google_client_id" {
   tags  = { Name = "${local.name}-deploy-google-client-id" }
 }
 
+# Consumed by deploy.yml to bake NEXT_PUBLIC_STOREFRONT_URL into the web images
+# (storefront canonical / sitemap / robots / OG host). Production = the bare apex
+# (var.serve_apex); other envs = the shop.<env_domain> subdomain. See
+# local.storefront_url.
+resource "aws_ssm_parameter" "deploy_storefront_url" {
+  name  = "/sportsmart/${var.env}/deploy/storefront_url"
+  type  = "String"
+  value = local.storefront_url
+  tags  = { Name = "${local.name}-deploy-storefront-url" }
+}
+
 # Per-service public URLs, consumed by infra/scripts/smoke.sh for the
 # post-deploy end-to-end health gate.
 resource "aws_ssm_parameter" "deploy_service_urls" {

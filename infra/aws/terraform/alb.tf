@@ -16,8 +16,14 @@ resource "aws_lb" "main" {
 
 # ── ACM wildcard certificate (DNS-validated in the hosted zone) ─────────
 resource "aws_acm_certificate" "wildcard" {
-  domain_name       = "*.${var.env_domain}"
-  validation_method = "DNS"
+  domain_name = "*.${var.env_domain}"
+  # When serving the bare apex (production, var.serve_apex), add it as a SAN — a
+  # wildcard *.<domain> does NOT cover the apex <domain> itself. www IS covered
+  # by the wildcard, so it is intentionally NOT added here. Using null (not [])
+  # for the disabled case leaves staging's existing cert untouched (no SAN ⇒ no
+  # diff / no replacement).
+  subject_alternative_names = var.serve_apex ? [var.env_domain] : null
+  validation_method         = "DNS"
 
   lifecycle {
     create_before_destroy = true
@@ -27,18 +33,24 @@ resource "aws_acm_certificate" "wildcard" {
 }
 
 resource "aws_route53_record" "cert_validation" {
+  # Keyed by the validation RECORD NAME (not domain_name): ACM returns the SAME
+  # validation CNAME for *.<domain> and the apex <domain>, so keying by domain
+  # would create two record resources contending for one name. The trailing `...`
+  # groups duplicates into a single record per unique validation name; the grouped
+  # entries are identical, so indexing [0] is correct.
   for_each = {
-    for dvo in aws_acm_certificate.wildcard.domain_validation_options : dvo.domain_name => {
+    for dvo in aws_acm_certificate.wildcard.domain_validation_options :
+    dvo.resource_record_name => {
       name   = dvo.resource_record_name
       type   = dvo.resource_record_type
       record = dvo.resource_record_value
-    }
+    }...
   }
 
   zone_id         = local.hosted_zone_id
-  name            = each.value.name
-  type            = each.value.type
-  records         = [each.value.record]
+  name            = each.value[0].name
+  type            = each.value[0].type
+  records         = [each.value[0].record]
   ttl             = 60
   allow_overwrite = true
 }

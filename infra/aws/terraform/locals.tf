@@ -124,8 +124,19 @@ locals {
 
   api_url = "https://${local.service_hosts["api"]}"
 
+  # Public storefront URL baked into the web images at build time as
+  # NEXT_PUBLIC_STOREFRONT_URL (canonical / sitemap / robots / OG metadata).
+  # When serving the apex (production, var.serve_apex) the canonical storefront
+  # origin is the bare apex; otherwise it is the shop.<env_domain> subdomain.
+  storefront_url = var.serve_apex ? "https://${var.env_domain}" : "https://${local.service_hosts["web-storefront"]}"
+
   # CORS allow-list = every web app's https origin (the API rejects '*' in prod).
-  cors_origins = join(",", [for k, v in local.web_services : "https://${local.service_hosts[k]}"])
+  # When serving the apex, the storefront's apex + www origins are cross-origin to
+  # api.<env_domain>, so they must be in the allow-list too.
+  cors_origins = join(",", concat(
+    [for k, v in local.web_services : "https://${local.service_hosts[k]}"],
+    var.serve_apex ? ["https://${var.env_domain}", "https://www.${var.env_domain}"] : [],
+  ))
 
   # The app secret's JSON keys. Generated-by-TF keys (DB/Redis URLs, JWT,
   # encryption keys) + operator-supplied external keys. Consumed by the ECS

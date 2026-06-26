@@ -67,6 +67,22 @@ variable "auth_cookie_domain" {
   default     = ""
 }
 
+variable "serve_apex" {
+  description = <<-EOT
+    When true, also serve the customer storefront (web-storefront) at the BARE
+    APEX env_domain (e.g. https://sportsmart.com) plus www, in addition to its
+    shop.<env_domain> subdomain. This adds: the apex as an ACM cert SAN (a
+    wildcard *.<domain> does NOT cover the apex itself; www IS covered by the
+    wildcard so it is not added as a SAN), an apex host-header listener rule →
+    the web-storefront target group, a www→apex 301 redirect rule, apex+www
+    Route53 A AND AAAA aliases to the (dual-stack) ALB, and the apex+www https
+    origins added to CORS_ORIGINS. Leave false for staging — the wildcard cert
+    and per-subdomain records are sufficient there.
+  EOT
+  type        = bool
+  default     = false
+}
+
 variable "image_tag" {
   description = "Container image tag to deploy for every service, e.g. staging-latest or staging-<sha7> (matches deploy.yml's tag scheme). Repos are empty until Phase 2 pushes images; services stay pending until then."
   type        = string

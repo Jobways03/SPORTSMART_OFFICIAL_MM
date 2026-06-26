@@ -17,6 +17,13 @@ hosted_zone_name   = "sportsmart.com"
 env_domain         = "sportsmart.com"
 auth_cookie_domain = ".sportsmart.com"
 
+# Serve the customer storefront at the bare apex (https://sportsmart.com) + www,
+# in addition to shop.sportsmart.com. Activates the apex ACM SAN (alb.tf), the
+# apex/www listener rules + Route53 A/AAAA aliases (apex.tf), and adds apex/www
+# to CORS (locals.tf). Staging leaves this false. See
+# docs/runbooks/PRODUCTION_APEX_CUTOVER.md for the DNS/Shopify cutover sequence.
+serve_apex = true
+
 # OIDC deploy-role trust — MUST equal the real GitHub remote, else every
 # Actions deploy fails at AssumeRole.
 github_repo = "Jobways03/SPORTSMART_OFFICIAL_MM"

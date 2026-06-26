@@ -53,6 +53,7 @@ jobs:
       api_url: ${{ steps.cfg.outputs.api_url }}
       razorpay_key: ${{ steps.cfg.outputs.razorpay_key }}
       google_client_id: ${{ steps.cfg.outputs.google_client_id }}
+      storefront_url: ${{ steps.cfg.outputs.storefront_url }}
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
       - uses: actions/checkout@v4
@@ -134,6 +135,14 @@ jobs:
             --name "/sportsmart/${{ inputs.target }}/deploy/google_client_id" \
             --query 'Parameter.Value' --output text 2>/dev/null || echo '')"
           echo "google_client_id=${google_client_id}" >> "$GITHUB_OUTPUT"
+          # Storefront public origin baked into the web bundle (canonical /
+          # sitemap / robots / OG host). Terraform always writes this param, so
+          # this is a hard read (no `|| echo` fallback) — a missing param is a
+          # real misconfiguration we want to surface, not silently localhost.
+          storefront_url="$(aws ssm get-parameter \
+            --name "/sportsmart/${{ inputs.target }}/deploy/storefront_url" \
+            --query 'Parameter.Value' --output text)"
+          echo "storefront_url=${storefront_url}" >> "$GITHUB_OUTPUT"
 
   build:
     name: Build + push (${{ matrix.name }})
@@ -187,6 +196,7 @@ jobs:
             ${{ matrix.app != '' && format('NEXT_PUBLIC_API_URL={0}', needs.prep.outputs.api_url) || '' }}
             ${{ matrix.app != '' && format('NEXT_PUBLIC_RAZORPAY_KEY_ID={0}', needs.prep.outputs.razorpay_key) || '' }}
             ${{ matrix.app != '' && format('NEXT_PUBLIC_GOOGLE_CLIENT_ID={0}', needs.prep.outputs.google_client_id) || '' }}
+            ${{ matrix.app != '' && format('NEXT_PUBLIC_STOREFRONT_URL={0}', needs.prep.outputs.storefront_url) || '' }}
           tags: |
             ${{ steps.ecr.outputs.registry }}/sportsmart-${{ inputs.target }}/${{ matrix.name }}:${{ needs.prep.outputs.image_tag }}
             ${{ steps.ecr.outputs.registry }}/sportsmart-${{ inputs.target }}/${{ matrix.name }}:${{ inputs.target }}-latest

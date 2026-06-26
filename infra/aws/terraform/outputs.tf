@@ -23,6 +23,11 @@ output "api_url" {
   value       = local.api_url
 }
 
+output "storefront_url" {
+  description = "Public storefront URL (NEXT_PUBLIC_STOREFRONT_URL baked into the web images). Bare apex in production (serve_apex), shop.<env_domain> otherwise."
+  value       = local.storefront_url
+}
+
 output "ecr_repository_urls" {
   description = "ECR repo URL per service — deploy.yml/deploy.sh push here."
   value       = { for k, r in aws_ecr_repository.this : k => r.repository_url }
