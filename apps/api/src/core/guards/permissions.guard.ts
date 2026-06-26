@@ -257,9 +257,7 @@ export class PermissionsGuard implements CanActivate {
     const sessionId = req?.sessionId ?? req?.user?.sessionId;
     if (!sessionId) return false;
     try {
-      const session = (await (
-        this.prisma.adminSession.findUnique as any
-      )({
+      const session = (await this.prisma.adminSession.findUnique({
         where: { id: sessionId },
         select: { stepUpVerifiedAt: true, revokedAt: true },
       })) as { stepUpVerifiedAt: Date | null; revokedAt: Date | null } | null;

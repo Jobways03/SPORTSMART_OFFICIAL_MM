@@ -65,12 +65,10 @@ export class StepUpGuard implements CanActivate {
     // result types — cast at the call boundary so the schema is the
     // source of truth and the test suite doesn't require a fresh
     // generate to compile.
-    const session = (await (
-      this.prisma.adminSession.findUnique as any
-    )({
+    const session = await this.prisma.adminSession.findUnique({
       where: { id: sessionId },
       select: { stepUpVerifiedAt: true, revokedAt: true },
-    })) as { stepUpVerifiedAt: Date | null; revokedAt: Date | null } | null;
+    });
     if (!session || session.revokedAt) {
       throw new ForbiddenException({
         code: 'STEP_UP_REQUIRED',

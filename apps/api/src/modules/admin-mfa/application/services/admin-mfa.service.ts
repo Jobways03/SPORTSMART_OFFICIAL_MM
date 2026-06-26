@@ -770,7 +770,7 @@ export class AdminMfaService {
       email: true,
       role: true,
       status: true,
-    } as any);
+    });
     if (!admin) {
       throw new NotFoundAppException('Admin not found');
     }

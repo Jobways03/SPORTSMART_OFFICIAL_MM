@@ -86,7 +86,7 @@ export class PrismaAdminRepository implements AdminRepository {
     // session's elevation. Cheap to make the docstring honest.
     await this.prisma.adminSession.updateMany({
       where: { adminId, revokedAt: null },
-      data: { revokedAt: new Date(), stepUpVerifiedAt: null } as any,
+      data: { revokedAt: new Date(), stepUpVerifiedAt: null },
     });
   }
 
@@ -158,7 +158,7 @@ export class PrismaAdminRepository implements AdminRepository {
   async markSessionStepUpVerified(sessionId: string): Promise<void> {
     await this.prisma.adminSession.update({
       where: { id: sessionId },
-      data: { stepUpVerifiedAt: new Date() } as any,
+      data: { stepUpVerifiedAt: new Date() },
     });
   }
 

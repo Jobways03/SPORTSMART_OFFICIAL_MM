@@ -59,15 +59,15 @@ export class MfaPendingSecretSweepCron {
       // The schema column is in the migration but the generated
       // Prisma types lag a fresh `prisma generate`. Cast through any
       // so the sweep compiles without forcing a generate step in CI.
-      const res = await (this.prisma.admin.updateMany as any)({
+      const res = await this.prisma.admin.updateMany({
         where: {
           mfaPendingExpiresAt: { lt: new Date() },
           mfaPendingSecretCiphertext: { not: null },
-        } as any,
+        },
         data: {
           mfaPendingSecretCiphertext: null,
           mfaPendingExpiresAt: null,
-        } as any,
+        },
       });
       if (res.count > 0) {
         this.logger.log(

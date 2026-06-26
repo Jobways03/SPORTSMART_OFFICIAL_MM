@@ -180,7 +180,7 @@ export class AdminMfaVerifyChallengeUseCase {
       // Phase 26 (2026-05-20) — per-admin MFA brute-force counter.
       failedMfaAttempts: true,
       mfaLockUntil: true,
-    } as any);
+    });
     if (!admin) {
       throw new UnauthorizedAppException('Admin not found');
     }
@@ -499,7 +499,7 @@ export class AdminMfaVerifyChallengeUseCase {
       status: true,
       mfaEnabledAt: true,
       mfaLockUntil: true,
-    } as any);
+    });
     if (!admin) throw new UnauthorizedAppException('Admin not found');
     if (admin.status !== 'ACTIVE') {
       throw new UnauthorizedAppException('Admin account is not active');
@@ -594,7 +594,7 @@ export class AdminMfaVerifyChallengeUseCase {
       mfaEnabledAt: true,
       failedMfaAttempts: true,
       mfaLockUntil: true,
-    } as any);
+    });
     if (!admin) throw new UnauthorizedAppException('Admin not found');
     if (admin.status !== 'ACTIVE') {
       throw new UnauthorizedAppException('Admin account is not active');
