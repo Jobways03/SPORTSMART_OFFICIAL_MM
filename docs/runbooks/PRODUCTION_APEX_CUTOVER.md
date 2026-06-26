@@ -69,7 +69,7 @@ Operator-owned, **outside** the platform Terraform.
 - [ ] Re-verify: `dig @8.8.8.8 NS` returns only Route53; email flows; Shopify still serves apex + classic.
 
 ## Phase 3 — App production prereqs (store & email untouched)
-- [ ] Populate `production/app/external` with the LIVE creds (Razorpay, R2 incl `R2_PUBLIC_BASE_URL`, MAIL, DELHIVERY prod host `track.delhivery.com`). **Placeholders crash-loop under `node_env=production`.**
+- [ ] Populate `production/app/external` with the LIVE creds (Razorpay, R2 incl `R2_PUBLIC_BASE_URL`, MAIL, DELHIVERY prod host `track.delhivery.com`). **Placeholders crash-loop under `node_env=production`.** → field-by-field steps: **[PRODUCTION_SECRETS_CHECKLIST.md](./PRODUCTION_SECRETS_CHECKLIST.md)**
 - [ ] Rotate leaked creds; wire `alarm_emails`.
 - [ ] Money-paise cutover order (ENABLED→DUAL_WRITE→AUTHORITATIVE); §194-O + CA sign-offs.
 - [ ] (Admin MFA + step-up migrations apply automatically via the migrate task — no manual step; they're committed in this branch.)
