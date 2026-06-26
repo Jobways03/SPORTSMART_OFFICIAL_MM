@@ -8,6 +8,12 @@ import {
   FranchiseShipmentEvidence,
 } from '@/services/franchise-returns.service';
 import SubmitQcModal from '../components/submit-qc-modal';
+import ApproveReturnModal from '../components/approve-return-modal';
+import RejectReturnModal from '../components/reject-return-modal';
+import SchedulePickupModal from '../components/schedule-pickup-modal';
+import InitiateRefundModal from '../components/initiate-refund-modal';
+import ConfirmRefundModal from '../components/confirm-refund-modal';
+import MarkRefundFailedModal from '../components/mark-refund-failed-modal';
 import {
   formatCurrency,
   formatDateTime,
@@ -15,6 +21,7 @@ import {
   getStatusBadgeClass,
 } from '../utils';
 import '../returns.css';
+import '../../sellers/components/modal.css';
 
 export default function FranchiseAdminReturnDetailPage() {
   const params = useParams();
@@ -26,8 +33,21 @@ export default function FranchiseAdminReturnDetailPage() {
   const [ret, setRet] = useState<FranchiseReturnDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
-  const [qcOpen, setQcOpen] = useState(false);
-  // Bumped after a QC decision to re-fetch the (now-updated) return.
+  // Which action modal is open (null = none). Same set as the D2C admin.
+  const [activeModal, setActiveModal] = useState<
+    | 'approve'
+    | 'reject'
+    | 'schedulePickup'
+    | 'submitQc'
+    | 'initiateRefund'
+    | 'confirmRefund'
+    | 'markRefundFailed'
+    | null
+  >(null);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [actionError, setActionError] = useState('');
+  const [actionSuccess, setActionSuccess] = useState('');
+  // Bumped after any action to re-fetch the (now-updated) return.
   const [refreshKey, setRefreshKey] = useState(0);
   // Franchise's pre-ship photos (proof-of-dispatch, attached to the sub-order).
   const [shipmentEvidence, setShipmentEvidence] = useState<
@@ -64,6 +84,97 @@ export default function FranchiseAdminReturnDetailPage() {
       .catch(() => setShipmentEvidence([]));
   }, [ret?.subOrder?.id]);
 
+  const onActionSuccess = () => {
+    setActiveModal(null);
+    setActionSuccess('Action completed');
+    setTimeout(() => setActionSuccess(''), 3000);
+    setRefreshKey((k) => k + 1);
+  };
+
+  // Direct (no-modal) action — used for Retry Refund.
+  const runDirectAction = async (key: string, action: () => Promise<unknown>) => {
+    setActionLoading(key);
+    setActionError('');
+    try {
+      await action();
+      onActionSuccess();
+    } catch (e: any) {
+      setActionError(e?.body?.message || e?.message || 'Action failed');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  /**
+   * Status-gated lifecycle actions — the SAME set as the D2C/Retail admin,
+   * scoped to this franchise's own returns by the backend node guard.
+   */
+  const renderActions = (status: string): React.ReactNode[] => {
+    const a: React.ReactNode[] = [];
+    if (status === 'REQUESTED') {
+      a.push(
+        <button key="approve" className="return-action-btn success" onClick={() => setActiveModal('approve')}>Approve Return</button>,
+        <button key="reject" className="return-action-btn danger" onClick={() => setActiveModal('reject')}>Reject Return</button>,
+      );
+    }
+    if (status === 'APPROVED') {
+      a.push(
+        <button key="schedule" className="return-action-btn primary" onClick={() => setActiveModal('schedulePickup')}>Schedule Pickup</button>,
+        <button key="reject2" className="return-action-btn danger" onClick={() => setActiveModal('reject')}>Reject Return</button>,
+      );
+    }
+    if (status === 'PICKUP_SCHEDULED') {
+      a.push(
+        <button key="edit-pickup" className="return-action-btn" onClick={() => setActiveModal('schedulePickup')}>Edit Pickup</button>,
+        <button key="reject3" className="return-action-btn danger" onClick={() => setActiveModal('reject')}>Cancel &amp; Reject</button>,
+      );
+    }
+    if (status === 'IN_TRANSIT') {
+      a.push(
+        <button
+          key="mark-received"
+          className="return-action-btn primary"
+          disabled={actionLoading === 'markReceived'}
+          onClick={() => runDirectAction('markReceived', () => franchiseReturnsService.markReceived(ret!.id, franchiseId))}
+        >
+          {actionLoading === 'markReceived' ? 'Updating…' : 'Mark Received'}
+        </button>,
+      );
+    }
+    if (status === 'RECEIVED') {
+      a.push(
+        <button key="qc" className="return-action-btn primary" onClick={() => setActiveModal('submitQc')}>Submit QC Decision</button>,
+      );
+    }
+    if (status === 'QC_APPROVED' || status === 'PARTIALLY_APPROVED') {
+      a.push(
+        <button key="initiate-refund" className="return-action-btn primary" onClick={() => setActiveModal('initiateRefund')}>Initiate Refund</button>,
+      );
+    }
+    if (status === 'REFUND_PROCESSING') {
+      a.push(
+        <button key="confirm-refund" className="return-action-btn success" onClick={() => setActiveModal('confirmRefund')}>Confirm Refund</button>,
+        <button key="fail-refund" className="return-action-btn danger" onClick={() => setActiveModal('markRefundFailed')}>Mark Failed</button>,
+        <button
+          key="retry-refund"
+          className="return-action-btn warning"
+          disabled={actionLoading === 'retryRefund'}
+          onClick={() => runDirectAction('retryRefund', () => franchiseReturnsService.retryRefund(ret!.id, franchiseId))}
+        >
+          {actionLoading === 'retryRefund' ? 'Retrying…' : 'Retry Refund'}
+        </button>,
+      );
+    }
+    if (a.length === 0) {
+      a.push(
+        <div key="none" style={{ fontSize: 13, color: '#64748b', padding: '10px 0', textAlign: 'center' }}>
+          No actions available for this status.
+        </div>,
+      );
+    }
+    return a;
+  };
+
   if (loading)
     return (
       <div className="return-detail-page">
@@ -88,6 +199,7 @@ export default function FranchiseAdminReturnDetailPage() {
     );
 
   const items = ret.items ?? [];
+  const returnNo = ret.returnNumber || ret.id.slice(0, 8);
   const history = ret.statusHistory ?? [];
   const evidence = ret.evidence ?? [];
   const customerName =
@@ -324,23 +436,36 @@ export default function FranchiseAdminReturnDetailPage() {
               ) : (
                 <div className="return-evidence-grid">
                   {evidence.map((ev) => {
-                    const url = ev.viewUrl || ev.url || null;
+                    // The real column is `file_url` → `fileUrl`. Reading the
+                    // wrong field left url null, so the tile became an
+                    // `href="#"` target="_blank" link that opened a fresh
+                    // franchise-admin tab (no sessionStorage token) → login.
+                    const url = ev.fileUrl || ev.viewUrl || ev.url || null;
+                    // No URL → render a plain tile, NOT a new-tab link to "#".
+                    if (!url) {
+                      return (
+                        <div key={ev.id} className="return-evidence-item">
+                          <div style={{ padding: 12, fontSize: 11, color: '#64748b' }}>
+                            &#128247;
+                          </div>
+                          {ev.description && (
+                            <div className="return-evidence-caption">
+                              {ev.description}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    }
                     return (
                       <a
                         key={ev.id}
-                        href={url || '#'}
+                        href={url}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="return-evidence-item"
                       >
-                        {url ? (
-                          // eslint-disable-next-line @next/next/no-img-element
-                          <img src={url} alt={ev.description || 'Evidence'} />
-                        ) : (
-                          <div style={{ padding: 12, fontSize: 11, color: '#64748b' }}>
-                            &#128247;
-                          </div>
-                        )}
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={url} alt={ev.description || 'Evidence'} />
                         {ev.description && (
                           <div className="return-evidence-caption">
                             {ev.description}
@@ -463,28 +588,17 @@ export default function FranchiseAdminReturnDetailPage() {
         <div className="return-detail-sidebar">
           <div className="return-sidebar-card">
             <h3>Actions</h3>
-            <div className="return-sidebar-actions">
-              {ret.status === 'RECEIVED' ? (
-                <button
-                  type="button"
-                  className="return-action-btn primary"
-                  onClick={() => setQcOpen(true)}
-                >
-                  Submit QC Decision
-                </button>
-              ) : (
-                <div
-                  style={{
-                    fontSize: 13,
-                    color: '#64748b',
-                    padding: '10px 0',
-                    textAlign: 'center',
-                  }}
-                >
-                  No actions available for this status.
-                </div>
-              )}
-            </div>
+            {actionError && (
+              <div className="modal-alert modal-alert-error" style={{ marginBottom: 10 }}>
+                {actionError}
+              </div>
+            )}
+            {actionSuccess && (
+              <div className="modal-alert modal-alert-success" style={{ marginBottom: 10 }}>
+                {actionSuccess}
+              </div>
+            )}
+            <div className="return-sidebar-actions">{renderActions(ret.status)}</div>
           </div>
 
           <div className="return-sidebar-card" style={{ marginTop: 16 }}>
@@ -524,16 +638,69 @@ export default function FranchiseAdminReturnDetailPage() {
         </div>
       </div>
 
-      {qcOpen && (
+      {/* ── Action modals (same set as D2C/Retail, franchise-scoped) ── */}
+      {activeModal === 'approve' && (
+        <ApproveReturnModal
+          returnId={ret.id}
+          franchiseId={franchiseId}
+          returnNumber={returnNo}
+          onClose={() => setActiveModal(null)}
+          onSuccess={onActionSuccess}
+        />
+      )}
+      {activeModal === 'reject' && (
+        <RejectReturnModal
+          returnId={ret.id}
+          franchiseId={franchiseId}
+          returnNumber={returnNo}
+          onClose={() => setActiveModal(null)}
+          onSuccess={onActionSuccess}
+        />
+      )}
+      {activeModal === 'schedulePickup' && (
+        <SchedulePickupModal
+          returnId={ret.id}
+          franchiseId={franchiseId}
+          returnNumber={returnNo}
+          onClose={() => setActiveModal(null)}
+          onSuccess={onActionSuccess}
+        />
+      )}
+      {activeModal === 'submitQc' && (
         <SubmitQcModal
           returnId={ret.id}
-          returnNumber={ret.returnNumber || ret.id.slice(0, 8)}
+          franchiseId={franchiseId}
+          returnNumber={returnNo}
           items={ret.items ?? []}
-          onClose={() => setQcOpen(false)}
-          onSuccess={() => {
-            setQcOpen(false);
-            setRefreshKey((k) => k + 1);
-          }}
+          onClose={() => setActiveModal(null)}
+          onSuccess={onActionSuccess}
+        />
+      )}
+      {activeModal === 'initiateRefund' && (
+        <InitiateRefundModal
+          returnId={ret.id}
+          franchiseId={franchiseId}
+          returnNumber={returnNo}
+          onClose={() => setActiveModal(null)}
+          onSuccess={onActionSuccess}
+        />
+      )}
+      {activeModal === 'confirmRefund' && (
+        <ConfirmRefundModal
+          returnId={ret.id}
+          franchiseId={franchiseId}
+          returnNumber={returnNo}
+          onClose={() => setActiveModal(null)}
+          onSuccess={onActionSuccess}
+        />
+      )}
+      {activeModal === 'markRefundFailed' && (
+        <MarkRefundFailedModal
+          returnId={ret.id}
+          franchiseId={franchiseId}
+          returnNumber={returnNo}
+          onClose={() => setActiveModal(null)}
+          onSuccess={onActionSuccess}
         />
       )}
     </div>

@@ -45,6 +45,13 @@ export const PERMISSIONS = {
   // module (DISPUTE_OVERTURNED / DISPUTE_PARTIAL_OVERRIDE). Description
   // updated to reflect reality.
   'returns.close':          'Close a terminal return (REFUNDED / QC_REJECTED / REFUND_FAILED → COMPLETED)',
+  // Franchise-scoped return lifecycle. These gate the node-scoped
+  // /admin/franchise-returns/:id/* endpoints (which assertNodeOwnsReturn so a
+  // holder can only act on its OWN franchise's FRANCHISE-fulfilled returns).
+  // Kept distinct from the unscoped returns.* / refunds.* slugs so granting a
+  // franchise role these CANNOT open the global admin return/refund endpoints.
+  'franchise.returns.manage': 'Approve/reject/schedule-pickup/mark-received/QC a FRANCHISE-fulfilled return (own franchise only)',
+  'franchise.returns.refund': 'Initiate/confirm/fail/retry the refund on a FRANCHISE-fulfilled return — MOVES MONEY (own franchise only)',
   // Phase 107 (2026-05-25) — bulk CSV export carries customer PII (name +
   // email) for up to 50k returns, so it is gated separately from the
   // single-return `returns.read` view (which tier-1 support holds). Granting
@@ -1070,6 +1077,11 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
   // franchise-involved orders only is a separate, larger design change.
   FRANCHISE_ADMIN: [
     'orders.read', 'returns.read',
+    // Full return lifecycle for the franchise's OWN returns, via the
+    // node-scoped /admin/franchise-returns/:id/* endpoints. The refund slug
+    // moves money. These do NOT grant the unscoped returns.*/refunds.* admin
+    // endpoints (different slugs).
+    'franchise.returns.manage', 'franchise.returns.refund',
     'analytics.read', 'audit.read', 'accounts.read',
     'franchise.read', 'franchise.approve', 'franchise.suspend',
     'franchise.finance', 'franchise.finance.read', 'franchise.penalty.approve',

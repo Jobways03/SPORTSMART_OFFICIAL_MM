@@ -39,6 +39,9 @@ export interface FranchiseReturnDetail extends FranchiseReturnListItem {
   updatedAt?: string | null;
   evidence?: Array<{
     id: string;
+    // The backend (return_evidence.file_url) returns `fileUrl`; `url`/`viewUrl`
+    // are legacy/optional aliases. Read fileUrl first.
+    fileUrl?: string | null;
     url?: string | null;
     viewUrl?: string | null;
     description?: string | null;
@@ -137,19 +140,96 @@ export const franchiseReturnsService = {
     return apiClient(`/admin/sub-orders/${subOrderId}/shipment-evidence`);
   },
 
+  // ── Lifecycle actions ──────────────────────────────────────────────────
+  //
+  // All hit the node-scoped /admin/franchise-returns/:id/* endpoints (which
+  // assertNodeOwnsReturn so a franchise admin can only act on its OWN
+  // franchise's returns) and require the franchise.returns.manage /
+  // franchise.returns.refund permissions.
+
+  approve(returnId: string, franchiseId: string, notes?: string): Promise<ApiResponse> {
+    return franchiseAction(returnId, franchiseId, 'approve', { notes });
+  },
+
+  reject(returnId: string, franchiseId: string, reason: string): Promise<ApiResponse> {
+    return franchiseAction(returnId, franchiseId, 'reject', { reason });
+  },
+
+  schedulePickup(
+    returnId: string,
+    franchiseId: string,
+    payload: {
+      pickupScheduledAt: string;
+      pickupTrackingNumber?: string;
+      pickupCourier?: string;
+      pickupAddress?: string;
+    },
+  ): Promise<ApiResponse> {
+    return franchiseAction(returnId, franchiseId, 'schedule-pickup', payload);
+  },
+
+  markReceived(
+    returnId: string,
+    franchiseId: string,
+    payload: { notes?: string; parcelCondition?: string } = {},
+  ): Promise<ApiResponse> {
+    return franchiseAction(returnId, franchiseId, 'mark-received', payload);
+  },
+
   /**
-   * Submit the QC decision for a franchise return. Uses the shared admin
-   * qc-decision endpoint (the franchise-admin runs on the admin persona).
-   * The backend's node-scoped guard ensures only this franchise's returns
-   * are touched.
+   * Submit the QC decision for a franchise return via the node-scoped
+   * franchise endpoint (franchise.returns.manage). assertNodeOwnsReturn on the
+   * server ensures only this franchise's returns are touched.
    */
   submitQcDecision(
     returnId: string,
+    franchiseId: string,
     payload: SubmitQcDecisionPayload,
   ): Promise<ApiResponse> {
-    return apiClient(`/admin/returns/${returnId}/qc-decision`, {
-      method: 'PATCH',
-      body: JSON.stringify(payload),
-    });
+    return franchiseAction(returnId, franchiseId, 'qc-decision', payload);
+  },
+
+  // Refund (franchise.returns.refund — moves money)
+  initiateRefund(
+    returnId: string,
+    franchiseId: string,
+    refundMethod?: RefundMethod,
+  ): Promise<ApiResponse> {
+    return franchiseAction(returnId, franchiseId, 'initiate-refund', { refundMethod });
+  },
+
+  confirmRefund(
+    returnId: string,
+    franchiseId: string,
+    payload: { refundReference: string; refundMethod?: RefundMethod; notes?: string },
+  ): Promise<ApiResponse> {
+    return franchiseAction(returnId, franchiseId, 'confirm-refund', payload);
+  },
+
+  markRefundFailed(returnId: string, franchiseId: string, reason: string): Promise<ApiResponse> {
+    return franchiseAction(returnId, franchiseId, 'mark-refund-failed', { reason });
+  },
+
+  retryRefund(returnId: string, franchiseId: string): Promise<ApiResponse> {
+    return franchiseAction(returnId, franchiseId, 'retry-refund');
   },
 };
+
+export type RefundMethod =
+  | 'ORIGINAL_PAYMENT'
+  | 'WALLET'
+  | 'BANK_TRANSFER'
+  | 'CASH';
+
+/** PATCH /admin/franchise-returns/:id/<action>?franchiseId=… */
+function franchiseAction(
+  returnId: string,
+  franchiseId: string,
+  action: string,
+  body?: unknown,
+): Promise<ApiResponse> {
+  return apiClient(
+    `/admin/franchise-returns/${returnId}/${action}?franchiseId=${encodeURIComponent(franchiseId)}`,
+    { method: 'PATCH', body: JSON.stringify(body ?? {}) },
+  );
+}
