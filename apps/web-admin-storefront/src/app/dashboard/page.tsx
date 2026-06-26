@@ -571,24 +571,9 @@ export default function DashboardHome() {
             </p>
           </div>
           <div style={styles.quickActionsGrid}>
-            <QuickAction
-              title="Manage sellers"
-              body="Review applications, track performance, and moderate seller accounts."
-              cta="View sellers"
-              href="/dashboard/sellers"
-              icon={
-                <svg viewBox="0 0 24 24" style={styles.qaIcon} aria-hidden="true">
-                  <path
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.6"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M16 11a4 4 0 10-8 0 4 4 0 008 0zM3 21c0-4 3-7 9-7s9 3 9 7"
-                  />
-                </svg>
-              }
-            />
+            {/* "Manage sellers" quick-action removed (2026-06-26): seller
+                onboarding/moderation is delegated to the D2C / Retailer admin
+                portals; Super Admin no longer manages seller accounts. */}
             <QuickAction
               title="Review products"
               body="Approve, reject, or request changes on seller product submissions."

@@ -200,23 +200,58 @@ export class CustomerOrdersService {
         : gatewayCapturedPaise > 0
           ? gatewayCapturedPaise
           : walletPortionPaise;
+
+    // Money-critical observability. The cancel→wallet refund was reported as
+    // silently crediting ₹0 in staging, and every branch below either no-ops or
+    // swallows its error — so a single, greppable log line records the FULL
+    // decision (was it paid? gateway-captured? adapter/facade wired? amount?).
+    // Grep the API logs on `[cancel-refund]` after any cancel to see exactly why.
+    this.logger.log(
+      `[cancel-refund] order=${orderNumber} paymentStatus=${order.paymentStatus} ` +
+        `isPaid=${isPaid} isPreShipment=${isPreShipment} ` +
+        `walletPortionPaise=${walletPortionPaise} fullPaidPaise=${fullPaidPaise} ` +
+        `razorpayOrderId=${razorpayOrderId ?? 'null'} ` +
+        `adapter=${this.razorpayAdapter ? 'present' : 'MISSING'} ` +
+        `gatewayCapturedPaise=${gatewayCapturedPaise} ` +
+        `=> walletPaise=${walletPaise} facade=${this.walletFacade ? 'present' : 'MISSING'}`,
+    );
+
     if (walletPaise > 0 && this.walletFacade) {
       try {
-        await this.walletFacade.enqueueCheckoutCancellationRefund({
-          customerId: userId,
-          orderId: order.id,
-          amountInPaise: walletPaise,
-          reason: `Order ${orderNumber} cancelled before shipment — wallet refund`,
-        });
+        const refundResult =
+          await this.walletFacade.enqueueCheckoutCancellationRefund({
+            customerId: userId,
+            orderId: order.id,
+            amountInPaise: walletPaise,
+            reason: `Order ${orderNumber} cancelled before shipment — wallet refund`,
+          });
+        this.logger.log(
+          `[cancel-refund] order=${orderNumber} enqueued saga=${
+            (refundResult as { sagaId?: string })?.sagaId ?? '?'
+          } status=${
+            (refundResult as { status?: string })?.status ?? '?'
+          } amountInPaise=${walletPaise}`,
+        );
       } catch (err) {
         // The saga row + retry cron own recovery; a synchronous enqueue hiccup
         // must not block the cancel the customer already earned.
         this.logger.error(
-          `Failed to enqueue wallet cancellation refund for order ${orderNumber}: ${
+          `[cancel-refund] order=${orderNumber} FAILED to enqueue wallet refund: ${
             (err as Error)?.message
           }`,
         );
       }
+    } else {
+      // walletPaise === 0 (not paid + no verified gateway capture), or the
+      // wallet facade isn't wired. This is the EXPECTED outcome for an order
+      // cancelled before the customer actually paid (nothing was captured →
+      // nothing to refund). If the customer DID pay, this line flags it.
+      this.logger.warn(
+        `[cancel-refund] order=${orderNumber} NO wallet refund issued ` +
+          `(walletPaise=${walletPaise}, facade=${this.walletFacade ? 'present' : 'MISSING'}). ` +
+          `Expected when the order was never actually paid; if the customer DID ` +
+          `pay online, verify razorpayOrderId + that the gateway CAPTURED the payment.`,
+      );
     }
 
     // Propagate the cancellation to the courier. A Delhivery sub-order that was
