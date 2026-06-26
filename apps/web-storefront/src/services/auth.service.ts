@@ -128,6 +128,21 @@ export const authService = {
   },
 
   /**
+   * Sign in with Google. The `credential` is the signed JWT issued by
+   * Google Identity Services (GIS) on the client. The API verifies it
+   * server-side and, on success, sets the same httpOnly auth cookies
+   * the password login sets — so the response shape matches
+   * `LoginResponseData` and the post-login sequence (refresh() +
+   * broadcastAuthChange()) is identical.
+   */
+  googleSignIn(credential: string): Promise<ApiResponse<LoginResponseData>> {
+    return apiClient<LoginResponseData>('/auth/google', {
+      method: 'POST',
+      body: JSON.stringify({ credential }),
+    });
+  },
+
+  /**
    * Phase 17 (2026-05-20) — cookie-friendly "am I signed in?" probe.
    *
    * The request relies on the httpOnly sm_access_customer cookie
