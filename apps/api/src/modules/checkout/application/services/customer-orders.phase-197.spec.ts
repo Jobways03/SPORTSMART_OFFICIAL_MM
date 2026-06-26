@@ -11,7 +11,15 @@
 import 'reflect-metadata';
 import { CustomerOrdersService } from './customer-orders.service';
 
-function build(over: { repo?: any; eventBus?: any; audit?: any } = {}) {
+function build(
+  over: {
+    repo?: any;
+    eventBus?: any;
+    audit?: any;
+    walletFacade?: any;
+    razorpayAdapter?: any;
+  } = {},
+) {
   const repo: any = {
     findAddressByIdAndCustomer: jest.fn(),
     findCartWithLegacyItems: jest.fn(),
@@ -30,8 +38,16 @@ function build(over: { repo?: any; eventBus?: any; audit?: any } = {}) {
     writeAuditLog: jest.fn().mockResolvedValue(undefined),
     ...over.audit,
   };
-  const svc = new CustomerOrdersService(repo, eventBus, audit);
-  return { svc, repo, eventBus, audit };
+  // walletFacade + razorpayAdapter are @Optional in the real constructor; left
+  // undefined for the legacy tests that don't exercise the refund path.
+  const svc = new CustomerOrdersService(
+    repo,
+    eventBus,
+    audit,
+    over.walletFacade,
+    over.razorpayAdapter,
+  );
+  return { svc, repo, eventBus, audit, walletFacade: over.walletFacade };
 }
 
 describe('CustomerOrdersService legacy place-order gate (Phase 197 #20)', () => {
@@ -115,5 +131,69 @@ describe('CustomerOrdersService cancel (Phase 197 #11/#15)', () => {
       },
     });
     await expect(svc.cancelOrder('c-1', 'SM1')).rejects.toThrow(/already cancelled/i);
+  });
+});
+
+describe('CustomerOrdersService cancel → wallet refund amount (paise-sibling fallback)', () => {
+  function walletMock() {
+    return {
+      enqueueCheckoutCancellationRefund: jest
+        .fn()
+        .mockResolvedValue({ sagaId: 's-1', status: 'COMPLETED' }),
+    };
+  }
+
+  it('refunds the rupee total ×100 when total_amount_in_paise is 0 (dual-write OFF in env)', async () => {
+    // Regression: a genuinely-PAID pre-ship order whose paise sibling was never
+    // dual-written (MONEY_DUAL_WRITE_ENABLED=false in staging) used to refund ₹0
+    // because fullPaidPaise read total_amount_in_paise (0) directly. It must now
+    // fall back to total_amount (rupees) ×100.
+    const walletFacade = walletMock();
+    const { svc } = build({
+      walletFacade,
+      repo: {
+        findMasterOrderWithSubOrders: jest.fn().mockResolvedValue({
+          id: 'mo-1',
+          orderNumber: 'SM1',
+          orderStatus: 'PLACED',
+          paymentStatus: 'PAID',
+          totalAmount: 2804,
+          totalAmountInPaise: 0,
+          walletAmountUsedInPaise: 0,
+          subOrders: [{ id: 'so-1', fulfillmentStatus: 'UNFULFILLED' }],
+        }),
+      },
+    });
+    await svc.cancelOrder('c-1', 'SM1');
+    expect(walletFacade.enqueueCheckoutCancellationRefund).toHaveBeenCalledWith(
+      expect.objectContaining({
+        orderId: 'mo-1',
+        customerId: 'c-1',
+        amountInPaise: 280400,
+      }),
+    );
+  });
+
+  it('uses the paise sibling verbatim when it IS populated (no rupee round-trip)', async () => {
+    const walletFacade = walletMock();
+    const { svc } = build({
+      walletFacade,
+      repo: {
+        findMasterOrderWithSubOrders: jest.fn().mockResolvedValue({
+          id: 'mo-2',
+          orderNumber: 'SM2',
+          orderStatus: 'PLACED',
+          paymentStatus: 'PAID',
+          totalAmount: 1909,
+          totalAmountInPaise: 190900,
+          walletAmountUsedInPaise: 0,
+          subOrders: [{ id: 'so-2', fulfillmentStatus: 'UNFULFILLED' }],
+        }),
+      },
+    });
+    await svc.cancelOrder('c-2', 'SM2');
+    expect(walletFacade.enqueueCheckoutCancellationRefund).toHaveBeenCalledWith(
+      expect.objectContaining({ amountInPaise: 190900 }),
+    );
   });
 });

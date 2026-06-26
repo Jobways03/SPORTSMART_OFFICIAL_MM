@@ -160,7 +160,14 @@ export class CustomerOrdersService {
       ['SHIPPED', 'DELIVERED', 'FULFILLED'].includes(so.fulfillmentStatus as string),
     );
     const walletPortionPaise = Number(order.walletAmountUsedInPaise ?? 0);
-    const fullPaidPaise = Number((order as any).totalAmountInPaise ?? 0);
+    // Phase 258 — full paid amount to return on a PAID pre-shipment cancel.
+    // Prefer the authoritative paise sibling, but FALL BACK to the rupee total
+    // (×100) when the paise column is 0/unset. total_amount_in_paise is
+    // BigInt @default(0); a row whose paise sibling was never dual-written would
+    // otherwise refund ₹0 for a genuinely-PAID order (the exact ₹0-cancel bug).
+    const rawTotalPaise = Number((order as any).totalAmountInPaise ?? 0);
+    const fullPaidPaise =
+      rawTotalPaise || Math.round(Number(order.totalAmount ?? 0) * 100);
 
     // Cancel-before-payment-confirmed race: the customer may have actually paid
     // at the gateway, but the webhook/poller hadn't flipped paymentStatus to
@@ -209,7 +216,8 @@ export class CustomerOrdersService {
     this.logger.log(
       `[cancel-refund] order=${orderNumber} paymentStatus=${order.paymentStatus} ` +
         `isPaid=${isPaid} isPreShipment=${isPreShipment} ` +
-        `walletPortionPaise=${walletPortionPaise} fullPaidPaise=${fullPaidPaise} ` +
+        `walletPortionPaise=${walletPortionPaise} totalAmount=${order.totalAmount} ` +
+        `rawTotalPaise=${rawTotalPaise} fullPaidPaise=${fullPaidPaise} ` +
         `razorpayOrderId=${razorpayOrderId ?? 'null'} ` +
         `adapter=${this.razorpayAdapter ? 'present' : 'MISSING'} ` +
         `gatewayCapturedPaise=${gatewayCapturedPaise} ` +
