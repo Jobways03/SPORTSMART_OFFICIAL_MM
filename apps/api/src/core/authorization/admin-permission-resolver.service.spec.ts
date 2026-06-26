@@ -3,7 +3,14 @@ import { AdminPermissionResolver } from './admin-permission-resolver.service';
 import {
   ALL_PERMISSION_KEYS,
   SYSTEM_ROLE_PERMISSIONS,
+  SUPER_ADMIN_DELEGATED_PERMISSIONS,
 } from './permission-registry';
+
+// SUPER_ADMIN holds every registered permission EXCEPT the seller/franchise
+// lifecycle-management set, which is delegated to the dedicated D2C/Retailer/
+// Franchise admin roles. See SUPER_ADMIN_DELEGATED_PERMISSIONS.
+const SUPER_ADMIN_EXPECTED_COUNT =
+  ALL_PERMISSION_KEYS.length - SUPER_ADMIN_DELEGATED_PERMISSIONS.length;
 
 /**
  * Phase 4 (PR 4.6) — resolver behaviour matrix.
@@ -36,7 +43,7 @@ describe('AdminPermissionResolver', () => {
     } as any;
   }
 
-  it('SUPER_ADMIN resolves to every registered permission key', async () => {
+  it('SUPER_ADMIN resolves to every registered permission key EXCEPT the delegated seller/franchise set', async () => {
     const resolver = new AdminPermissionResolver(mockPrisma([]));
     const result = await resolver.resolve('admin-1', 'SUPER_ADMIN');
 
@@ -44,9 +51,14 @@ describe('AdminPermissionResolver', () => {
     expect(result.permissions.length).toBeGreaterThan(0);
     // Regression: this is the exact failure we observed in prod
     // (actorPermissionCount=0 for SUPER_ADMIN under PERMISSIONS_GUARD_STRICT=false).
-    expect(result.permissions.length).toBe(ALL_PERMISSION_KEYS.length);
+    expect(result.permissions.length).toBe(SUPER_ADMIN_EXPECTED_COUNT);
     for (const key of ALL_PERMISSION_KEYS) {
-      expect(result.permissions).toContain(key);
+      if (SUPER_ADMIN_DELEGATED_PERMISSIONS.includes(key)) {
+        // Seller/franchise lifecycle management is delegated away from SUPER_ADMIN.
+        expect(result.permissions).not.toContain(key);
+      } else {
+        expect(result.permissions).toContain(key);
+      }
     }
   });
 
@@ -111,6 +123,6 @@ describe('AdminPermissionResolver', () => {
     // even when the admin_custom_roles table is unreachable. A hard
     // throw here would 403 every admin route in strict mode — worse
     // than degraded resolution.
-    expect(result.permissions.length).toBe(ALL_PERMISSION_KEYS.length);
+    expect(result.permissions.length).toBe(SUPER_ADMIN_EXPECTED_COUNT);
   });
 });

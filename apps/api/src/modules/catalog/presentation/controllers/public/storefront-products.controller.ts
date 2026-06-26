@@ -633,7 +633,11 @@ export class StorefrontProductsController {
         price: p.basePrice != null ? String(p.basePrice) : null,
         compareAtPrice: p.compareAtPrice != null ? String(p.compareAtPrice) : null,
         primaryImageUrl: p.primaryImageUrl ?? null,
-        totalAvailableStock: 0, sellerCount: 0,
+        // Real availability from the query's stock aggregate — was hardcoded 0,
+        // which made every related card render "Out of stock" even though the
+        // query only returns in-stock products.
+        totalAvailableStock: Number(p.totalAvailableStock ?? 0),
+        sellerCount: Number(p.sellerCount ?? 0),
       }));
     });
     return { success: true, message: 'Related products', data: { products: items } };

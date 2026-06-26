@@ -56,9 +56,16 @@ export class PrismaAdminControlTowerRepository implements AdminControlTowerRepos
 
   async countMasterOrders(allowedSellerTypes?: SellerType[] | null): Promise<number> {
     return this.prisma.masterOrder.count({
-      where: PrismaAdminControlTowerRepository.restricts(allowedSellerTypes)
-        ? { subOrders: { some: { seller: { sellerType: { in: allowedSellerTypes } } } } }
-        : undefined,
+      where: {
+        // Exclude terminal-dead orders — a cancelled/rejected order is not a
+        // real order. Without this the "Orders" KPI counted cancelled orders,
+        // so a channel whose only order was cancelled showed "1 order" instead
+        // of 0 (and super-admin's total was inflated by cancellations).
+        orderStatus: { notIn: ['CANCELLED', 'REJECTED'] },
+        ...(PrismaAdminControlTowerRepository.restricts(allowedSellerTypes)
+          ? { subOrders: { some: { seller: { sellerType: { in: allowedSellerTypes } } } } }
+          : {}),
+      },
     });
   }
 
@@ -109,6 +116,9 @@ export class PrismaAdminControlTowerRepository implements AdminControlTowerRepos
     return this.prisma.masterOrder.count({
       where: {
         createdAt: { gte: since },
+        // Consistent with countMasterOrders — a cancelled/rejected order is not
+        // an "order today".
+        orderStatus: { notIn: ['CANCELLED', 'REJECTED'] },
         ...(PrismaAdminControlTowerRepository.restricts(allowedSellerTypes)
           ? { subOrders: { some: { seller: { sellerType: { in: allowedSellerTypes } } } } }
           : {}),
@@ -134,6 +144,12 @@ export class PrismaAdminControlTowerRepository implements AdminControlTowerRepos
     return this.prisma.subOrder.count({
       where: {
         acceptStatus: 'OPEN',
+        // A sub-order left OPEN on a cancelled/rejected master is stale, not a
+        // real "needs acknowledgement" order. Exclude terminal masters so the
+        // "pending orders" KPI + the "N pending order need attention" alert stay
+        // actionable (was counting phantom pending orders from cancelled
+        // orders, on both the scoped and super-admin dashboards).
+        masterOrder: { orderStatus: { notIn: ['CANCELLED', 'REJECTED'] } },
         ...(PrismaAdminControlTowerRepository.restricts(allowedSellerTypes)
           ? { seller: { sellerType: { in: allowedSellerTypes } } }
           : {}),

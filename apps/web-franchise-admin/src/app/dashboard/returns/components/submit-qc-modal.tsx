@@ -13,6 +13,7 @@ import '../../sellers/components/modal.css';
 
 interface Props {
   returnId: string;
+  franchiseId: string;
   returnNumber: string;
   items: FranchiseReturnItem[];
   onClose: () => void;
@@ -45,6 +46,7 @@ const CUSTOMER_REMEDIES: { value: CustomerRemedy; label: string }[] = [
 
 export default function SubmitQcModal({
   returnId,
+  franchiseId,
   returnNumber,
   items,
   onClose,
@@ -122,7 +124,7 @@ export default function SubmitQcModal({
 
     setSubmitting(true);
     try {
-      await franchiseReturnsService.submitQcDecision(returnId, {
+      await franchiseReturnsService.submitQcDecision(returnId, franchiseId, {
         decisions: items.map((item) => ({
           returnItemId: item.id,
           qcOutcome: decisions[item.id].qcOutcome,

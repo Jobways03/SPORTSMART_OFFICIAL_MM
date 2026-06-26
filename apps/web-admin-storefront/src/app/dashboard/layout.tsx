@@ -80,12 +80,16 @@ const navItems: (NavItem & { section?: NavSection })[] = [
   { label: 'Verification', href: '/dashboard/verification', icon: 'shield', anyOf: ['orders.verify', 'orders.verify.bulk'], section: 'operations' },
   { label: 'Products', href: '/dashboard/products', icon: 'package', anyOf: ['products.read', 'catalog.read'], anyPrefix: ['products', 'catalog'], section: 'operations' },
   { label: 'Seller Mappings', href: '/dashboard/products/seller-mappings', icon: 'users', anyOf: ['products.read', 'catalog.read'], section: 'operations' },
-  // Sellers — onboarding/approvals, profile, seller-type scope. Reachable to
-  // any sellers.* holder (sellers.read, sellers.approve, sellers.suspend, …).
-  { label: 'Sellers', href: '/dashboard/sellers', icon: 'users', anyPrefix: ['sellers'], section: 'operations' },
-  // Phase (franchise-admin) — franchise management section: list + detail with
-  // KYC/status/hold actions and Inventory/Pincodes/Catalog/POS tabs.
-  { label: 'Franchises', href: '/dashboard/franchises', icon: 'inventory', anyOf: ['franchise.read'], anyPrefix: ['franchise'], section: 'operations' },
+  // Seller + Franchise ONBOARDING/MANAGEMENT was removed from the Super Admin
+  // portal (2026-06-26). It is delegated to the dedicated, type-scoped admins:
+  //   • D2C sellers      → web-d2c-seller-admin    (D2C_ADMIN, sellers.scope.d2c)
+  //   • RETAIL sellers   → web-retail-seller-admin (RETAILER_ADMIN, sellers.scope.retail)
+  //   • Franchises       → web-franchise-admin     (FRANCHISE_ADMIN)
+  // SUPER_ADMIN no longer holds sellers.approve/suspend/penalize or
+  // franchise.approve/suspend (see SUPER_ADMIN_DELEGATED_PERMISSIONS), so these
+  // nav entries are gone. Its read/finance visibility of sellers/franchises is
+  // retained via the Products / Seller Mappings / Accounts / Franchise finances
+  // pages.
   { label: 'Inventory', href: '/dashboard/inventory', icon: 'inventory', anyOf: ['products.read'], anyPrefix: ['inventory'], section: 'operations' },
   { label: 'Low-stock alerts', href: '/dashboard/inventory/alerts', icon: 'alert-triangle', anyOf: ['products.read'], anyPrefix: ['inventory.alerts'], section: 'operations' },
   // Delhivery Tools console hidden (2026-06-02, product decision) — Delhivery

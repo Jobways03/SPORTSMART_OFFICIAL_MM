@@ -2485,6 +2485,37 @@ export class CheckoutService {
       },
     });
     if (!order) {
+      // The order may have ALREADY been confirmed before this synchronous
+      // verify ran: the Razorpay webhook or the orphan-recovery poller can
+      // flip the order to PLACED/PAID in the window between the browser
+      // capturing the payment and this verify call landing. When that
+      // happens the order is no longer PENDING_PAYMENT, so the lookup above
+      // misses it — but the payment SUCCEEDED and the order exists. Showing
+      // "no order found" to a customer who just paid is a false alarm that
+      // invites a duplicate payment. Re-confirming an already-PAID order
+      // must be idempotent (mirrors the post-flip race guard further down),
+      // so return success instead of throwing.
+      const alreadyConfirmed = await this.prisma.masterOrder.findFirst({
+        where: {
+          customerId: userId,
+          razorpayOrderId: input.razorpayOrderId,
+          paymentStatus: 'PAID',
+        },
+        select: {
+          orderNumber: true,
+          totalAmount: true,
+          razorpayPaymentId: true,
+        },
+      });
+      if (alreadyConfirmed) {
+        return {
+          verified: true,
+          orderNumber: alreadyConfirmed.orderNumber,
+          totalAmount: Number(alreadyConfirmed.totalAmount),
+          paymentId:
+            alreadyConfirmed.razorpayPaymentId ?? input.razorpayPaymentId,
+        };
+      }
       throw new NotFoundAppException(
         'No pending-payment order found for this Razorpay order',
       );

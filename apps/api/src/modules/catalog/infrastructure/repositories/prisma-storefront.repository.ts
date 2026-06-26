@@ -317,10 +317,23 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
         p.base_price AS "basePrice", p.compare_at_price AS "compareAtPrice",
         b.name AS "brandName", c.name AS "categoryName",
         (SELECT pi.url FROM product_images pi WHERE pi.product_id = p.id
-           ORDER BY pi.is_primary DESC, pi.sort_order ASC LIMIT 1) AS "primaryImageUrl"
+           ORDER BY pi.is_primary DESC, pi.sort_order ASC LIMIT 1) AS "primaryImageUrl",
+        -- Same in-stock aggregate findProductsPaginated uses, so the card's
+        -- totalAvailableStock check is accurate. Without this the cards
+        -- defaulted to 0 and rendered Out-of-stock despite the EXISTS gate
+        -- below already proving stock exists.
+        COALESCE(agg.total_available_stock, 0)::int AS "totalAvailableStock",
+        COALESCE(agg.seller_count, 0)::int AS "sellerCount"
       FROM products p
       LEFT JOIN brands b ON b.id = p.brand_id
       LEFT JOIN categories c ON c.id = p.category_id
+      LEFT JOIN LATERAL (
+        SELECT SUM(GREATEST(spm.stock_qty - spm.reserved_qty, 0))::int AS total_available_stock,
+          COUNT(DISTINCT spm.seller_id)::int AS seller_count
+        FROM seller_product_mappings spm
+        WHERE spm.product_id = p.id AND spm.is_active = true
+          AND spm.approval_status = 'APPROVED' AND (spm.stock_qty - spm.reserved_qty) > 0
+      ) agg ON true
       WHERE p.id <> ${productId}
         AND p.is_deleted = false AND p.status = 'ACTIVE' AND p.moderation_status = 'APPROVED'
         AND (${Prisma.join(relevance, ' OR ')})
