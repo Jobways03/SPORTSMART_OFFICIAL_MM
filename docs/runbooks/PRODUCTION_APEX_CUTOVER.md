@@ -14,7 +14,7 @@ merged. Email and the store must stay up throughout.
 
 | Area | Change | Files |
 |---|---|---|
-| **Apex serving** (gated `var.serve_apex`, default false; **`true` only in `production.tfvars`** so staging is untouched) | apex added as ACM **SAN** (`*.sportsmart.com` does not cover the bare apex; `www` is covered by the wildcard); validation `for_each` rekeyed to the record name to dedup the shared apex/wildcard CNAME; apex host-header listener rule → `web-storefront` TG; `www`→apex 301 rule; apex+www **A and AAAA** alias to the (dual-stack) ALB; apex+www added to `CORS_ORIGINS` | `infra/aws/terraform/{variables,alb,locals,production.tfvars}.tf`, new `apex.tf` |
+| **Apex serving** (gated `var.serve_apex`, default false; **`true` only in `production.tfvars`** so staging is untouched) | apex added as ACM **SAN** (`*.sportsmart.com` does not cover the bare apex; `www` is covered by the wildcard); validation `for_each` rekeyed to the record name to dedup the shared apex/wildcard CNAME; apex host-header listener rule → `web-storefront` TG; `www`→apex 301 rule; apex+www added to `CORS_ORIGINS`. **The apex/www A+AAAA DNS records are NOT Terraform-managed** — they're a manual Route53 flip at go-live (Phase H) so the cutover is controlled and instantly reversible. Terraform only makes the ALB *able* to serve the apex | `infra/aws/terraform/{variables,alb,locals,production.tfvars}.tf`, new `apex.tf` |
 | **Storefront canonical URL** (was `http://localhost:4005` in prod — SEO bug) | `NEXT_PUBLIC_STOREFRONT_URL` now baked at build time per env (apex in prod, `shop.<env>` otherwise) via a new SSM param | `locals.tf`, `migrate.tf`, `outputs.tf`, `Dockerfile.web`, `.github/workflows/deploy.yml` |
 | **Deferred admin-MFA + step-up migrations** (unrelated to Shopify — real platform debt) | additive `ADD COLUMN IF NOT EXISTS` migration for the 8 `admins` MFA columns + `admin_sessions.step_up_verified_at`; `prisma generate` + removal of the `as any` casts | `apps/api/prisma/schema/migrations/20260626120000_add_admin_mfa_and_step_up/`, admin-mfa code |
 | **Legacy URL → classic redirect** (opt-in, OFF until populated) | storefront middleware 301s an **allow-list** of old Shopify paths to the same path on `classic.<domain>`. Allow-list (not prefix) because the new catalog reuses the same `/products//collections/` URL shape — a prefix redirect would clobber live new-platform pages | `apps/web-storefront/src/middleware.ts`, `apps/web-storefront/src/data/shopify-legacy-redirect.json` |
@@ -76,6 +76,8 @@ Operator-owned, **outside** the platform Terraform.
 - [ ] Decide HA: `redis_ha`/`rds_multi_az`/`nat_per_az` are `false` (cost-lean) — single-AZ DB + single-node Redis = downtime windows. (Per the current decision, leaving lean.)
 
 ## Phase 4 — Provision + deploy subdomains only (apex still Shopify)
+
+> Step-by-step (commands, gates, GitHub deploy variable): **[PRODUCTION_TERRAFORM_APPLY.md](./PRODUCTION_TERRAFORM_APPLY.md)**.
 **Gate:** don't start until `dig @8.8.8.8 NS sportsmart.com` returns only Route53 — `aws_acm_certificate_validation` **blocks the apply** (up to 72h) against a stale provider.
 ```
 cd infra/aws/terraform
@@ -88,7 +90,7 @@ gh workflow run deploy.yml -f target=production -f services=all -f run_seed=true
 
 ## Phase 5 — Apex go-live: **DNS-first, remove-from-Shopify-LAST**
 1. [ ] Confirm `classic` is live with valid SSL.
-2. [ ] `terraform apply -var-file=production.tfvars` lands the apex SAN + listener rules + alias + CORS (`serve_apex=true`; new API task-def revision). Confirm the new cert is ISSUED and covers the apex.
+2. [ ] `terraform apply -var-file=production.tfvars` lands the apex SAN + listener rules + CORS (`serve_apex=true`; new API task-def revision). It does **not** touch DNS. Confirm the new cert is ISSUED and covers the apex.
 3. [ ] **Prove the ALB serves the apex before any DNS change** (until the rule exists the listener default is a 404): `curl -I --resolve sportsmart.com:443:<ALB_IP> https://sportsmart.com/` → storefront 200 + valid cert.
 4. [ ] Flip Route53 apex `A` **and `AAAA`** Shopify IP → ALB alias; repoint `www` (60s TTL).
 5. [ ] Set `classic` PRIMARY on Shopify (only now).

@@ -48,6 +48,12 @@ mail_from   = "Sportsmart <support@sportsmart.com>"
 # mail.sportsmart.com, so skip TLS hostname verification (still encrypted).
 mail_tls_reject_unauthorized = "false"
 
+# Reuse the account-wide GitHub OIDC provider the STAGING apply already created.
+# Only ONE GitHub OIDC provider may exist per AWS account, so leaving this empty
+# makes the production apply fail with EntityAlreadyExists. Confirm/adjust the ARN
+# with: aws iam list-open-id-connect-providers
+github_oidc_provider_arn = "arn:aws:iam::943189351633:oidc-provider/token.actions.githubusercontent.com"
+
 image_tag                  = "production-latest"
 logistics_facade_image_tag = "production-latest"
 

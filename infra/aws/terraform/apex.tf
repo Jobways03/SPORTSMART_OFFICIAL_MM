@@ -4,7 +4,15 @@
 # Serves the customer storefront (web-storefront) at the BARE APEX env_domain
 # (e.g. https://sportsmart.com) and 301-redirects www → apex. The bare-apex ACM
 # SAN is added in alb.tf (a wildcard *.<domain> does not cover the apex); www is
-# already covered by the wildcard cert. See docs/runbooks/PRODUCTION_APEX_CUTOVER.md.
+# already covered by the wildcard cert.
+#
+# DNS IS DELIBERATELY NOT MANAGED HERE. The apex + www A/AAAA records are
+# operator-managed directly in Route53 so go-live is a single, controlled,
+# instantly-reversible MANUAL flip (Shopify IP → this ALB, and back on rollback),
+# independent of `terraform apply`. Terraform only makes the ALB ABLE to serve
+# the apex (cert SAN + host-header rules + CORS); pointing DNS at it is the manual
+# cutover step. See docs/runbooks/PRODUCTION_APEX_CUTOVER.md (Phase 5) and
+# docs/runbooks/PRODUCTION_TERRAFORM_APPLY.md.
 
 locals {
   apex_host = var.env_domain
@@ -31,6 +39,7 @@ resource "aws_lb_listener_rule" "apex_storefront" {
 }
 
 # www → 301 redirect to the apex (single canonical host), preserving path+query.
+# (Reaches the ALB only once the operator points www's DNS at it — see header.)
 resource "aws_lb_listener_rule" "www_redirect" {
   count        = var.serve_apex ? 1 : 0
   listener_arn = aws_lb_listener.https.arn
@@ -52,60 +61,5 @@ resource "aws_lb_listener_rule" "www_redirect" {
     host_header {
       values = [local.www_host]
     }
-  }
-}
-
-# Apex + www DNS → the ALB. The apex MUST be an ALIAS (apex can't be a CNAME);
-# both A and AAAA are needed because the ALB is dual-stack (IPv6-only clients
-# would otherwise fail to resolve).
-resource "aws_route53_record" "apex_a" {
-  count   = var.serve_apex ? 1 : 0
-  zone_id = local.hosted_zone_id
-  name    = local.apex_host
-  type    = "A"
-
-  alias {
-    name                   = aws_lb.main.dns_name
-    zone_id                = aws_lb.main.zone_id
-    evaluate_target_health = true
-  }
-}
-
-resource "aws_route53_record" "apex_aaaa" {
-  count   = var.serve_apex ? 1 : 0
-  zone_id = local.hosted_zone_id
-  name    = local.apex_host
-  type    = "AAAA"
-
-  alias {
-    name                   = aws_lb.main.dns_name
-    zone_id                = aws_lb.main.zone_id
-    evaluate_target_health = true
-  }
-}
-
-resource "aws_route53_record" "www_a" {
-  count   = var.serve_apex ? 1 : 0
-  zone_id = local.hosted_zone_id
-  name    = local.www_host
-  type    = "A"
-
-  alias {
-    name                   = aws_lb.main.dns_name
-    zone_id                = aws_lb.main.zone_id
-    evaluate_target_health = true
-  }
-}
-
-resource "aws_route53_record" "www_aaaa" {
-  count   = var.serve_apex ? 1 : 0
-  zone_id = local.hosted_zone_id
-  name    = local.www_host
-  type    = "AAAA"
-
-  alias {
-    name                   = aws_lb.main.dns_name
-    zone_id                = aws_lb.main.zone_id
-    evaluate_target_health = true
   }
 }
