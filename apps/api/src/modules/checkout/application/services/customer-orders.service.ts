@@ -10,6 +10,7 @@ import {
 import { EventBusService } from '../../../../bootstrap/events/event-bus.service';
 import { AuditPublicFacade } from '../../../audit/application/facades/audit-public.facade';
 import { WalletPublicFacade } from '../../../wallet/application/facades/wallet-public.facade';
+import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razorpay.adapter';
 
 @Injectable()
 export class CustomerOrdersService {
@@ -27,6 +28,12 @@ export class CustomerOrdersService {
     // @Optional so the direct-construction spec harnesses still compile.
     @Optional()
     private readonly walletFacade?: WalletPublicFacade,
+    // Used on cancel to verify whether the gateway actually CAPTURED a payment
+    // that hadn't yet reconciled to PAID (the cancel-before-webhook race), so
+    // the customer's money goes to the wallet instead of being stranded.
+    // CheckoutModule already imports RazorpayModule; @Optional for spec harnesses.
+    @Optional()
+    private readonly razorpayAdapter?: RazorpayAdapter,
   ) {}
 
   // ── Legacy place-order ─────────────────────────────────────────────────
@@ -154,8 +161,45 @@ export class CustomerOrdersService {
     );
     const walletPortionPaise = Number(order.walletAmountUsedInPaise ?? 0);
     const fullPaidPaise = Number((order as any).totalAmountInPaise ?? 0);
+
+    // Cancel-before-payment-confirmed race: the customer may have actually paid
+    // at the gateway, but the webhook/poller hadn't flipped paymentStatus to
+    // PAID before this cancel landed (e.g. cancelled ~1 min after placing). The
+    // order isn't `isPaid` yet, so the branch above would refund nothing and
+    // strand the money. Verify with Razorpay: if a payment was genuinely
+    // CAPTURED, return that captured amount to the wallet as store credit.
+    // We credit ONLY a verified-captured payment (never an authorized-but-
+    // uncaptured one → no free credit). The cancellation refund saga is
+    // idempotent (dedups on orderId+customerId+amount), so this can't collide
+    // with the poller's own recovery.
+    let gatewayCapturedPaise = 0;
+    const razorpayOrderId = (order as any).razorpayOrderId as string | null;
+    if (!isPaid && razorpayOrderId && this.razorpayAdapter) {
+      try {
+        const payments =
+          await this.razorpayAdapter.fetchOrderPayments(razorpayOrderId);
+        const captured = payments
+          .filter((p) => p.captured && p.status === 'captured')
+          .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+        if (captured) gatewayCapturedPaise = Number(captured.amountInPaise);
+      } catch (err) {
+        // Gateway unreachable — do NOT credit on uncertainty (avoid free money).
+        // PaymentStatusPollerService still reconciles independently; log so ops
+        // can recover a genuinely-captured payment.
+        this.logger.error(
+          `Gateway capture check failed on cancel for order ${orderNumber}: ${
+            (err as Error)?.message
+          }`,
+        );
+      }
+    }
+
     const walletPaise =
-      isPaid && isPreShipment ? fullPaidPaise : walletPortionPaise;
+      isPaid && isPreShipment
+        ? fullPaidPaise
+        : gatewayCapturedPaise > 0
+          ? gatewayCapturedPaise
+          : walletPortionPaise;
     if (walletPaise > 0 && this.walletFacade) {
       try {
         await this.walletFacade.enqueueCheckoutCancellationRefund({

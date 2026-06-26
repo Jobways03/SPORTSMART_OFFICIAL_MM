@@ -62,8 +62,6 @@ export class FranchiseOrdersService {
       search?: string;
     },
   ) {
-    // Franchises see ALL their assigned sub-orders regardless of master order status.
-    // The sub-order's own acceptStatus + fulfillmentStatus drive franchise actions.
     const where: Prisma.SubOrderWhereInput = {
       franchiseId,
       fulfillmentNodeType: 'FRANCHISE',
@@ -75,14 +73,29 @@ export class FranchiseOrdersService {
     if (filters?.acceptStatus) {
       where.acceptStatus = filters.acceptStatus as any;
     }
+    // Mirror the D2C/admin orders list: hide never-captured online checkouts
+    // (PENDING_PAYMENT pre-payment carts + Razorpay-minted-but-never-paid) so a
+    // failed/abandoned payment never shows as a franchise order. See
+    // listAllOrders for the full rationale.
+    const masterWhere: Prisma.MasterOrderWhereInput = {
+      NOT: {
+        OR: [
+          { orderStatus: 'PENDING_PAYMENT' as any },
+          {
+            razorpayOrderId: { not: null },
+            razorpayPaymentId: null,
+            paymentStatus: { not: 'PAID' as any },
+          },
+        ],
+      } as any,
+    };
     if (filters?.search) {
-      where.masterOrder = {
-        orderNumber: {
-          contains: filters.search,
-          mode: 'insensitive',
-        },
+      masterWhere.orderNumber = {
+        contains: filters.search,
+        mode: 'insensitive',
       };
     }
+    where.masterOrder = masterWhere;
 
     const skip = (page - 1) * limit;
 
@@ -174,6 +187,25 @@ export class FranchiseOrdersService {
     const masterWhere: Prisma.MasterOrderWhereInput = {};
     if (filters?.orderStatus) masterWhere.orderStatus = filters.orderStatus as any;
     if (filters?.paymentStatus) masterWhere.paymentStatus = filters.paymentStatus as any;
+    // Mirror the D2C/admin orders list (orders.service.listOrders): hide
+    // never-captured online checkouts from the default view — a PENDING_PAYMENT
+    // pre-payment cart, OR a Razorpay order minted but the payment never landed
+    // (razorpayPaymentId null + not PAID). Those were never real orders, so the
+    // franchise shouldn't see them (e.g. a customer whose payment failed then
+    // cancelled). razorpayOrderId-not-null keeps a wallet-paid cancelled order
+    // visible. An explicit orderStatus/paymentStatus filter bypasses this.
+    if (!filters?.orderStatus && !filters?.paymentStatus) {
+      masterWhere.NOT = {
+        OR: [
+          { orderStatus: 'PENDING_PAYMENT' as any },
+          {
+            razorpayOrderId: { not: null },
+            razorpayPaymentId: null,
+            paymentStatus: { not: 'PAID' as any },
+          },
+        ],
+      } as any;
+    }
     if (filters?.search) {
       const s = filters.search.trim();
       masterWhere.OR = [
