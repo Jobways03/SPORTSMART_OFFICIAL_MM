@@ -67,8 +67,8 @@ export default function ActionMenu({
     };
   }, [open]);
 
-  const canImpersonate = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole);
-  const canDelete = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole);
+  const canImpersonate = ['SUPER_ADMIN', 'SELLER_ADMIN', 'RETAILER_ADMIN'].includes(adminRole);
+  const canDelete = ['SUPER_ADMIN', 'SELLER_ADMIN', 'RETAILER_ADMIN'].includes(adminRole);
 
   const handleAction = (fn: () => void) => {
     setOpen(false);
