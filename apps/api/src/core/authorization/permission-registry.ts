@@ -879,8 +879,39 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
  * (we still accept it as a string match on /admin/returns/* legacy
  * routes) but new role definitions should use the granular form.
  */
+/**
+ * Seller- and franchise- LIFECYCLE MANAGEMENT is delegated to the dedicated
+ * D2C_ADMIN / RETAILER_ADMIN / FRANCHISE_ADMIN roles, each operating in its own
+ * type-scoped portal (D2C admin → D2C sellers, Retailer admin → RETAIL sellers,
+ * Franchise admin → franchises, via sellers.scope.* + the franchise role). So
+ * SUPER_ADMIN is explicitly DENIED the onboarding/approval/suspension/penalty/
+ * logistics keys below — it can no longer approve or manage sellers/franchises,
+ * even through the API (the controllers gate on these @Permissions, so the strip
+ * is load-bearing, not cosmetic).
+ *
+ * SUPER_ADMIN RETAINS the read + finance/ops keys (sellers.read, franchise.read,
+ * franchise.finance, franchise.orders, …) so the cross-cutting super-admin pages
+ * (Products, Seller Mappings, Dashboard, Franchise finances) keep working.
+ *
+ * This is the ONE deliberate hole in SUPER_ADMIN's otherwise-complete grant. The
+ * "SUPER_ADMIN = every permission EXCEPT this set" invariant is locked by
+ * permission-registry.coverage.spec.ts + admin-permission-resolver.service.spec.ts.
+ * Each key here is still granted to a dedicated role, so the "every permission is
+ * granted to some role" coverage invariant is unaffected.
+ */
+export const SUPER_ADMIN_DELEGATED_PERMISSIONS: readonly PermissionKey[] = [
+  'sellers.approve',
+  'sellers.suspend',
+  'sellers.penalize',
+  'sellers.logistics.register',
+  'franchise.approve',
+  'franchise.suspend',
+];
+
 export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> = {
-  SUPER_ADMIN: ALL_PERMISSION_KEYS,
+  SUPER_ADMIN: ALL_PERMISSION_KEYS.filter(
+    (k) => !SUPER_ADMIN_DELEGATED_PERMISSIONS.includes(k),
+  ),
   // Zero-permission baseline. A STAFF admin sees nothing until a custom role
   // grants it — the intended primary role for functional admins (Wallet
   // Manager, Support, Returns, …) whose access is composed purely from custom

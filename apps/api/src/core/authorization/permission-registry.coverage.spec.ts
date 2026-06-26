@@ -5,6 +5,7 @@ import {
   ALL_PERMISSION_KEYS,
   PERMISSIONS,
   SYSTEM_ROLE_PERMISSIONS,
+  SUPER_ADMIN_DELEGATED_PERMISSIONS,
 } from './permission-registry';
 
 /**
@@ -130,9 +131,30 @@ describe('Permission registry coverage', () => {
     expect(true).toBe(true);
   });
 
-  it('SUPER_ADMIN grants every registered permission', () => {
+  it('SUPER_ADMIN grants every registered permission EXCEPT the delegated seller/franchise management set', () => {
     const superAdmin = new Set(SYSTEM_ROLE_PERMISSIONS['SUPER_ADMIN'] ?? []);
     const missing = ALL_PERMISSION_KEYS.filter((k) => !superAdmin.has(k));
-    expect(missing).toEqual([]);
+    // Seller/franchise lifecycle management is delegated to the dedicated
+    // D2C_ADMIN / RETAILER_ADMIN / FRANCHISE_ADMIN roles; SUPER_ADMIN is
+    // intentionally denied EXACTLY this set and nothing more.
+    expect([...missing].sort()).toEqual(
+      [...SUPER_ADMIN_DELEGATED_PERMISSIONS].sort(),
+    );
+    // It must still RETAIN the read siblings so adjacent super-admin pages
+    // (Products, Seller Mappings, Dashboard, Franchise finances) keep working.
+    expect(superAdmin.has('sellers.read')).toBe(true);
+    expect(superAdmin.has('franchise.read')).toBe(true);
+  });
+
+  it('every delegated (super-admin-denied) permission is still granted to a dedicated role', () => {
+    const grantedElsewhere = new Set<string>();
+    for (const [role, perms] of Object.entries(SYSTEM_ROLE_PERMISSIONS)) {
+      if (role === 'SUPER_ADMIN') continue;
+      for (const p of perms) grantedElsewhere.add(p);
+    }
+    const orphaned = SUPER_ADMIN_DELEGATED_PERMISSIONS.filter(
+      (k) => !grantedElsewhere.has(k),
+    );
+    expect(orphaned).toEqual([]);
   });
 });
