@@ -25,6 +25,8 @@ import {
   validateConfirmPassword,
 } from '@/lib/validators';
 import { CaptchaWidget } from '@/components/CaptchaWidget';
+import { GoogleSignInButton } from '@/components/GoogleSignInButton';
+import { useSession, broadcastAuthChange } from '@/lib/auth-context';
 
 interface FormErrors {
   firstName?: string;
@@ -44,6 +46,7 @@ const CAPTCHA_REQUIRED =
 
 export default function RegisterPage() {
   const router = useRouter();
+  const { refresh } = useSession();
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
@@ -169,6 +172,37 @@ export default function RegisterPage() {
       setIsSubmitting(false);
     }
   };
+
+  // Google sign-in establishes an authenticated cookie session
+  // immediately (no email OTP step), so on success we run the same
+  // post-login sequence the login page uses rather than redirecting to
+  // /register/verify. Failures reuse the existing serverError UI.
+  const handleGoogleSuccess = useCallback(
+    async (credential: string) => {
+      setServerError('');
+      setIsSubmitting(true);
+      try {
+        await authService.googleSignIn(credential);
+        await refresh();
+        broadcastAuthChange();
+        router.replace('/');
+      } catch (err) {
+        if (err instanceof ApiError) {
+          if (err.status === 401 || err.status === 403) {
+            setServerError(err.message || 'Google sign-in failed. Please try again.');
+          } else if (err.status === 429) {
+            setServerError('Too many attempts. Please try again in a moment.');
+          } else {
+            setServerError('Something went wrong. Please try again.');
+          }
+        } else {
+          setServerError('Something went wrong. Please try again.');
+        }
+        setIsSubmitting(false);
+      }
+    },
+    [refresh, router],
+  );
 
   const showErr = (field: keyof FormErrors, value: string) =>
     errors[field] && (submitAttempted || value.trim()) ? errors[field] : undefined;
@@ -550,6 +584,30 @@ export default function RegisterPage() {
               </button>
               </fieldset>
             </form>
+
+            <div className="mt-6 flex items-center gap-3" aria-hidden>
+              <span className="h-px flex-1 bg-ink-200" />
+              <span className="text-caption uppercase tracking-wider text-ink-500">
+                or continue with
+              </span>
+              <span className="h-px flex-1 bg-ink-200" />
+            </div>
+
+            <GoogleSignInButton
+              onSuccess={handleGoogleSuccess}
+              text="signup_with"
+              className="mt-5 flex justify-center"
+            />
+
+            {/* Google sign-up skips the checkboxes above (Google proves the
+                email), so state the consent here — the backend records
+                Terms/Privacy consent for the new account (DPDP informed consent). */}
+            <p className="mt-3 text-caption text-ink-500 text-center">
+              Continuing with Google means you agree to our{' '}
+              <Link href="/legal/terms" className="underline hover:text-accent-dark" target="_blank">Terms of Service</Link>{' '}
+              and{' '}
+              <Link href="/legal/privacy" className="underline hover:text-accent-dark" target="_blank">Privacy Policy</Link>.
+            </p>
 
             <div className="mt-8 grid grid-cols-3 gap-3 pt-6 border-t border-ink-200">
               {[

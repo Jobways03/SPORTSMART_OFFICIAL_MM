@@ -126,6 +126,16 @@ export const envSchema = z.object({
   // in high-paranoia environments.
   RAZORPAY_WEBHOOK_REPLAY_WINDOW_SECONDS: z.coerce.number().int().positive().default(300),
 
+  // Google "Sign in with Google" — optional / feature-gated. The public
+  // OAuth client id is BOTH the audience the API verifies an incoming
+  // Google ID token against AND the client id the storefront's Google
+  // button is initialised with. Optional (NOT in requiredInProd): when
+  // unset, GoogleIdTokenVerifierService refuses every credential with a
+  // clear "Google login is not configured" error, so the feature is
+  // simply off until an operator sets this. Same optional shape as
+  // RAZORPAY_KEY_ID above.
+  GOOGLE_CLIENT_ID: z.string().optional(),
+
   // Shiprocket - optional
   SHIPROCKET_EMAIL: z.string().optional(),
   SHIPROCKET_PASSWORD: z.string().optional(),

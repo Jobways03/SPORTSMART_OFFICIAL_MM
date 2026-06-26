@@ -4,6 +4,7 @@ import { RegisterUserUseCase } from './application/use-cases/register-user.use-c
 import { VerifyEmailOtpUseCase } from './application/use-cases/verify-email-otp.use-case';
 import { ResendVerificationOtpUseCase } from './application/use-cases/resend-verification-otp.use-case';
 import { LoginUserUseCase } from './application/use-cases/login-user.use-case';
+import { GoogleLoginUseCase } from './application/use-cases/google-login.use-case';
 import { ForgotPasswordUseCase } from './application/use-cases/forgot-password.use-case';
 import { VerifyResetOtpUseCase } from './application/use-cases/verify-reset-otp.use-case';
 import { ResendResetOtpUseCase } from './application/use-cases/resend-reset-otp.use-case';
@@ -24,6 +25,7 @@ import { PrismaUserRepository } from './infrastructure/repositories/prisma-user.
 import { PrismaSessionRepository } from './infrastructure/repositories/prisma-session.prisma-repository';
 import { RegisterController } from './presentation/controllers/register.controller';
 import { LoginController } from './presentation/controllers/login.controller';
+import { GoogleLoginController } from './presentation/controllers/google-login.controller';
 import { LogoutController } from './presentation/controllers/logout.controller';
 import { ConsentController } from './presentation/controllers/consent.controller';
 import { CustomerDataExportController } from './presentation/controllers/customer-data-export.controller';
@@ -39,6 +41,7 @@ import { UserAuthGuard } from '../../core/guards';
   controllers: [
     RegisterController,
     LoginController,
+    GoogleLoginController,
     LogoutController,
     AuthMeController,
     SessionsController,
@@ -56,6 +59,7 @@ import { UserAuthGuard } from '../../core/guards';
     VerifyEmailOtpUseCase,
     ResendVerificationOtpUseCase,
     LoginUserUseCase,
+    GoogleLoginUseCase,
     LogoutUserUseCase,
     ForgotPasswordUseCase,
     VerifyResetOtpUseCase,

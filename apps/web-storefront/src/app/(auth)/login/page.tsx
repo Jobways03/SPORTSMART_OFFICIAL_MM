@@ -18,6 +18,7 @@ import { authService } from '@/services/auth.service';
 import { ApiError } from '@/lib/api-client';
 import { validateLoginEmail, validateLoginPassword } from '@/lib/validators';
 import { CaptchaWidget } from '@/components/CaptchaWidget';
+import { GoogleSignInButton } from '@/components/GoogleSignInButton';
 import { AuthMobileHeader } from '@/components/auth/AuthMobileHeader';
 import { useSession, broadcastAuthChange } from '@/lib/auth-context';
 
@@ -136,6 +137,37 @@ function LoginPageContent() {
       setIsSubmitting(false);
     }
   };
+
+  // Google sign-in: exchange the GIS credential for the same cookie
+  // session the password login sets, then run the identical post-login
+  // sequence. Failures reuse the existing inline serverError UI.
+  const handleGoogleSuccess = useCallback(
+    async (credential: string) => {
+      setServerError('');
+      setNeedsEmailVerification(false);
+      setIsSubmitting(true);
+      try {
+        await authService.googleSignIn(credential);
+        await refresh();
+        broadcastAuthChange();
+        router.replace('/');
+      } catch (err) {
+        if (err instanceof ApiError) {
+          if (err.status === 401 || err.status === 403) {
+            setServerError(err.message || 'Google sign-in failed. Please try again.');
+          } else if (err.status === 429) {
+            setServerError(err.message || 'Too many attempts. Please try again later.');
+          } else {
+            setServerError('Something went wrong. Please try again.');
+          }
+        } else {
+          setServerError('Something went wrong. Please try again.');
+        }
+        setIsSubmitting(false);
+      }
+    },
+    [refresh, router],
+  );
 
   const visibleEmailError =
     errors.email && (submitAttempted || email.trim()) ? errors.email : undefined;
@@ -381,6 +413,30 @@ function LoginPageContent() {
               </button>
               </fieldset>
             </form>
+
+            <div className="mt-6 flex items-center gap-3" aria-hidden>
+              <span className="h-px flex-1 bg-ink-200" />
+              <span className="text-caption uppercase tracking-wider text-ink-500">
+                or continue with
+              </span>
+              <span className="h-px flex-1 bg-ink-200" />
+            </div>
+
+            <GoogleSignInButton
+              onSuccess={handleGoogleSuccess}
+              text="signin_with"
+              className="mt-5 flex justify-center"
+            />
+
+            {/* New customers are created on first Google sign-in, so surface the
+                consent notice here too — the backend records Terms/Privacy
+                consent for Google-provisioned accounts (DPDP informed consent). */}
+            <p className="mt-3 text-caption text-ink-500 text-center">
+              New here? Continuing with Google creates an account and means you agree to our{' '}
+              <Link href="/legal/terms" className="underline hover:text-accent-dark" target="_blank">Terms of Service</Link>{' '}
+              and{' '}
+              <Link href="/legal/privacy" className="underline hover:text-accent-dark" target="_blank">Privacy Policy</Link>.
+            </p>
 
             <div className="mt-10 grid grid-cols-3 gap-3 pt-6 border-t border-ink-200">
               {[

@@ -99,6 +99,18 @@ resource "aws_ssm_parameter" "deploy_api_url" {
   tags  = { Name = "${local.name}-deploy-api-url" }
 }
 
+# Consumed by deploy.yml to bake NEXT_PUBLIC_GOOGLE_CLIENT_ID into the web images
+# (the storefront "Sign in with Google" button). Public client id; the API reads
+# the same value as GOOGLE_CLIENT_ID (ecs.tf). Created ONLY when set — SSM forbids
+# empty values — so deploy.yml reads it with a soft fallback (empty = button hidden).
+resource "aws_ssm_parameter" "deploy_google_client_id" {
+  count = var.google_client_id != "" ? 1 : 0
+  name  = "/sportsmart/${var.env}/deploy/google_client_id"
+  type  = "String"
+  value = var.google_client_id
+  tags  = { Name = "${local.name}-deploy-google-client-id" }
+}
+
 # Per-service public URLs, consumed by infra/scripts/smoke.sh for the
 # post-deploy end-to-end health gate.
 resource "aws_ssm_parameter" "deploy_service_urls" {

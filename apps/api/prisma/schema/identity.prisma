@@ -8,7 +8,10 @@ model User {
   lastName            String     @map("last_name")
   email               String     @unique
   phone               String?    @unique
-  passwordHash        String     @map("password_hash")
+  // Nullable: OAuth-only customers (Sign in with Google) have no password.
+  // Every password path MUST treat a null hash as "no password set" and 401
+  // cleanly — never call bcrypt.compare on null. See model AuthIdentity.
+  passwordHash        String?    @map("password_hash")
   status              UserStatus @default(ACTIVE)
   emailVerified       Boolean    @default(false) @map("email_verified")
   // Phase 16 (2026-05-20) — compliance-audit timestamps. The boolean
@@ -40,6 +43,8 @@ model User {
 
   roleAssignments       RoleAssignment[]
   sessions              Session[]
+  // External identity links (Sign in with Google, etc.).
+  authIdentities        AuthIdentity[]
   passwordResetOtps     PasswordResetOtp[]
   emailVerificationOtps EmailVerificationOtp[]
   // Phase 14 (2026-05-16) — back-relation for the dedicated DPDP
@@ -282,4 +287,35 @@ model ConsentRecord {
   /// notification gate.
   @@index([purpose, granted])
   @@map("consent_records")
+}
+
+/// External identity-provider link — "Sign in with Google" and any future
+/// social/SSO provider. One row per (provider, providerSubject). A customer may
+/// sign in purely via a provider (passwordHash null) or link a provider to an
+/// existing password account (auto-linked on a verified-email match — see
+/// GoogleLoginUseCase). The authoritative contact email + roles stay on User;
+/// this table only records HOW the user can authenticate.
+model AuthIdentity {
+  id     String @id @default(uuid())
+  userId String @map("user_id")
+  /// Lower-case provider key (e.g. "google"). Bare string, matching the
+  /// provider-column convention used in payments/shipping elsewhere.
+  provider String
+  /// The provider's stable subject identifier (Google `sub`). Unique per
+  /// provider — this is what we match a returning provider login against.
+  providerSubject String @map("provider_subject")
+  /// Email the provider asserted at link time (denormalised for support/audit;
+  /// not authoritative — User.email is).
+  email String?
+  /// Whether the provider asserted the email as verified when this link was
+  /// created. We only ever create a link from a provider-verified email.
+  emailVerifiedByProvider Boolean  @default(false) @map("email_verified_by_provider")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerSubject])
+  @@index([userId])
+  @@map("auth_identities")
 }
