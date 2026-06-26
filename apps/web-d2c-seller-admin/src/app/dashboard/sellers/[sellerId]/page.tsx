@@ -553,17 +553,17 @@ export default function AdminSellerDetailPage() {
     fetchSeller();
   };
 
-  const canImpersonate = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole) && seller?.status === 'ACTIVE';
-  const canDelete = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole);
+  const canImpersonate = ['SUPER_ADMIN', 'SELLER_ADMIN', 'D2C_ADMIN'].includes(adminRole) && seller?.status === 'ACTIVE';
+  const canDelete = ['SUPER_ADMIN', 'SELLER_ADMIN', 'D2C_ADMIN'].includes(adminRole);
   // Proper KYC review: shown only when the seller has actually submitted
   // onboarding (verificationStatus UNDER_REVIEW). Approve/Reject go through
   // the real /approve + /reject endpoints (which require GSTIN+PAN), not the
   // raw verification override.
-  const canReviewKyc = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole) && seller?.verificationStatus === 'UNDER_REVIEW';
+  const canReviewKyc = ['SUPER_ADMIN', 'SELLER_ADMIN', 'D2C_ADMIN'].includes(adminRole) && seller?.verificationStatus === 'UNDER_REVIEW';
   // Phase 254 — verifying statutory IDs is a management action available at any
   // status (the seller is usually already VERIFIED/ACTIVE by the time finance
   // verifies the PAN for the TDS rate).
-  const canVerifyTaxIds = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole);
+  const canVerifyTaxIds = ['SUPER_ADMIN', 'SELLER_ADMIN', 'D2C_ADMIN'].includes(adminRole);
 
   // ---- Product Mappings State ----
   interface SellerProductMappingItem {

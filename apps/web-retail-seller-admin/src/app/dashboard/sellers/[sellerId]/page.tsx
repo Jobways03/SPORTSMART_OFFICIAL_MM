@@ -552,13 +552,13 @@ export default function AdminSellerDetailPage() {
     fetchSeller();
   };
 
-  const canReviewKyc = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole) && seller?.verificationStatus === 'UNDER_REVIEW';
-  const canImpersonate = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole) && seller?.status === 'ACTIVE';
-  const canDelete = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole);
+  const canReviewKyc = ['SUPER_ADMIN', 'SELLER_ADMIN', 'RETAILER_ADMIN'].includes(adminRole) && seller?.verificationStatus === 'UNDER_REVIEW';
+  const canImpersonate = ['SUPER_ADMIN', 'SELLER_ADMIN', 'RETAILER_ADMIN'].includes(adminRole) && seller?.status === 'ACTIVE';
+  const canDelete = ['SUPER_ADMIN', 'SELLER_ADMIN', 'RETAILER_ADMIN'].includes(adminRole);
   // Phase 254 — verifying statutory IDs is a management action available at any
   // status (the seller is usually already VERIFIED/ACTIVE by the time finance
   // verifies the PAN for the TDS rate).
-  const canVerifyTaxIds = ['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole);
+  const canVerifyTaxIds = ['SUPER_ADMIN', 'SELLER_ADMIN', 'RETAILER_ADMIN'].includes(adminRole);
 
   // ---- Product Mappings State ----
   interface SellerProductMappingItem {
