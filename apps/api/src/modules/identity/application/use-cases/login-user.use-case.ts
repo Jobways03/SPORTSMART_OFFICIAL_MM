@@ -137,6 +137,23 @@ export class LoginUserUseCase {
       );
     }
 
+    // OAuth-only account ("Sign in with Google"): passwordHash is null.
+    // bcrypt.compare(password, null) throws "Illegal arguments" — which
+    // would surface as a 500. Treat a null/empty hash as "no password
+    // set": run a dummy compare for timing parity (so this path is
+    // indistinguishable from a wrong-password path and doesn't leak that
+    // the account is Google-only), record the per-email failure, and
+    // return the uniform 401.
+    if (!user.passwordHash) {
+      try {
+        await bcrypt.compare(password, DUMMY_HASH);
+      } catch {
+        /* noop */
+      }
+      await this.emailBruteForce.recordFailure(email);
+      throw new UnauthorizedAppException('Invalid email or password');
+    }
+
     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
     if (!isPasswordValid) {
       // Atomic increment + maybe-stamp lockUntil. The previous
@@ -184,6 +201,34 @@ export class LoginUserUseCase {
         );
       }
     }
+
+    return this.issueCustomerSession(user, { userAgent, ipAddress });
+  }
+
+  /**
+   * Phase (Sign in with Google) — mint a customer session.
+   *
+   * Behaviour-preserving extraction of the tail of execute(): builds the
+   * roles claim, mints a session row + hashed refresh token, signs the
+   * access JWT with JWT_CUSTOMER_SECRET (identical claims, audience,
+   * algorithm, TTLs), emits the same identity.user.logged_in event, and
+   * returns the same LoginResponseData shape.
+   *
+   * Reused by GoogleLoginUseCase so the OAuth path issues an identical
+   * session without duplicating the JWT/claims/TTL logic. The password
+   * path's response is byte-for-byte what it was before the extraction.
+   */
+  async issueCustomerSession(
+    user: {
+      id: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      roleAssignments: Array<{ role: { name: string } }>;
+    },
+    context: { userAgent?: string | null; ipAddress?: string | null } = {},
+  ): Promise<LoginResponseData> {
+    const { userAgent, ipAddress } = context;
 
     const roles = user.roleAssignments.map((ra) => ra.role.name);
 

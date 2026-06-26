@@ -5,7 +5,12 @@ export interface UserWithRoles {
   firstName: string;
   lastName: string;
   email: string;
-  passwordHash: string;
+  /**
+   * Nullable: OAuth-only customers ("Sign in with Google") have no
+   * password. Every password-login path MUST treat null as "no password
+   * set" and 401 cleanly — never call bcrypt.compare on null.
+   */
+  passwordHash: string | null;
   status: string;
   failedLoginAttempts: number;
   lockUntil: Date | null;
@@ -69,7 +74,12 @@ export interface CustomerProfile {
 }
 
 export interface CustomerProfileWithPassword extends CustomerProfile {
-  passwordHash: string;
+  /**
+   * Nullable: OAuth-only customers ("Sign in with Google") have no
+   * password. The change-password flow must reject these cleanly rather
+   * than call bcrypt.compare on null.
+   */
+  passwordHash: string | null;
 }
 
 export interface UpdateCustomerProfileInput {
@@ -246,6 +256,63 @@ export interface UserRepository {
     passwordHash: string;
     otpId: string;
   }): Promise<void>;
+
+  // ── External identity ("Sign in with Google") ─────────────────────
+  //
+  // GoogleLoginUseCase resolves a verified Google identity to a User in
+  // three steps, each backed by one of these methods:
+  //   1. findUserByAuthIdentity — returning Google user (provider link).
+  //   2. linkGoogleIdentityAndActivate — existing email-matched account
+  //      auto-linked to Google (Google proved email ownership, so the
+  //      account is also activated / email-verified in the same tx).
+  //   3. createGoogleCustomer — brand-new customer (User + CUSTOMER role
+  //      + AuthIdentity + ConsentRecord rows), all atomically.
+
+  /**
+   * Resolve a User (with roleAssignments, so the JWT roles claim can be
+   * built) by an external identity link. Returns null when no link
+   * exists for (provider, providerSubject).
+   */
+  findUserByAuthIdentity(
+    provider: string,
+    providerSubject: string,
+  ): Promise<UserWithRoles | null>;
+
+  /**
+   * Auto-link a Google identity to an existing User on a verified-email
+   * match, in one transaction: insert the AuthIdentity row AND ensure
+   * the User is ACTIVE + emailVerified (Google has just proven the user
+   * controls the matched email, which is exactly what the OTP flow
+   * proves). emailVerifiedAt is preserved if already set. Returns the
+   * refreshed User with roleAssignments.
+   */
+  linkGoogleIdentityAndActivate(params: {
+    userId: string;
+    providerSubject: string;
+    providerEmail: string;
+  }): Promise<UserWithRoles>;
+
+  /**
+   * Atomically create a brand-new Google customer:
+   *   - User (status ACTIVE, emailVerified true, emailVerifiedAt now,
+   *     passwordHash null)
+   *   - RoleAssignment (CUSTOMER — required so the JWT carries the claim;
+   *     a missing CUSTOMER role fails the whole tx, never an un-roled user)
+   *   - AuthIdentity (provider 'google', the verified subject)
+   *   - ConsentRecord rows (same purposes/version as registration)
+   *
+   * Returns the created User with roleAssignments, or null on a P2002
+   * race (a concurrent Google login created the same email / linked the
+   * same subject first) so the caller can recover by re-querying.
+   */
+  createGoogleCustomer(params: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    providerSubject: string;
+    providerEmail: string;
+    consents: RegistrationConsentInput[];
+  }): Promise<UserWithRoles | null>;
 
   // Role/permission queries
   getUserRoles(userId: string): Promise<string[]>;

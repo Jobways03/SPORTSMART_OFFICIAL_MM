@@ -355,6 +355,153 @@ export class PrismaUserRepository implements UserRepository {
     }
   }
 
+  // ── External identity ("Sign in with Google") ─────────────
+
+  async findUserByAuthIdentity(
+    provider: string,
+    providerSubject: string,
+  ): Promise<UserWithRoles | null> {
+    const identity = await this.prisma.authIdentity.findUnique({
+      // Compound @@unique([provider, providerSubject]) — Prisma names the
+      // composite input `provider_providerSubject`.
+      where: { provider_providerSubject: { provider, providerSubject } },
+      include: {
+        user: {
+          include: { roleAssignments: { include: { role: true } } },
+        },
+      },
+    });
+    return (identity?.user ?? null) as UserWithRoles | null;
+  }
+
+  async linkGoogleIdentityAndActivate(params: {
+    userId: string;
+    providerSubject: string;
+    providerEmail: string;
+  }): Promise<UserWithRoles> {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.authIdentity.create({
+        data: {
+          userId: params.userId,
+          provider: 'google',
+          providerSubject: params.providerSubject,
+          email: params.providerEmail,
+          emailVerifiedByProvider: true,
+        },
+      });
+
+      // Google proved the user controls the matched email — the same
+      // assurance the OTP flow gives — so ensure the account is ACTIVE +
+      // emailVerified. Preserve an existing emailVerifiedAt (don't rewrite
+      // the original verification moment); only stamp it when first set.
+      const current = await tx.user.findUnique({
+        where: { id: params.userId },
+        select: { status: true, emailVerifiedAt: true },
+      });
+
+      const user = await tx.user.update({
+        where: { id: params.userId },
+        data: {
+          status:
+            current?.status === 'PENDING_VERIFICATION'
+              ? 'ACTIVE'
+              : current?.status,
+          emailVerified: true,
+          emailVerifiedAt: current?.emailVerifiedAt ?? new Date(),
+        },
+        include: { roleAssignments: { include: { role: true } } },
+      });
+      return user as unknown as UserWithRoles;
+    });
+  }
+
+  async createGoogleCustomer(params: {
+    firstName: string;
+    lastName: string;
+    email: string;
+    providerSubject: string;
+    providerEmail: string;
+    consents: RegistrationConsentInput[];
+  }): Promise<UserWithRoles | null> {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // Same invariant as createUserWithRole: a missing CUSTOMER role
+        // fails the whole transaction so we never create an un-roled user
+        // (UserAuthGuard requires roles.includes('CUSTOMER')).
+        const customerRole = await tx.role.findUnique({
+          where: { name: 'CUSTOMER' },
+        });
+        if (!customerRole) {
+          throw new Error(
+            'CUSTOMER role missing from database — run `pnpm run seed:admin` to provision system roles before Google sign-in.',
+          );
+        }
+
+        const newUser = await tx.user.create({
+          data: {
+            firstName: params.firstName,
+            lastName: params.lastName,
+            email: params.email,
+            // OAuth-only account: no password is ever set. Login must
+            // 401 on the null-hash path (see LoginUserUseCase).
+            passwordHash: null,
+            // Google asserted a verified email, so the account is active
+            // and verified immediately (decision: AUTO-CREATE as ACTIVE).
+            status: 'ACTIVE',
+            emailVerified: true,
+            emailVerifiedAt: new Date(),
+          },
+        });
+
+        await tx.roleAssignment.create({
+          data: { userId: newUser.id, roleId: customerRole.id },
+        });
+
+        await tx.authIdentity.create({
+          data: {
+            userId: newUser.id,
+            provider: 'google',
+            providerSubject: params.providerSubject,
+            email: params.providerEmail,
+            emailVerifiedByProvider: true,
+          },
+        });
+
+        // DPDP §6 — record the consent choices presented alongside the
+        // Google button (source 'google-oauth'), mirroring the rows the
+        // register flow writes.
+        for (const consent of params.consents) {
+          await tx.consentRecord.create({
+            data: {
+              userId: newUser.id,
+              purpose: consent.purpose,
+              granted: consent.granted,
+              consentVersion: consent.consentVersion,
+              source: consent.source ?? 'google-oauth',
+              ipAddress: consent.ipAddress ?? null,
+              userAgent: consent.userAgent ?? null,
+            },
+          });
+        }
+
+        const withRoles = await tx.user.findUnique({
+          where: { id: newUser.id },
+          include: { roleAssignments: { include: { role: true } } },
+        });
+        return withRoles as unknown as UserWithRoles;
+      });
+    } catch (error: any) {
+      // P2002 race: a concurrent Google login created the same email
+      // (users.email unique) or linked the same subject
+      // (auth_identities.provider+providerSubject unique) first. Return
+      // null so the use-case recovers by re-querying.
+      if (error?.code === 'P2002') {
+        return null;
+      }
+      throw error;
+    }
+  }
+
   // ── Email-verification OTP operations ─────────────────────
 
   async findByEmailForVerification(email: string): Promise<{

@@ -9,6 +9,7 @@ import { OutboxOpsModule } from './bootstrap/events/outbox/outbox-ops.module';
 import { SecurityModule } from './bootstrap/security/security.module';
 import { EmailModule } from './integrations/email/email.module';
 import { CaptchaModule } from './integrations/captcha/captcha.module';
+import { GoogleModule } from './integrations/google/google.module';
 import { WhatsAppModule } from './integrations/whatsapp/whatsapp.module';
 
 // core
@@ -97,6 +98,7 @@ import { LogisticsPartnerModule } from './modules/logistics-partner/logistics-pa
     OutboxOpsModule,
     EmailModule,
     CaptchaModule,
+    GoogleModule,
     WhatsAppModule,
     IdempotencyModule,
     GuardsModule,

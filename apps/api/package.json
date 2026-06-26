@@ -52,6 +52,7 @@
     "class-validator": "^0.14.1",
     "compression": "^1.8.1",
     "cookie-parser": "^1.4.7",
+    "google-auth-library": "^10.9.0",
     "helmet": "^8.0.0",
     "ioredis": "^5.4.0",
     "jsonwebtoken": "^9.0.3",

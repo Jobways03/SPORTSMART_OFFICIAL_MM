@@ -53,6 +53,18 @@ export class ChangeCustomerPasswordUseCase {
       throw new UnauthorizedAppException('Account not found');
     }
 
+    // OAuth-only account ("Sign in with Google"): no password is set, so
+    // there is no current password to verify and nothing to "change".
+    // Guard before bcrypt.compare — comparing against a null hash throws
+    // "Illegal arguments" (a 500). Surface a clear 400 instead.
+    if (!user.passwordHash) {
+      // Default 'BAD_REQUEST' code → 400 (the global filter maps unknown
+      // codes to 500, so we do not invent a new one here).
+      throw new BadRequestAppException(
+        'This account signs in with Google and has no password to change.',
+      );
+    }
+
     const isCurrentValid = await bcrypt.compare(currentPassword, user.passwordHash);
     if (!isCurrentValid) {
       throw new BadRequestAppException('Current password is incorrect');
