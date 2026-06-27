@@ -31,7 +31,10 @@ describe('PortalTimelineController', () => {
 
   it('admin route resolves ADMIN viewer and access-logs per caseKind', async () => {
     const { ctrl, service, audit } = make();
-    const req = { adminId: 'admin-1' } as any;
+    const req = {
+      adminId: 'admin-1',
+      user: { permissions: ['disputes.read'] },
+    } as any;
     await ctrl.adminTimeline(req, 'dispute', 'd1');
     expect(service.getTimeline).toHaveBeenCalledWith(
       expect.objectContaining({ viewerKind: 'ADMIN', viewerId: 'admin-1' }),
@@ -49,7 +52,38 @@ describe('PortalTimelineController', () => {
   it('admin route works even when the optional audit facade is absent', async () => {
     const service = { getTimeline: jest.fn().mockResolvedValue([]) } as any;
     const ctrl = new PortalTimelineController(service);
-    const req = { adminId: 'admin-1' } as any;
+    const req = {
+      adminId: 'admin-1',
+      user: { permissions: ['support.read'] },
+    } as any;
     await expect(ctrl.adminTimeline(req, 'ticket', 't1')).resolves.toBeTruthy();
+  });
+
+  // Per-caseKind authorization (2026-06-27) — the timeline is viewable with the
+  // case's OWN read perm or global audit.read; the old hard-coded audit.read
+  // 403'd the type-scoped seller/franchise admins (returns.read, no audit.read).
+  it('admin timeline REJECTS a viewer lacking both audit.read and the case-read perm', async () => {
+    const { ctrl, service } = make();
+    const req = { adminId: 'a', user: { permissions: ['orders.read'] } } as any;
+    await expect(ctrl.adminTimeline(req, 'return', 'r1')).rejects.toThrow(
+      /Missing permission/i,
+    );
+    expect(service.getTimeline).not.toHaveBeenCalled();
+  });
+
+  it('admin timeline ALLOWS a return timeline with returns.read (scoped seller admin)', async () => {
+    const { ctrl, service } = make();
+    const req = { adminId: 'a', user: { permissions: ['returns.read'] } } as any;
+    await ctrl.adminTimeline(req, 'return', 'r1');
+    expect(service.getTimeline).toHaveBeenCalledWith(
+      expect.objectContaining({ caseKind: 'return', caseId: 'r1' }),
+    );
+  });
+
+  it('admin timeline ALLOWS any caseKind with global audit.read', async () => {
+    const { ctrl, service } = make();
+    const req = { adminId: 'a', user: { permissions: ['audit.read'] } } as any;
+    await ctrl.adminTimeline(req, 'dispute', 'd9');
+    expect(service.getTimeline).toHaveBeenCalled();
   });
 });

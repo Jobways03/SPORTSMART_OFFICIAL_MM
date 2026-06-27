@@ -20,7 +20,10 @@ import {
   type CaseKind,
   type ViewerKind,
 } from './case-timeline.service';
-import { BadRequestAppException } from '../exceptions';
+import {
+  BadRequestAppException,
+  ForbiddenAppException,
+} from '../exceptions';
 import { AuditPublicFacade } from '../../modules/audit/application/facades/audit-public.facade';
 
 const ALLOWED: CaseKind[] = ['return', 'dispute', 'ticket'];
@@ -79,7 +82,12 @@ export class PortalTimelineController {
 
   @Get('admin/timeline/:caseKind/:caseId')
   @UseGuards(AdminAuthGuard, PermissionsGuard)
-  @Permissions('audit.read')
+  // Per-caseKind gate (matches the documented "<module>.read" intent). The old
+  // hard-coded @Permissions('audit.read') 403'd the type-scoped seller/franchise
+  // admins, who hold returns.read but NOT the broad audit.read. A global
+  // audit.read holder still sees every timeline; otherwise the viewer needs the
+  // case's OWN read perm — enforced in-handler because @Permissions is AND-only
+  // and can't express "audit.read OR returns.read".
   @Throttle({ default: { limit: 120, ttl: 60_000 } })
   async adminTimeline(
     @Req() req: Request,
@@ -89,6 +97,22 @@ export class PortalTimelineController {
     if (!ALLOWED.includes(caseKind as CaseKind)) {
       throw new BadRequestAppException(
         `Unknown caseKind "${caseKind}". Allowed: ${ALLOWED.join(', ')}`,
+      );
+    }
+    // Authorize per caseKind: audit.read (global) OR the case's read permission.
+    const viewerPerms: string[] = (req as any).user?.permissions ?? [];
+    const readPermByKind: Record<CaseKind, string> = {
+      return: 'returns.read',
+      dispute: 'disputes.read',
+      ticket: 'support.read',
+    };
+    const caseReadPerm = readPermByKind[caseKind as CaseKind];
+    if (
+      !viewerPerms.includes('audit.read') &&
+      !viewerPerms.includes(caseReadPerm)
+    ) {
+      throw new ForbiddenAppException(
+        `Missing permission to view this ${caseKind} timeline (need audit.read or ${caseReadPerm}).`,
       );
     }
     const adminId = (req as any).adminId ?? 'unknown';

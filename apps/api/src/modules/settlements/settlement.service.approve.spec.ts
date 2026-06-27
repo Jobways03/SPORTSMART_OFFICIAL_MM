@@ -171,6 +171,43 @@ describe('SettlementService.approveCycle (Phase 15)', () => {
     expect(result.message).toContain('not found');
   });
 
+  // Delegated settlements (2026-06-27) — money-safety: a type-scoped admin must
+  // never approve a cycle that belongs to another seller type (or a legacy
+  // global cycle). The 4th arg is the actor's resolved seller scope.
+  it('REJECTS approving a cross-type cycle (RETAIL admin on a D2C cycle)', async () => {
+    const { service } = buildService({
+      cycle: { ...cleanCycle('c-1', 'DRAFT'), sellerType: 'D2C' },
+    });
+    await expect(
+      service.approveCycle('c-1', 'admin-retail', 'x', ['RETAIL']),
+    ).rejects.toThrow(/outside your seller scope/i);
+  });
+
+  it('REJECTS a scoped admin approving a legacy/global (null) cycle', async () => {
+    const { service } = buildService({
+      cycle: { ...cleanCycle('c-1', 'DRAFT'), sellerType: null },
+    });
+    await expect(
+      service.approveCycle('c-1', 'admin-retail', 'x', ['RETAIL']),
+    ).rejects.toThrow(/outside your seller scope/i);
+  });
+
+  it('ALLOWS approval when the actor scope covers the cycle type (D2C admin on a D2C cycle)', async () => {
+    const { service } = buildService({
+      cycle: { ...cleanCycle('c-1', 'DRAFT'), sellerType: 'D2C' },
+    });
+    const result = await service.approveCycle('c-1', 'admin-d2c', 'ok', ['D2C']);
+    expect(result.success).toBe(true);
+  });
+
+  it('ALLOWS an unscoped caller (null scope) — backward compatible', async () => {
+    const { service } = buildService({
+      cycle: { ...cleanCycle('c-1', 'DRAFT'), sellerType: 'D2C' },
+    });
+    const result = await service.approveCycle('c-1', 'admin-1', 'ok'); // no scope arg
+    expect(result.success).toBe(true);
+  });
+
   it('returns success:false when the cycle is already PAID', async () => {
     const { service } = buildService({
       cycle: { id: 'c-1', status: 'PAID' },
