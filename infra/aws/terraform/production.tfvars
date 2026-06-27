@@ -17,12 +17,17 @@ hosted_zone_name   = "sportsmart.com"
 env_domain         = "sportsmart.com"
 auth_cookie_domain = ".sportsmart.com"
 
-# Serve the customer storefront at the bare apex (https://sportsmart.com) + www,
-# in addition to shop.sportsmart.com. Activates the apex ACM SAN (alb.tf), the
-# apex/www listener rules + Route53 A/AAAA aliases (apex.tf), and adds apex/www
-# to CORS (locals.tf). Staging leaves this false. See
-# docs/runbooks/PRODUCTION_APEX_CUTOVER.md for the DNS/Shopify cutover sequence.
-serve_apex = true
+# Serve the customer storefront ALSO at the bare apex (https://sportsmart.com) +
+# www, in addition to shop.sportsmart.com. When true it activates the apex ACM SAN
+# (alb.tf), the apex/www listener rules (apex.tf), and adds apex/www to CORS +
+# bakes the bare apex as the storefront canonical (locals.tf). The apex DNS itself
+# is a separate MANUAL Route53 flip (not Terraform) — see apex.tf + the runbook.
+#
+# OFF for the initial production launch: Shopify still owns the apex, so the
+# storefront ships at shop.sportsmart.com and the canonical/SEO host stays the
+# subdomain. Flip to true (then do the manual apex DNS flip per
+# docs/runbooks/PRODUCTION_APEX_CUTOVER.md) when migrating off Shopify.
+serve_apex = false
 
 # OIDC deploy-role trust — MUST equal the real GitHub remote, else every
 # Actions deploy fails at AssumeRole.
