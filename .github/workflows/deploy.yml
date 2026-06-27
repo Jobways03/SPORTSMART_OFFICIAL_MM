@@ -45,6 +45,12 @@ jobs:
   prep:
     name: Prep
     runs-on: ubuntu-latest
+    # Environment-scoped so the SSM reads below use the per-environment deploy
+    # role (e.g. the production env's AWS_DEPLOY_ROLE_ARN) — each deploy role can
+    # only read its own /sportsmart/<env>/deploy/* params, so a single repo-level
+    # var can't serve both. build + rollout are already environment-scoped.
+    environment:
+      name: ${{ inputs.target }}
     permissions:
       contents: read
       id-token: write
