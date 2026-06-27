@@ -47,6 +47,36 @@ mail_tls_reject_unauthorized = "false"
 image_tag                  = "staging-latest"
 logistics_facade_image_tag = "staging-latest"
 
+# Feature flags — MIRROR the production requiredOnInProd set so staging exercises
+# the SAME money/correctness paths as prod. node_env=staging does NOT enforce
+# these (the boot-gate is prod-only), so without this block 9 of them silently
+# default OFF and staging diverges from prod — e.g. MONEY_DUAL_WRITE_ENABLED off
+# here is why cancel→wallet refunds showed ₹0. Setting them keeps staging a true
+# prod mirror. Do NOT advance to *_AUTHORITATIVE (money-paise cutover runbook).
+# DISCOUNT_ALLOCATION_ENABLED = the discount pipeline (per-item discount snapshot
+# → correct invoice / credit-note / refund). Apply: terraform apply -var-file=staging.tfvars
+api_extra_environment = {
+  CRON_HEARTBEAT_ENABLED       = "true"
+  SLA_BREACH_DETECTOR_ENABLED  = "true"
+  AUDIT_CHAIN_ANCHOR_ENABLED   = "true"
+  IDEMPOTENCY_ENABLED          = "true"
+  INTEGRITY_VERIFIER_ENABLED   = "true"
+  ERASURE_PROCESSOR_ENABLED    = "true"
+  WALLET_LEDGER_RECON_ENABLED  = "true"
+  EVENT_DEDUP_ENABLED          = "true"
+  OUTBOX_ENABLED               = "true"
+  OUTBOX_DUAL_WRITE            = "true"
+  REFUND_GATEWAY_RECON_ENABLED = "true"
+  RETENTION_ENFORCER_ENABLED   = "true"
+  ABAC_ENABLED                 = "true"
+  REFUND_SAGA_ENABLED          = "true"
+  COD_REFUND_PENDING_ENABLED   = "true"
+  MONEY_DUAL_WRITE_ENABLED     = "true"
+  PERMISSIONS_GUARD_STRICT     = "true"
+  RBAC_ORPHAN_SWEEP_ENABLED    = "true"
+  DISCOUNT_ALLOCATION_ENABLED  = "true"
+}
+
 # Minimal always-on staging sizing (~$150/mo). Smallest viable instances —
 # db.t4g.micro (~1 GB) and cache.t4g.micro (~0.5 GB) are enough for a low-
 # traffic test env; bump to t4g.small if migrations/connections struggle.

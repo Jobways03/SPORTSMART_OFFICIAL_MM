@@ -554,14 +554,17 @@ export default function FranchiseAdminReturnDetailPage() {
                         />
                         <div className="return-timeline-content">
                           <div className="return-timeline-status">
-                            {formatStatus(entry.status)}
+                            {/* ReturnStatusHistory has `toStatus` (no `status`
+                                field) — matches the D2C/Retail return pages.
+                                Reading entry.status rendered "—". */}
+                            {formatStatus(entry.toStatus)}
                           </div>
                           <div className="return-timeline-time">
                             {formatDateTime(entry.createdAt)}
                           </div>
-                          {entry.note && (
+                          {entry.notes && (
                             <div className="return-timeline-notes">
-                              {entry.note}
+                              {entry.notes}
                             </div>
                           )}
                         </div>

@@ -1100,7 +1100,15 @@ export class PrismaAccountsRepository implements AccountsRepository {
       this.prisma.sellerSettlement.aggregate({
         where: { sellerId, status: 'PAID', ...paid },
         _count: { id: true },
-        _sum: { totalSettlementAmount: true },
+        // Fix (2026-06-27) — "Paid to you" must reflect the NET actually
+        // disbursed (gross − TCS − TDS − commission-GST), not the gross
+        // totalSettlementAmount. Sum the paise legs so we can net them below.
+        _sum: {
+          totalSettlementAmountInPaise: true,
+          tcsDeductedInPaise: true,
+          tdsDeductedInPaise: true,
+          totalCommissionGstInPaise: true,
+        },
       }),
       this.prisma.sellerSettlement.findFirst({
         where: { sellerId, status: 'PAID' },
@@ -1216,7 +1224,14 @@ export class PrismaAccountsRepository implements AccountsRepository {
         pendingCount: pendingSettleAgg._count.id,
         pendingAmount: money(pendingSettleAgg._sum.totalSettlementAmount),
         paidCount: paidSettleAgg._count.id,
-        paidAmount: money(paidSettleAgg._sum.totalSettlementAmount),
+        // Net actually disbursed (matches the seller's "Last payout" + the admin
+        // settlement breakdown's "net pay"), not the gross totalSettlementAmount.
+        paidAmount: paiseToRupees(
+          (paidSettleAgg._sum.totalSettlementAmountInPaise ?? 0n) -
+            (paidSettleAgg._sum.tcsDeductedInPaise ?? 0n) -
+            (paidSettleAgg._sum.tdsDeductedInPaise ?? 0n) -
+            (paidSettleAgg._sum.totalCommissionGstInPaise ?? 0n),
+        ),
         lastSettledOn: lastPaid?.paidAt ? lastPaid.paidAt.toISOString() : null,
       },
       // Phase 178 (#18) — overdue indicator for the self-view.
