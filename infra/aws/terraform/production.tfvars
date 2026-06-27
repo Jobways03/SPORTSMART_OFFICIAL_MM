@@ -27,6 +27,17 @@ github_repo = "Jobways03/SPORTSMART_OFFICIAL_MM"
 # one client's Authorized JS origins cover localhost/staging/prod.
 google_client_id = "187571482262-6e2u007g6n8ctlsrsvnti8ng5ruta1et.apps.googleusercontent.com"
 
+# Outbound email — support@sportsmart.com (cPanel webmail). The login + password
+# (MAIL_USER / MAIL_PASS) live in the production/app/external secret, not here.
+# ⚠️ CONFIRM the exact host from cPanel → Email Accounts → Connect Devices (the
+# SSL/TLS settings): mail.sportsmart.com is the usual cPanel value, but the TLS
+# cert is often issued for the server's own hostname — use whatever cPanel lists
+# to avoid a cert mismatch on port 465.
+mail_host   = "mail.sportsmart.com"
+mail_port   = 465
+mail_secure = "true"
+mail_from   = "Sportsmart <support@sportsmart.com>"
+
 image_tag                  = "production-latest"
 logistics_facade_image_tag = "production-latest"
 
