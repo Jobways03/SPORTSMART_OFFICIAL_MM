@@ -37,6 +37,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { settlementNetFromRow } from '../../../settlements/domain/settlement-net';
 import {
   renderCommissionInvoiceHtml,
   renderSettlementStatementHtml,
@@ -534,15 +535,14 @@ export class CommissionInvoiceService {
       last4?: string | null,
     ): string | null => full ?? (last4 ? `••••${last4}` : null);
 
-    // Net mirrors SettlementTds194OHookService.computeNetPayoutInPaise,
-    // clamped at zero (a misconfigured deduction shouldn't render a
-    // negative payout — same clamp the seller UI applies).
-    let netPayoutInPaise =
-      settlement.totalSettlementAmountInPaise -
-      settlement.tcsDeductedInPaise -
-      settlement.tdsDeductedInPaise -
-      settlement.totalCommissionGstInPaise;
-    if (netPayoutInPaise < 0n) netPayoutInPaise = 0n;
+    // Gross from the AUTHORITATIVE decimal totalSettlementAmount (the *InPaise
+    // sibling is 0 on legacy / dual-write-off rows, which would render the
+    // statement as ₹0). Net via the single source of truth (settlement-net.ts),
+    // clamped ≥0 — same formula the payout + seller UI use.
+    const grossPayoutInPaise = BigInt(
+      Math.round(Number(settlement.totalSettlementAmount) * 100),
+    );
+    const netPayoutInPaise = settlementNetFromRow(settlement, grossPayoutInPaise);
 
     const statementDate =
       settlement.paidAt ?? settlement.cycle?.approvedAt ?? settlement.createdAt;
@@ -599,7 +599,7 @@ export class CommissionInvoiceService {
 
       grossGmvInPaise: settlement.totalPlatformAmountInPaise,
       commissionInPaise: settlement.totalPlatformMarginInPaise,
-      settlementAmountInPaise: settlement.totalSettlementAmountInPaise,
+      settlementAmountInPaise: grossPayoutInPaise,
       commissionGstInPaise: settlement.totalCommissionGstInPaise,
       commissionGstSplitType: settlement.commissionGstSplitType,
       cgstOnCommissionInPaise: settlement.cgstOnCommissionInPaise,

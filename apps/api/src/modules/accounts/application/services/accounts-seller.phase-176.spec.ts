@@ -39,11 +39,20 @@ function makePrisma(sellerExists = true) {
       count: jest.fn().mockResolvedValue(0),
     },
     sellerSettlement: {
-      aggregate: jest.fn().mockImplementation(({ where }: any) =>
+      // Phase 252 fix — paid/pending NETs are computed PER ROW from the
+      // AUTHORITATIVE decimal gross (not a paise-sibling _sum). aggregate() is
+      // now only the overdue indicator; findFirst() is lastPaid.
+      findMany: jest.fn().mockImplementation(({ where }: any) =>
         where.status === 'PAID'
-          ? Promise.resolve({ _count: { id: 1 }, _sum: { totalSettlementAmount: new Prisma.Decimal('500.00') } })
-          : Promise.resolve({ _count: { id: 2 }, _sum: { totalSettlementAmount: new Prisma.Decimal('400.00') } }),
+          ? Promise.resolve([
+              { totalSettlementAmount: new Prisma.Decimal('500.00'), tcsDeductedInPaise: 0n, tdsDeductedInPaise: 0n, totalCommissionGstInPaise: 0n },
+            ])
+          : Promise.resolve([
+              { totalSettlementAmount: new Prisma.Decimal('250.00'), tcsDeductedInPaise: 0n, tdsDeductedInPaise: 0n, totalCommissionGstInPaise: 0n },
+              { totalSettlementAmount: new Prisma.Decimal('150.00'), tcsDeductedInPaise: 0n, tdsDeductedInPaise: 0n, totalCommissionGstInPaise: 0n },
+            ]),
       ),
+      aggregate: jest.fn().mockResolvedValue({ _count: { id: 0 }, _sum: { totalSettlementAmount: new Prisma.Decimal('0') } }),
       findFirst: jest.fn().mockResolvedValue({ paidAt: new Date('2026-05-20T00:00:00Z') }),
     },
     section194OTdsLedger: {
@@ -84,6 +93,30 @@ describe('#1/#8/#9/#10 per-seller overview bundle', () => {
     expect(r!.reconciliation.openDiscrepancies).toBe(2); // #10 (OPEN)
     expect(r!.reconciliation.resolvedDiscrepancies).toBe(5);
     expect(r!.commission.statusBreakdown.SETTLED).toBe(7);
+  });
+
+  it('#7 — paidAmount nets from the DECIMAL gross + clamps ≥0 (the −₹175.43 regression)', async () => {
+    const prisma = makePrisma();
+    // A PAID settlement whose paise gross sibling is 0 (MONEY_DUAL_WRITE off /
+    // legacy row) BUT with populated TCS + commission-GST deductions. The old
+    // _sum aggregate netted 0 − 38.14 − 137.29 = −₹175.43 (the live bug). The
+    // per-row fix derives gross from the decimal (3737.29) → ₹3,561.86.
+    prisma.sellerSettlement.findMany.mockImplementation(({ where }: any) =>
+      where.status === 'PAID'
+        ? Promise.resolve([
+            {
+              totalSettlementAmount: new Prisma.Decimal('3737.29'),
+              tcsDeductedInPaise: 3814n, // ₹38.14
+              tdsDeductedInPaise: 0n,
+              totalCommissionGstInPaise: 13729n, // ₹137.29
+            },
+          ])
+        : Promise.resolve([]),
+    );
+    const repo = new PrismaAccountsRepository(prisma);
+    const r = await repo.getSellerAccountsOverview('s1');
+    expect(r!.payable.paidAmount).toBe('3561.86'); // not the buggy −175.43
+    expect(r!.payable.pendingAmount).toBe('0.00');
   });
 
   it('#13 — returns null for a missing/deleted seller (service 404s)', async () => {

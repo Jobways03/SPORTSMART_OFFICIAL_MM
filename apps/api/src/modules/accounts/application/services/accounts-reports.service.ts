@@ -5,6 +5,7 @@ import {
   ACCOUNTS_REPOSITORY,
 } from '../../domain/repositories/accounts.repository.interface';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { settlementNetFromRow } from '../../../settlements/domain/settlement-net';
 
 // Phase 180 — money is exact: Decimal kept as Decimal, serialized as a 2-decimal
 // rupee STRING at the boundary (never JS Number, #10). Paise BigInt → rupee str.
@@ -237,6 +238,7 @@ export class AccountsReportsService {
             orderBy: [{ paidAt: 'desc' }, { updatedAt: 'desc' }],
             select: {
               id: true, sellerId: true, sellerName: true, status: true,
+              totalSettlementAmount: true,
               totalSettlementAmountInPaise: true, tcsDeductedInPaise: true,
               tdsDeductedInPaise: true, totalCommissionGstInPaise: true,
               paidAmountInPaise: true, totalPlatformMargin: true,
@@ -276,8 +278,10 @@ export class AccountsReportsService {
 
     // ── seller rows: net = gross − TCS − TDS − commission-GST (paise, exact). ──
     const sellerRows = sellerPayouts.map((s) => {
-      const grossPaise = s.totalSettlementAmountInPaise;
-      const netPaise = grossPaise - s.tcsDeductedInPaise - s.tdsDeductedInPaise - s.totalCommissionGstInPaise;
+      // Gross from the AUTHORITATIVE decimal (the *InPaise sibling is 0 on
+      // legacy / dual-write-off rows); net clamped ≥0 via the canonical helper.
+      const grossPaise = BigInt(dec(s.totalSettlementAmount).times(100).toFixed(0));
+      const netPaise = settlementNetFromRow(s, grossPaise);
       const amountPaidPaise = s.status === 'PAID' ? netPaise : s.paidAmountInPaise;
       return {
         nodeType: 'SELLER' as const,

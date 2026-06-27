@@ -1476,10 +1476,12 @@ export class SettlementService {
     // Phase 145 — actual ₹ wired, recorded alongside the gross so an auditor
     // reading the log sees what actually left the bank, not just the pre-tax
     // figure. Phase 251 — same single source of truth as the payout above.
-    const netAmountInPaise = settlementNetFromRow(
-      settlement,
-      BigInt(settlement.totalSettlementAmountInPaise ?? 0),
-    );
+    // Phase 252 fix — reuse the net already computed for the wire (≈line 1369,
+    // gross from the AUTHORITATIVE decimal totalSettlementAmount), so the audit
+    // log records exactly what left the bank. Re-deriving from
+    // totalSettlementAmountInPaise was wrong on legacy / dual-write-off rows
+    // (the paise sibling is 0 there → audit net of 0 vs the real wired amount).
+    const netAmountInPaise = netPaidPaise;
 
     // Audit the payout — settlement payouts are real money movements and
     // need to be traceable to a specific admin action with the UTR.

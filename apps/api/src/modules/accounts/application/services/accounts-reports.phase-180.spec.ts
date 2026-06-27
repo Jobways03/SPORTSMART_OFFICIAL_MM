@@ -97,6 +97,9 @@ describe('#6/#13/#14 getPayoutReport', () => {
         findMany: jest.fn().mockResolvedValue([
           {
             id: 'ss1', sellerId: 's1', sellerName: 'Acme', status: opts.sellerStatus ?? 'PAID',
+            // gross now derived from the AUTHORITATIVE decimal (Phase 252 fix);
+            // the *InPaise sibling is kept for parity but no longer read for net.
+            totalSettlementAmount: D('1000'),
             totalSettlementAmountInPaise: 100000n, tcsDeductedInPaise: 2000n,
             tdsDeductedInPaise: 1000n, totalCommissionGstInPaise: 18000n,
             paidAmountInPaise: 50000n, totalPlatformMargin: D('120'),

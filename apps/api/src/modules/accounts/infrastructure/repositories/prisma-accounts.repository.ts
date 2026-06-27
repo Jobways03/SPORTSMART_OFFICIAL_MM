@@ -352,6 +352,7 @@ export class PrismaAccountsRepository implements AccountsRepository {
           where,
           _count: { id: true },
           _sum: {
+            totalSettlementAmount: true,
             totalSettlementAmountInPaise: true, tcsDeductedInPaise: true,
             tdsDeductedInPaise: true, totalCommissionGstInPaise: true,
             paidAmountInPaise: true, totalPlatformMargin: true,
@@ -370,9 +371,22 @@ export class PrismaAccountsRepository implements AccountsRepository {
         const cur = acc.get(g.sellerId) ?? { name: g.sellerName, orders: 0, margin: ZERO, pendingPaise: 0n, paidPaise: 0n, hasStatus: !params.status };
         cur.orders += g._count.id;
         cur.margin = cur.margin.plus(dec(g._sum.totalPlatformMargin));
-        const net = (g._sum.totalSettlementAmountInPaise ?? 0n) - (g._sum.tcsDeductedInPaise ?? 0n) - (g._sum.tdsDeductedInPaise ?? 0n) - (g._sum.totalCommissionGstInPaise ?? 0n) - (g._sum.paidAmountInPaise ?? 0n);
+        // Gross from the AUTHORITATIVE decimal when the *InPaise sibling is 0
+        // (legacy / dual-write-off rows) — else the net goes negative and the
+        // settled bucket renders ₹0. Clamp ≥0; reuse the SAME gross for both legs.
+        const grossPaise =
+          (g._sum.totalSettlementAmountInPaise ?? 0n) > 0n
+            ? (g._sum.totalSettlementAmountInPaise as bigint)
+            : BigInt(dec(g._sum.totalSettlementAmount).times(100).toFixed(0));
+        let net =
+          grossPaise -
+          (g._sum.tcsDeductedInPaise ?? 0n) -
+          (g._sum.tdsDeductedInPaise ?? 0n) -
+          (g._sum.totalCommissionGstInPaise ?? 0n) -
+          (g._sum.paidAmountInPaise ?? 0n);
+        if (net < 0n) net = 0n;
         if (OUTSTANDING.has(g.status)) cur.pendingPaise += net;
-        if (g.status === 'PAID') cur.paidPaise += (g._sum.totalSettlementAmountInPaise ?? 0n);
+        if (g.status === 'PAID') cur.paidPaise += grossPaise;
         if (params.status && g.status === params.status) cur.hasStatus = true;
         acc.set(g.sellerId, cur);
       }
@@ -1061,8 +1075,8 @@ export class PrismaAccountsRepository implements AccountsRepository {
     const [
       commissionAgg,
       statusBreakdown,
-      pendingSettleAgg,
-      paidSettleAgg,
+      pendingSettleRows,
+      paidSettleRows,
       lastPaid,
       tdsAgg,
       tdsDepositedCount,
@@ -1091,30 +1105,26 @@ export class PrismaAccountsRepository implements AccountsRepository {
         _sum: { totalPlatformAmount: true },
       }),
       // #7 — pending payable scoped to settlements CREATED in the window.
-      this.prisma.sellerSettlement.aggregate({
+      // Row-level (NOT a _sum aggregate): the NET payable is computed PER ROW via
+      // the canonical settlementNetFromRow — gross from the AUTHORITATIVE DECIMAL
+      // column, deductions clamped ≥0 per row. A single _sum aggregate would
+      // (a) read the *InPaise gross sibling, which is 0 on legacy / dual-write-off
+      // rows → negative period total (the −₹175.43 bug), and (b) net-after-sum,
+      // which can't clamp an over-deducted row and so diverges from money wired.
+      this.prisma.sellerSettlement.findMany({
         where: { sellerId, status: { in: ['PENDING', 'APPROVED'] }, ...created },
-        _count: { id: true },
-        // Fix (2026-06-27) — "Pending payable" must reflect the NET we will
-        // actually disburse (gross − TCS − TDS − commission-GST), matching the
-        // admin settlement breakdown's "net pay", not the gross
-        // totalSettlementAmount. Sum the paise legs + keep the gross for subtext.
-        _sum: {
+        select: {
           totalSettlementAmount: true,
-          totalSettlementAmountInPaise: true,
           tcsDeductedInPaise: true,
           tdsDeductedInPaise: true,
           totalCommissionGstInPaise: true,
         },
       }),
-      // #7 — settled scoped to settlements PAID in the window.
-      this.prisma.sellerSettlement.aggregate({
+      // #7 — settled scoped to settlements PAID in the window (same row-level net).
+      this.prisma.sellerSettlement.findMany({
         where: { sellerId, status: 'PAID', ...paid },
-        _count: { id: true },
-        // Fix (2026-06-27) — "Paid to you" must reflect the NET actually
-        // disbursed (gross − TCS − TDS − commission-GST), not the gross
-        // totalSettlementAmount. Sum the paise legs so we can net them below.
-        _sum: {
-          totalSettlementAmountInPaise: true,
+        select: {
+          totalSettlementAmount: true,
           tcsDeductedInPaise: true,
           tdsDeductedInPaise: true,
           totalCommissionGstInPaise: true,
@@ -1200,6 +1210,27 @@ export class PrismaAccountsRepository implements AccountsRepository {
       else resolvedDiscrepancies += n;
     }
 
+    // Pending + paid NET payable, computed PER ROW through the canonical helper
+    // (gross from the authoritative DECIMAL column × 100; deductions clamped ≥0
+    // per row). Per-row clamp is essential: netting after a _sum aggregate can't
+    // floor an over-deducted row at 0 and would diverge from the money actually
+    // wired; and the *InPaise gross sibling is 0 on legacy / dual-write-off rows.
+    const settleGrossPaise = (r: {
+      totalSettlementAmount: Prisma.Decimal | null;
+    }): bigint => BigInt(dec(r.totalSettlementAmount).times(100).toFixed(0));
+    const pendingNetPaise = pendingSettleRows.reduce(
+      (a: bigint, r) => a + settlementNetFromRow(r, settleGrossPaise(r)),
+      0n,
+    );
+    const pendingGrossPaise = pendingSettleRows.reduce(
+      (a: bigint, r) => a + settleGrossPaise(r),
+      0n,
+    );
+    const paidNetPaise = paidSettleRows.reduce(
+      (a: bigint, r) => a + settlementNetFromRow(r, settleGrossPaise(r)),
+      0n,
+    );
+
     return {
       currency: 'INR',
       seller: {
@@ -1231,25 +1262,15 @@ export class PrismaAccountsRepository implements AccountsRepository {
         totalSettlementAmount: money(commissionAgg._sum.totalSettlementAmount),
       },
       payable: {
-        pendingCount: pendingSettleAgg._count.id,
-        // NET we will pay (gross − TCS − TDS − commission-GST) — matches the
-        // admin settlement "net pay". Gross kept as `pendingGrossAmount` subtext.
-        pendingAmount: paiseToRupees(
-          (pendingSettleAgg._sum.totalSettlementAmountInPaise ?? 0n) -
-            (pendingSettleAgg._sum.tcsDeductedInPaise ?? 0n) -
-            (pendingSettleAgg._sum.tdsDeductedInPaise ?? 0n) -
-            (pendingSettleAgg._sum.totalCommissionGstInPaise ?? 0n),
-        ),
-        pendingGrossAmount: money(pendingSettleAgg._sum.totalSettlementAmount),
-        paidCount: paidSettleAgg._count.id,
+        pendingCount: pendingSettleRows.length,
+        // NET we will pay (per-row gross − TCS − TDS − commission-GST, clamped
+        // ≥0) — matches the admin settlement "net pay". Gross kept as subtext.
+        pendingAmount: paiseToRupees(pendingNetPaise),
+        pendingGrossAmount: paiseToRupees(pendingGrossPaise),
+        paidCount: paidSettleRows.length,
         // Net actually disbursed (matches the seller's "Last payout" + the admin
         // settlement breakdown's "net pay"), not the gross totalSettlementAmount.
-        paidAmount: paiseToRupees(
-          (paidSettleAgg._sum.totalSettlementAmountInPaise ?? 0n) -
-            (paidSettleAgg._sum.tcsDeductedInPaise ?? 0n) -
-            (paidSettleAgg._sum.tdsDeductedInPaise ?? 0n) -
-            (paidSettleAgg._sum.totalCommissionGstInPaise ?? 0n),
-        ),
+        paidAmount: paiseToRupees(paidNetPaise),
         lastSettledOn: lastPaid?.paidAt ? lastPaid.paidAt.toISOString() : null,
       },
       // Phase 178 (#18) — overdue indicator for the self-view.
