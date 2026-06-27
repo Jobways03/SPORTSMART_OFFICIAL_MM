@@ -36,7 +36,7 @@ jobs:
     name: Terraform fmt/validate · ShellCheck · actionlint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Full history so gitleaks scans every commit in the PR range, not
           # just the merge commit (matches api-ci.yml).

@@ -38,7 +38,7 @@ jobs:
       NODE_VERSION: "22"
       PNPM_VERSION: "10.0.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # gitleaks needs full history to scan all commits in the
           # PR range. The default shallow checkout (fetch-depth: 1)
