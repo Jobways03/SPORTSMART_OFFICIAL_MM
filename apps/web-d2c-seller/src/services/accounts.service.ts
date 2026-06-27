@@ -12,7 +12,7 @@ export interface SellerAccountsOverview {
   revenue: { gross: string; refundsDeducted: string; net: string; taxExcluded: string };
   margin: { platformMargin: string; marginPercentage: number };
   commission: { recordCount: number; statusBreakdown: Record<string, number>; totalSettlementAmount: string };
-  payable: { pendingCount: number; pendingAmount: string; paidCount: number; paidAmount: string; lastSettledOn: string | null };
+  payable: { pendingCount: number; pendingAmount: string; pendingGrossAmount: string; paidCount: number; paidAmount: string; lastSettledOn: string | null };
   overdue: { count: number; amount: string }; // Phase 178 #18 — past-SLA exposure
   taxDeductions: { tdsDeducted: string; tdsRowCount: number; tdsDepositedCount: number; tcsCollected: string; tcsRowCount: number; note: string };
   adjustments: { count: number; totalAmount: string };
