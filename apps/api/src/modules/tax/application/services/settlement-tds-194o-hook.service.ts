@@ -523,7 +523,12 @@ export class SettlementTds194OHookService {
    *                              commission service; withheld from
    *                              payout, claimable as ITC by seller)
    *
-   * Helper for the payout-statement renderer; pure arithmetic.
+   * @deprecated No runtime callers (Phase 252). Use settlementNetFromRow /
+   * settlementNetPayableInPaise from settlements/domain/settlement-net.ts — the
+   * single source of truth (gross from the AUTHORITATIVE decimal, clamped ≥0).
+   * This reads only the *InPaise gross sibling, which is 0 on legacy /
+   * dual-write-off rows; clamped here so a stray caller can never get a NEGATIVE
+   * payout, but it should switch to the helper above.
    */
   static computeNetPayoutInPaise(settlement: {
     totalSettlementAmountInPaise: bigint;
@@ -531,11 +536,11 @@ export class SettlementTds194OHookService {
     tdsDeductedInPaise: bigint;
     totalCommissionGstInPaise: bigint;
   }): bigint {
-    return (
+    const net =
       settlement.totalSettlementAmountInPaise -
       settlement.tcsDeductedInPaise -
       settlement.tdsDeductedInPaise -
-      settlement.totalCommissionGstInPaise
-    );
+      settlement.totalCommissionGstInPaise;
+    return net > 0n ? net : 0n;
   }
 }

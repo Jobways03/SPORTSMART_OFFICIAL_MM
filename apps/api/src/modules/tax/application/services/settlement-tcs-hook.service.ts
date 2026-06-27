@@ -472,16 +472,19 @@ export class SettlementTcsHookService {
   }
 
   /**
-   * Effective payout amount = totalSettlement - tcsDeducted. Helper
-   * for the payout-statement renderer; pure arithmetic so the seller
-   * UI doesn't have to re-derive it.
+   * @deprecated No runtime callers (Phase 252). Use settlementNetFromRow /
+   * settlementNetPayableInPaise from settlements/domain/settlement-net.ts — the
+   * single source of truth (gross from the AUTHORITATIVE decimal, clamped ≥0).
+   * This reads only the *InPaise gross sibling, which is 0 on legacy /
+   * dual-write-off rows; clamped here so a stray caller can never get a NEGATIVE
+   * payout, but it should switch to the helper above.
    */
   static computeNetPayoutInPaise(settlement: {
     totalSettlementAmountInPaise: bigint;
     tcsDeductedInPaise: bigint;
   }): bigint {
-    return (
-      settlement.totalSettlementAmountInPaise - settlement.tcsDeductedInPaise
-    );
+    const net =
+      settlement.totalSettlementAmountInPaise - settlement.tcsDeductedInPaise;
+    return net > 0n ? net : 0n;
   }
 }
