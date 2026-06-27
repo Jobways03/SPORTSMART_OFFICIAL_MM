@@ -68,6 +68,17 @@ locals {
     # .service.ts). Same value baked into the storefront build; empty string =
     # Google login disabled (verifier returns "not configured").
     GOOGLE_CLIENT_ID = var.google_client_id
+    # Outbound SMTP (transactional email via EmailService). Non-secret
+    # host/port/security/from come from tfvars; the login (MAIL_USER) and
+    # password (MAIL_PASS) are injected from the external secret. Defaults
+    # preserve the prior Gmail SMTP host until a tfvars value overrides them.
+    MAIL_HOST   = var.mail_host
+    MAIL_PORT   = tostring(var.mail_port)
+    MAIL_SECURE = var.mail_secure
+    MAIL_FROM   = var.mail_from
+    # "false" for cPanel/GoDaddy — their shared wildcard cert mismatches
+    # mail.<domain>, so skip TLS hostname verification (still encrypted).
+    MAIL_TLS_REJECT_UNAUTHORIZED = var.mail_tls_reject_unauthorized
   }
   api_environment = [
     for k, v in merge(local.api_base_environment, var.api_extra_environment) : {

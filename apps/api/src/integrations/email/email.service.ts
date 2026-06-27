@@ -39,11 +39,21 @@ export class EmailService {
       return;
     }
 
+    // cPanel / shared-hosting SMTP (e.g. GoDaddy) commonly presents a SHARED
+    // wildcard cert (e.g. *.prod.phx3.secureserver.net) that does NOT match
+    // mail.<domain>, so strict TLS hostname verification fails the handshake and
+    // every send errors out. MAIL_TLS_REJECT_UNAUTHORIZED=false skips the
+    // hostname check (the connection is still TLS-encrypted) for that case. It
+    // defaults to true (strict) for providers whose cert matches (Gmail/SES/…).
+    const tlsRejectUnauthorized =
+      this.envService.getString('MAIL_TLS_REJECT_UNAUTHORIZED', 'true') !== 'false';
+
     this.transporter = nodemailer.createTransport({
       host: this.envService.getString('MAIL_HOST', 'smtp.gmail.com'),
       port: this.envService.getNumber('MAIL_PORT', 587),
       secure: this.envService.getString('MAIL_SECURE', 'false') === 'true',
       auth: { user, pass },
+      tls: { rejectUnauthorized: tlsRejectUnauthorized },
       // Phase 1 (PR 1.6) — explicit transport timeouts. Nodemailer's
       // defaults are 10 MINUTES on every step, so a hung MX record
       // or unresponsive Gmail server pins each `sendMail` call for

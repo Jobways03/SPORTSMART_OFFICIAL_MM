@@ -307,3 +307,38 @@ variable "google_client_id" {
   type        = string
   default     = ""
 }
+
+# ── Outbound email (SMTP) ───────────────────────────────────────────────
+# Non-secret SMTP config injected into the API task env. The login + password
+# (MAIL_USER / MAIL_PASS) are NOT here — they stay in the <env>/app/external
+# secret. Defaults match the API's env-schema defaults (Gmail), so leaving these
+# unset is a no-op; set them in <env>.tfvars to switch the SMTP provider.
+variable "mail_host" {
+  description = "Outgoing SMTP host (EmailService MAIL_HOST). cPanel webmail is typically mail.<domain> or the host's server name. Default keeps the prior Gmail SMTP host."
+  type        = string
+  default     = "smtp.gmail.com"
+}
+
+variable "mail_port" {
+  description = "SMTP port: 465 for implicit SSL (mail_secure=true) or 587 for STARTTLS (mail_secure=false)."
+  type        = number
+  default     = 587
+}
+
+variable "mail_secure" {
+  description = "Implicit TLS: \"true\" for port 465, \"false\" for 587 STARTTLS. String to match the API's MAIL_SECURE env var."
+  type        = string
+  default     = "false"
+}
+
+variable "mail_from" {
+  description = "From header for outbound mail, e.g. \"Sportsmart <support@sportsmart.com>\". Empty falls back to the MAIL_USER address."
+  type        = string
+  default     = ""
+}
+
+variable "mail_tls_reject_unauthorized" {
+  description = "\"false\" skips SMTP TLS hostname verification — needed for cPanel/shared-hosting (e.g. GoDaddy) whose shared wildcard cert doesn't match mail.<domain>. Connection stays encrypted. Default \"true\" (strict) for Gmail/SES/etc."
+  type        = string
+  default     = "true"
+}
