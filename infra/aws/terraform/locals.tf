@@ -36,11 +36,15 @@ locals {
     web-admin-storefront = {
       container_port = 3000
       health_path    = "/"
-      subdomain      = "admin"
-      cpu            = 256
-      memory         = 512
-      desired_count  = 1
-      is_api         = false
+      # Production: superadmin.sportsmart.com. The apex's admin.sportsmart.com is
+      # already in use by a Webkul SaaS service, so the super-admin portal takes a
+      # distinct host in prod. Staging is unaffected (admin.staging.sportsmart.com,
+      # already live). ADMIN_PORTAL_URL_SUPER + CORS derive from this host.
+      subdomain     = var.env == "production" ? "superadmin" : "admin"
+      cpu           = 256
+      memory        = 512
+      desired_count = 1
+      is_api        = false
     }
     web-d2c-seller = {
       container_port = 3000
