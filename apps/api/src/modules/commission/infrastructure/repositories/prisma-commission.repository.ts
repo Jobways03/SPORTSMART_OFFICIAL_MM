@@ -228,7 +228,28 @@ export class PrismaCommissionRepository implements CommissionRepository {
       this.prisma.commissionRecord.count({ where }),
     ]);
 
-    return { records, total };
+    // Per-order NET PAYABLE — same figure the seller sees + the admin settlement
+    // "net pay": settlement − commission GST (18% of margin, SAC 9985) − §52 TCS
+    // (1% of taxable; gross/118 for the standard 18% slab). Authoritative net
+    // (incl. TDS) lives on the settlement.
+    const withNet = (records as any[]).map((r) => {
+      const settlePaise =
+        Number(r.totalSettlementAmountInPaise ?? 0) ||
+        Math.round(Number(r.totalSettlementAmount ?? 0) * 100);
+      const marginPaise =
+        Number(r.platformMarginInPaise ?? 0) ||
+        Math.round(Number(r.platformMargin ?? 0) * 100);
+      const grossPaise =
+        Number(r.totalPlatformAmountInPaise ?? 0) ||
+        Math.round(Number(r.totalPlatformAmount ?? 0) * 100);
+      const netPaise = Math.max(
+        0,
+        settlePaise - Math.round(marginPaise * 0.18) - Math.round(grossPaise / 118),
+      );
+      return { ...r, netPayableInPaise: String(netPaise) };
+    });
+
+    return { records: withNet, total };
   }
 
   /* ── Commission records (seller) ──────────────────────────────────── */

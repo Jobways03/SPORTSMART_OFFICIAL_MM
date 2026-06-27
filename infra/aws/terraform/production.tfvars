@@ -134,5 +134,5 @@ api_extra_environment = {
   # so invoice / credit-note / refund all reflect coupons (GST net-of-discount).
   # NOT a requiredOnInProd flag. ⚠️ Apply to STAGING and validate a discounted
   # order (invoice shows discount, refund = net-paid) BEFORE this prod apply.
-  DISCOUNT_ALLOCATION_ENABLED  = "true"
+  DISCOUNT_ALLOCATION_ENABLED = "true"
 }

@@ -339,6 +339,10 @@ export class SellerAllocationService {
             sellerType: true,
             // Phase 230 — manual fulfillment hold; held sellers are excluded.
             fulfillmentHold: true,
+            // Live store ZIP — distance fallback when the mapping's own
+            // pickupPincode is null (mappings created before the seller filled
+            // their store address snapshot pickupPincode=null forever).
+            sellerZipCode: true,
           },
         },
       },
@@ -429,8 +433,15 @@ export class SellerAllocationService {
     //    for no-coords mappings (it contributes 0 to the within-tier score).
     const pincodesToFetch = new Set<string>();
     for (const m of eligible) {
-      if ((m.latitude == null || m.longitude == null) && m.pickupPincode) {
-        pincodesToFetch.add(m.pickupPincode);
+      if (m.latitude == null || m.longitude == null) {
+        // Fall back to the seller's live store ZIP when the mapping has no
+        // pickup pincode of its own. A mapping created before the seller filled
+        // their store address snapshots pickupPincode=null, leaving the seller
+        // with no resolvable coords → null distance → wrongly dropped by the
+        // RETAIL radius gate (surfaces as DISTANCE_EXCEEDED / "No sellers nearby"
+        // even for a seller a few km away).
+        const pin = m.pickupPincode ?? m.seller.sellerZipCode ?? null;
+        if (pin) pincodesToFetch.add(pin);
       }
     }
     const pincodeCoords =
@@ -448,8 +459,13 @@ export class SellerAllocationService {
       // Tracks whether the seller's coords came from a region-approximated
       // pickup pincode (the mapping had no exact lat/long of its own).
       let sellerApprox = false;
-      if ((sellerLat == null || sellerLon == null) && mapping.pickupPincode) {
-        const sellerCoords = pincodeCoords.get(mapping.pickupPincode);
+      // Pickup pincode for distance: the mapping's own, else the seller's live
+      // store ZIP (see the prefetch loop above — handles mappings created before
+      // the seller set their store address).
+      const effectivePickupPincode =
+        mapping.pickupPincode ?? mapping.seller.sellerZipCode ?? null;
+      if ((sellerLat == null || sellerLon == null) && effectivePickupPincode) {
+        const sellerCoords = pincodeCoords.get(effectivePickupPincode);
         if (sellerCoords?.latitude != null && sellerCoords?.longitude != null) {
           sellerLat = sellerCoords.latitude;
           sellerLon = sellerCoords.longitude;
@@ -490,7 +506,10 @@ export class SellerAllocationService {
         estimatedDeliveryDays: this.estimateDeliveryDays(distance ?? 0, mapping.dispatchSla),
         score: 0, // scored within the chosen tier below
         mappingPriority: priority,
-        pickupPincode: mapping.pickupPincode ?? null,
+        // Surface the EFFECTIVE pickup pincode (mapping's own, else the seller's
+        // store ZIP) so downstream shipping/label uses a real origin even when
+        // the mapping never got a pickupPincode of its own.
+        pickupPincode: effectivePickupPincode,
         // Phase 231/232 — explainability (rendered by routing-preview UI).
         reasons: [
           `tier:${tier.toLowerCase()}`,

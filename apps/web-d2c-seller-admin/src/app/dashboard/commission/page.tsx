@@ -28,6 +28,8 @@ interface CommissionRecord {
   totalPlatformAmount: number;
   totalSettlementAmount: number;
   platformMargin: number;
+  // Per-order net wired to the seller (settlement − commission GST − §52 TCS).
+  netPayableInPaise?: string;
   status: string;
   unitPrice: number;
   totalPrice: number;
@@ -675,6 +677,7 @@ export default function AdminCommissionPage() {
                         <Th label="PLATFORM PRICE" align="right" />
                         <Th label="SETTLEMENT PRICE" align="right" />
                         <Th label="PLATFORM MARGIN" align="right" />
+                        <Th label="NET PAYABLE" align="right" />
                         <Th label="STATUS" />
                         <Th label="" align="right" />
                       </tr>
@@ -700,6 +703,7 @@ export default function AdminCommissionPage() {
                           <td style={tdNumStyle}>{fmt(Number(r.platformPrice))}</td>
                           <td style={tdNumStyle}>{fmt(Number(r.settlementPrice))}</td>
                           <td style={{ ...tdNumStyle, color: '#16a34a', fontWeight: 600 }}>{fmt(Number(r.platformMargin))}</td>
+                          <td style={{ ...tdNumStyle, color: '#16a34a', fontWeight: 700 }} title="Settlement − commission GST − §52 TCS (net wired to the seller)">{fmt(Number(r.netPayableInPaise ?? 0) / 100)}</td>
                           <td style={tdStyle}>{statusBadge(r.status)}</td>
                           <td style={{ ...tdStyle, textAlign: 'right' }}>
                             <button
