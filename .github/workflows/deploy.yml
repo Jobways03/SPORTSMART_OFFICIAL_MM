@@ -68,7 +68,7 @@ jobs:
 
       # Secret scan of the ref before anything is built or pushed.
       - name: Scan for secrets (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
