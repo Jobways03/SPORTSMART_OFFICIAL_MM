@@ -33,24 +33,26 @@ resource "aws_acm_certificate" "wildcard" {
 }
 
 resource "aws_route53_record" "cert_validation" {
-  # Keyed by the validation RECORD NAME (not domain_name): ACM returns the SAME
-  # validation CNAME for *.<domain> and the apex <domain>, so keying by domain
-  # would create two record resources contending for one name. The trailing `...`
-  # groups duplicates into a single record per unique validation name; the grouped
-  # entries are identical, so indexing [0] is correct.
+  # Keyed by domain_name, which is KNOWN at plan time. Keying by the validation
+  # record NAME (a computed/unknown-until-apply value) breaks `terraform plan`
+  # with "Invalid for_each argument". When serve_apex=true the wildcard
+  # *.<domain> and the apex <domain> share an identical validation CNAME; each
+  # domain gets its own resource here, but allow_overwrite makes the duplicate
+  # UPSERTs idempotent (Terraform applies each as a separate Route53 change-batch,
+  # never both in one), so there is no contention.
   for_each = {
     for dvo in aws_acm_certificate.wildcard.domain_validation_options :
-    dvo.resource_record_name => {
+    dvo.domain_name => {
       name   = dvo.resource_record_name
       type   = dvo.resource_record_type
       record = dvo.resource_record_value
-    }...
+    }
   }
 
   zone_id         = local.hosted_zone_id
-  name            = each.value[0].name
-  type            = each.value[0].type
-  records         = [each.value[0].record]
+  name            = each.value.name
+  type            = each.value.type
+  records         = [each.value.record]
   ttl             = 60
   allow_overwrite = true
 }
