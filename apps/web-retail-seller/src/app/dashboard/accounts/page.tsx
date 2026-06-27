@@ -83,7 +83,7 @@ export default function SellerAccountsPage() {
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(210px, 1fr))', gap: 12 }}>
             <Kpi label="Net revenue" value={formatINR(o.revenue.net)} tone="good" sub={`gross ${formatINR(o.revenue.gross)} − refunds ${formatINR(o.revenue.refundsDeducted)}`} />
             <Kpi label="Platform margin" value={formatINR(o.margin.platformMargin)} sub={`${o.margin.marginPercentage}% of revenue`} />
-            <Kpi label="Pending payable" value={formatINR(o.payable.pendingAmount)} tone="warn" sub={`${o.payable.pendingCount} settlement(s)`} />
+            <Kpi label="Pending payable" value={formatINR(o.payable.pendingAmount)} tone="warn" sub={`net · gross ${formatINR(o.payable.pendingGrossAmount)} · ${o.payable.pendingCount} settlement(s)`} />
             <Kpi label="Overdue payout" value={formatINR(o.overdue.amount)} tone={o.overdue.count > 0 ? 'warn' : 'good'} sub={o.overdue.count > 0 ? `${o.overdue.count} past due — being processed` : 'nothing past due'} />
             <Kpi label="Paid to you (period)" value={formatINR(o.payable.paidAmount)} sub={o.payable.lastSettledOn ? `last ${new Date(o.payable.lastSettledOn).toLocaleDateString('en-IN')}` : 'none yet'} />
             <Kpi label="TDS deducted (§194-O)" value={formatINR(o.taxDeductions.tdsDeducted)} sub={`${o.taxDeductions.tdsDepositedCount}/${o.taxDeductions.tdsRowCount} deposited`} />
@@ -108,9 +108,9 @@ export default function SellerAccountsPage() {
 
           {tab === 'commission' ? (
             <DrillTable
-              headers={['Order', 'Product', 'Status', 'Amount', 'Margin', 'When']}
+              headers={['Order', 'Product', 'Status', 'Amount', 'Margin', 'Net payable', 'When']}
               rightFrom={3}
-              rows={(commission?.records ?? []).map((r) => ({ id: r.id, cells: [r.orderNumber, r.productTitle, r.status, formatINR(r.totalPlatformAmount), formatINR(r.platformMargin), new Date(r.createdAt).toLocaleDateString('en-IN')] }))}
+              rows={(commission?.records ?? []).map((r) => ({ id: r.id, cells: [r.orderNumber, r.productTitle, r.status, formatINR(r.totalPlatformAmount), formatINR(r.platformMargin), formatINR(Number((r as any).netPayableInPaise ?? 0) / 100), new Date(r.createdAt).toLocaleDateString('en-IN')] }))}
               page={page} total={commission?.total ?? 0} limit={commission?.limit ?? 20} onPage={setPage}
             />
           ) : (

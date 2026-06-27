@@ -1094,7 +1094,17 @@ export class PrismaAccountsRepository implements AccountsRepository {
       this.prisma.sellerSettlement.aggregate({
         where: { sellerId, status: { in: ['PENDING', 'APPROVED'] }, ...created },
         _count: { id: true },
-        _sum: { totalSettlementAmount: true },
+        // Fix (2026-06-27) — "Pending payable" must reflect the NET we will
+        // actually disburse (gross − TCS − TDS − commission-GST), matching the
+        // admin settlement breakdown's "net pay", not the gross
+        // totalSettlementAmount. Sum the paise legs + keep the gross for subtext.
+        _sum: {
+          totalSettlementAmount: true,
+          totalSettlementAmountInPaise: true,
+          tcsDeductedInPaise: true,
+          tdsDeductedInPaise: true,
+          totalCommissionGstInPaise: true,
+        },
       }),
       // #7 — settled scoped to settlements PAID in the window.
       this.prisma.sellerSettlement.aggregate({
@@ -1222,7 +1232,15 @@ export class PrismaAccountsRepository implements AccountsRepository {
       },
       payable: {
         pendingCount: pendingSettleAgg._count.id,
-        pendingAmount: money(pendingSettleAgg._sum.totalSettlementAmount),
+        // NET we will pay (gross − TCS − TDS − commission-GST) — matches the
+        // admin settlement "net pay". Gross kept as `pendingGrossAmount` subtext.
+        pendingAmount: paiseToRupees(
+          (pendingSettleAgg._sum.totalSettlementAmountInPaise ?? 0n) -
+            (pendingSettleAgg._sum.tcsDeductedInPaise ?? 0n) -
+            (pendingSettleAgg._sum.tdsDeductedInPaise ?? 0n) -
+            (pendingSettleAgg._sum.totalCommissionGstInPaise ?? 0n),
+        ),
+        pendingGrossAmount: money(pendingSettleAgg._sum.totalSettlementAmount),
         paidCount: paidSettleAgg._count.id,
         // Net actually disbursed (matches the seller's "Last payout" + the admin
         // settlement breakdown's "net pay"), not the gross totalSettlementAmount.
@@ -1285,7 +1303,8 @@ export class PrismaAccountsRepository implements AccountsRepository {
         take: limit,
         select: {
           id: true, orderNumber: true, productTitle: true, status: true,
-          totalPlatformAmount: true, platformMargin: true, createdAt: true,
+          totalPlatformAmount: true, platformMargin: true,
+          totalSettlementAmount: true, createdAt: true,
         },
       }),
       this.prisma.commissionRecord.count({ where }),
@@ -1294,15 +1313,29 @@ export class PrismaAccountsRepository implements AccountsRepository {
       total,
       page,
       limit,
-      records: rows.map((r) => ({
-        id: r.id,
-        orderNumber: r.orderNumber,
-        productTitle: r.productTitle,
-        status: r.status,
-        totalPlatformAmount: money(r.totalPlatformAmount),
-        platformMargin: money(r.platformMargin),
-        createdAt: r.createdAt.toISOString(),
-      })),
+      records: rows.map((r) => {
+        // Per-order NET PAYABLE (matches the Commission page column + the admin
+        // settlement "net pay"): settlement − commission GST (18% of margin, SAC
+        // 9985) − §52 TCS (1% of the GST-exclusive taxable; gross/118 for the
+        // standard 18% slab). Authoritative net (incl. TDS) is on the settlement.
+        const settlePaise = Math.round(Number(r.totalSettlementAmount ?? 0) * 100);
+        const marginPaise = Math.round(Number(r.platformMargin ?? 0) * 100);
+        const grossPaise = Math.round(Number(r.totalPlatformAmount ?? 0) * 100);
+        const netPaise = Math.max(
+          0,
+          settlePaise - Math.round(marginPaise * 0.18) - Math.round(grossPaise / 118),
+        );
+        return {
+          id: r.id,
+          orderNumber: r.orderNumber,
+          productTitle: r.productTitle,
+          status: r.status,
+          totalPlatformAmount: money(r.totalPlatformAmount),
+          platformMargin: money(r.platformMargin),
+          netPayableInPaise: String(netPaise),
+          createdAt: r.createdAt.toISOString(),
+        };
+      }),
     };
   }
 

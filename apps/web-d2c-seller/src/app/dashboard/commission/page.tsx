@@ -21,6 +21,9 @@ interface CommissionRecord {
   totalPlatformAmount: number;
   totalSettlementAmount: number;
   platformMargin: number;
+  // Per-order net the seller takes home after commission GST + §52 TCS
+  // (matches the admin settlement "net pay"). Paise string for fmtPaise().
+  netPayableInPaise?: string;
   status: string;
   // Legacy fields
   unitPrice: number;
@@ -444,6 +447,7 @@ export default function SellerCommissionPage() {
                         <Th label="SETTLEMENT PRICE" />
                         <Th label="TOTAL EARNED" />
                         <Th label="MARGIN" />
+                        <Th label="NET PAYABLE" />
                         <Th label="STATUS" />
                       </tr>
                     </thead>
@@ -478,6 +482,9 @@ export default function SellerCommissionPage() {
                           </td>
                           <td style={{ ...tdNumStyle, color: '#dc2626' }}>
                             {fmt(Number(r.platformMargin))}
+                          </td>
+                          <td style={{ ...tdNumStyle, color: '#16a34a', fontWeight: 700 }} title="Settlement − commission GST − §52 TCS (what's wired to your bank)">
+                            {fmtPaise(r.netPayableInPaise)}
                           </td>
                           <td style={tdStyle}>{statusBadge(r.status)}</td>
                         </tr>

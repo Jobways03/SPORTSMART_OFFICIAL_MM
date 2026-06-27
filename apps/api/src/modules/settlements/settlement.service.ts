@@ -1760,8 +1760,39 @@ export class SettlementService {
       this.prisma.commissionRecord.count({ where }),
     ]);
 
+    // Per-order NET PAYABLE (transparency column) — what the seller actually
+    // nets after the platform's commission GST and §52 TCS, matching the admin
+    // settlement "net pay" (e.g. settlement ₹3,737.29 − GST ₹137.29 − TCS ₹38.14
+    // = ₹3,561.86). Commission GST is always 18% on the margin (SAC 9985). TCS
+    // §52 is 1% of the GST-exclusive taxable base; for an 18%-inclusive order
+    // taxable = gross/1.18, so TCS = gross/118 — exact for the standard slab.
+    // The AUTHORITATIVE net (incl. TDS + exact rates) lives on the
+    // SellerSettlement and is shown in Settlement History; this is the per-order
+    // figure so each row carries its own net beside the margin.
+    const COMMISSION_GST_RATE = 0.18;
+    const withNet = (records as any[]).map((r) => {
+      const settlePaise =
+        Number(r.totalSettlementAmountInPaise ?? 0) ||
+        Math.round(Number(r.totalSettlementAmount ?? 0) * 100);
+      const marginPaise =
+        Number(r.platformMarginInPaise ?? 0) ||
+        Math.round(Number(r.platformMargin ?? 0) * 100);
+      const grossPaise =
+        Number(r.totalPlatformAmountInPaise ?? 0) ||
+        Math.round(Number(r.totalPlatformAmount ?? 0) * 100);
+      const commissionGstPaise = Math.round(marginPaise * COMMISSION_GST_RATE);
+      const tcsPaise = Math.round(grossPaise / 118);
+      const netPaise = Math.max(0, settlePaise - commissionGstPaise - tcsPaise);
+      return {
+        ...r,
+        commissionGstInPaise: String(commissionGstPaise),
+        tcsInPaise: String(tcsPaise),
+        netPayableInPaise: String(netPaise),
+      };
+    });
+
     return {
-      records,
+      records: withNet,
       pagination: {
         page,
         limit,

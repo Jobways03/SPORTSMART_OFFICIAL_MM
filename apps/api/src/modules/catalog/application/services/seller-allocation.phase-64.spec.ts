@@ -460,3 +460,114 @@ describe('allocate distanceApproximate flag', () => {
     expect(node!.distanceApproximate).toBe(true);
   });
 });
+
+// ─── Pickup-pincode fallback to seller's live store ZIP (2026-06-27) ───
+//
+// A RETAIL mapping created before the seller filled their store address
+// snapshots pickupPincode=null (the create default is `seller.sellerZipCode ||
+// null`). Pre-fix that left the seller with no resolvable coords → null
+// distance → wrongly dropped by the 50km retail gate (DISTANCE_EXCEEDED /
+// "No sellers nearby") even for a seller a few km away. The allocator now falls
+// back to the seller's LIVE sellerZipCode for the distance computation.
+describe('allocate pickup-pincode fallback to seller store ZIP', () => {
+  it('a RETAIL seller with null pickupPincode but a store ZIP within radius IS serviceable', async () => {
+    const { svc, postOfficeCache } = buildMocks({
+      // Customer 500007 (Habsiguda) coords.
+      postOffice: { latitude: 17.4113, longitude: 78.5183 },
+      sellerMappings: [
+        activeSellerMapping({
+          latitude: null,
+          longitude: null,
+          pickupPincode: null, // mapping never got a pickup pincode
+          seller: {
+            id: SELLER_ID,
+            sellerName: 'Retail',
+            sellerShopName: 'Retail Shop',
+            status: 'ACTIVE',
+            sellerType: 'RETAIL',
+            sellerZipCode: '500056', // live store ZIP (Neredmet, ~7km away)
+          },
+        }),
+      ],
+    });
+    // The fallback store ZIP resolves to the store's coords.
+    postOfficeCache.lookupMany.mockResolvedValue(
+      new Map([['500056', { latitude: 17.45, longitude: 78.49 }]]),
+    );
+    const result = await svc.allocate({
+      productId: PRODUCT_ID,
+      variantId: VARIANT_ID,
+      customerPincode: '500007',
+      quantity: 1,
+    });
+    expect(result.serviceable).toBe(true);
+    expect(result.reason).toBe('OK');
+    expect(result.primary?.tier).toBe('RETAIL');
+    // Effective pickup pincode is surfaced for downstream shipping.
+    expect(result.primary?.pickupPincode).toBe('500056');
+    // The allocator asked the cache for the fallback ZIP.
+    expect(postOfficeCache.lookupMany).toHaveBeenCalledWith(['500056']);
+  });
+
+  it('still DISTANCE_EXCEEDED when the mapping has neither a pickup pincode nor a store ZIP', async () => {
+    const { svc } = buildMocks({
+      postOffice: { latitude: 17.4113, longitude: 78.5183 },
+      sellerMappings: [
+        activeSellerMapping({
+          latitude: null,
+          longitude: null,
+          pickupPincode: null,
+          seller: {
+            id: SELLER_ID,
+            sellerName: 'Retail',
+            sellerShopName: 'Retail Shop',
+            status: 'ACTIVE',
+            sellerType: 'RETAIL',
+            sellerZipCode: null, // no fallback available
+          },
+        }),
+      ],
+    });
+    const result = await svc.allocate({
+      productId: PRODUCT_ID,
+      variantId: VARIANT_ID,
+      customerPincode: '500007',
+      quantity: 1,
+    });
+    expect(result.serviceable).toBe(false);
+    expect(result.reason).toBe('DISTANCE_EXCEEDED');
+  });
+
+  it('the mapping pickupPincode still WINS over the store ZIP when present', async () => {
+    const { svc, postOfficeCache } = buildMocks({
+      postOffice: { latitude: 17.4113, longitude: 78.5183 },
+      sellerMappings: [
+        activeSellerMapping({
+          latitude: null,
+          longitude: null,
+          pickupPincode: '500063', // explicit per-product pickup
+          seller: {
+            id: SELLER_ID,
+            sellerName: 'Retail',
+            sellerShopName: 'Retail Shop',
+            status: 'ACTIVE',
+            sellerType: 'RETAIL',
+            sellerZipCode: '500056',
+          },
+        }),
+      ],
+    });
+    postOfficeCache.lookupMany.mockResolvedValue(
+      new Map([['500063', { latitude: 17.45, longitude: 78.49 }]]),
+    );
+    const result = await svc.allocate({
+      productId: PRODUCT_ID,
+      variantId: VARIANT_ID,
+      customerPincode: '500007',
+      quantity: 1,
+    });
+    expect(result.serviceable).toBe(true);
+    expect(result.primary?.pickupPincode).toBe('500063');
+    expect(postOfficeCache.lookupMany).toHaveBeenCalledWith(['500063']);
+  });
+});
