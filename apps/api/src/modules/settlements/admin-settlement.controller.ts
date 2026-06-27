@@ -73,10 +73,14 @@ export class AdminSettlementController {
   async previewCycle(@Req() req: Request, @Body() body: CreateCycleDto) {
     const { periodStart, periodEnd } = this.resolvePeriod(body);
     const adminId = (req as any).adminId;
+    // Delegated settlements (2026-06-27) — scope the dry-run to the actor's
+    // seller type so the preview matches what their createCycle would write.
+    const allowedSellerTypes = resolveScopedTypes((req as any).user?.permissions);
     const preview = await this.settlementService.previewCycle(
       periodStart,
       periodEnd,
       { adminId },
+      allowedSellerTypes,
     );
     return { success: true, message: 'Settlement cycle preview', data: preview };
   }
@@ -87,16 +91,22 @@ export class AdminSettlementController {
   // its own granular permission (was the broad settlements.approve, no @Roles —
   // looser than the approve gate it feeds) + throttled.
   @Post('create-cycle')
-  @Roles('SUPER_ADMIN')
+  // Delegated settlements (2026-06-27) — gated by the granular permission only;
+  // the @Roles('SUPER_ADMIN') lock was REMOVED so the type-scoped D2C_ADMIN /
+  // RETAILER_ADMIN can create cycles for THEIR OWN sellers. SUPER_ADMIN no longer
+  // holds settlements.createCycle (it's in SUPER_ADMIN_DELEGATED_PERMISSIONS), so
+  // it can't reach here; the service additionally scope-locks the records.
   @Permissions('settlements.createCycle')
   @Throttle({ default: { limit: 3, ttl: 60_000 } })
   async createCycle(@Req() req: Request, @Body() body: CreateCycleDto) {
     const { periodStart, periodEnd } = this.resolvePeriod(body);
     const adminId = (req as any).adminId;
+    const allowedSellerTypes = resolveScopedTypes((req as any).user?.permissions);
     const result = await this.settlementService.createCycle(
       periodStart,
       periodEnd,
       { adminId },
+      allowedSellerTypes,
     );
 
     return {
@@ -168,7 +178,9 @@ export class AdminSettlementController {
 
   /* ── PATCH /admin/settlements/cycles/:cycleId/approve ── */
   @Patch('cycles/:cycleId/approve')
-  @Roles('SUPER_ADMIN')
+  // Delegated settlements (2026-06-27) — @Roles('SUPER_ADMIN') removed; the
+  // type-scoped admins approve their own cycles and the service scope-locks the
+  // cycle against the actor (no cross-type approve).
   @Permissions('settlements.approve')
   // Phase 144 — approval runs TCS+TDS hooks (dozens-to-hundreds of ledger rows
   // each); throttle + idempotency so a double-click / retry can't double-fire.
@@ -180,10 +192,12 @@ export class AdminSettlementController {
     @Body() body: ApproveCycleDto,
   ) {
     const adminId = (req as any).adminId;
+    const allowedSellerTypes = resolveScopedTypes((req as any).user?.permissions);
     const result = await this.settlementService.approveCycle(
       cycleId,
       adminId,
       body?.notes,
+      allowedSellerTypes,
     );
 
     if (!result.success) {
@@ -202,7 +216,8 @@ export class AdminSettlementController {
   // its claimed commission records and marks the cycle + seller settlements
   // CANCELLED. SUPER_ADMIN-only, same as create.
   @Patch('cycles/:cycleId/cancel')
-  @Roles('SUPER_ADMIN')
+  // Delegated settlements (2026-06-27) — @Roles('SUPER_ADMIN') removed; scoped
+  // admins cancel their own cycles (service scope-locks against the actor).
   @Permissions('settlements.createCycle')
   async cancelCycle(
     @Req() req: Request,
@@ -210,10 +225,12 @@ export class AdminSettlementController {
     @Body() body: CancelCycleDto,
   ) {
     const adminId = (req as any).adminId;
+    const allowedSellerTypes = resolveScopedTypes((req as any).user?.permissions);
     const result = await this.settlementService.cancelCycle(
       cycleId,
       { adminId },
       body.reason,
+      allowedSellerTypes,
     );
     return {
       success: true,
@@ -224,7 +241,8 @@ export class AdminSettlementController {
 
   /* ── PATCH /admin/settlements/:settlementId/mark-paid ── */
   @Patch(':settlementId/mark-paid')
-  @Roles('SUPER_ADMIN')
+  // Delegated settlements (2026-06-27) — @Roles('SUPER_ADMIN') removed; scoped
+  // admins pay their OWN type's settlements (service scope-locks via the cycle).
   @Permissions('settlements.markPaid')
   // Phase 145 — real money movement: throttle + idempotency so a double-click /
   // retry can't double-fire the TCS/TDS hooks or surface a spurious error.
@@ -245,6 +263,7 @@ export class AdminSettlementController {
         paymentMethod: body.paymentMethod,
         paymentProofUrl: body.paymentProofUrl,
       },
+      resolveScopedTypes((req as any).user?.permissions),
     );
 
     if (!result.success) {

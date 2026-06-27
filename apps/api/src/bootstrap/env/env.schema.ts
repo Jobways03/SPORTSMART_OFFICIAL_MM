@@ -508,8 +508,11 @@ export const envSchema = z.object({
   // ── Phase 12 (ADR-017) — Finance approval gate ─────────────────────
   // Refund instructions whose amount exceeds this threshold (in paise)
   // queue as PENDING_APPROVAL instead of running the saga inline.
-  // Default ₹10,000. Set to 0 to gate every refund (no auto-path).
-  REFUND_AUTO_APPROVE_THRESHOLD_PAISE: z.coerce.number().default(1_000_000),
+  // POLICY (2026-06-27): default 0 — EVERY refund, ANY amount, in ALL
+  // environments (incl. production) queues as PENDING_APPROVAL and must be
+  // signed off in Finance Approvals before money moves. There is NO
+  // auto-approve fast-path. (Set the var to a paise value to reintroduce one.)
+  REFUND_AUTO_APPROVE_THRESHOLD_PAISE: z.coerce.number().default(0),
   // When 'true', GOODWILL_CREDIT remedies always queue regardless of
   // amount — finance signs off on every non-recoverable platform hit.
   REFUND_GOODWILL_REQUIRES_APPROVAL: z.string().default('true'),

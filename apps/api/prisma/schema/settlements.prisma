@@ -70,6 +70,14 @@ model SettlementCycle {
   // inherits this as its payoutDueBy at creation.
   payoutDueBy        DateTime?             @map("payout_due_by")
   status             SettlementCycleStatus @default(DRAFT) @map("status")
+  // Delegated settlements (2026-06-27) — which seller TYPE this cycle settles.
+  // D2C / RETAIL → created by the type-scoped D2C_ADMIN / RETAILER_ADMIN and
+  // aggregates ONLY that type's commission records; the lifecycle (create /
+  // approve / markPaid / cancel) enforces that the actor's seller-scope covers
+  // it, so a Retailer admin can never approve/pay a D2C cycle. null = a legacy
+  // pre-delegation seller cycle or a franchise-flow cycle (franchise has its own
+  // node-scoped settlement service).
+  sellerType         SellerType?           @map("seller_type")
   totalAmount        Decimal               @default(0) @map("total_amount") @db.Decimal(12, 2)
   totalMargin        Decimal               @default(0) @map("total_margin") @db.Decimal(12, 2)
   // Phase 1.4 paise siblings (ADR-007). BigInt — settlement cycles

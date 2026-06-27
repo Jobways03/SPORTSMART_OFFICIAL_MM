@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import {
   BadRequestAppException,
   ConflictAppException,
+  ForbiddenAppException,
   NotFoundAppException,
 } from '../../core/exceptions';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
@@ -82,9 +83,38 @@ export class SettlementService {
    * createCycle would produce. (Previously the only preview path was a dead,
    * per-seller facade with different aggregation math.)
    */
+  /**
+   * Delegated settlements (2026-06-27) — money-safety guard. A type-scoped admin
+   * (D2C_ADMIN / RETAILER_ADMIN; allowedSellerTypes = [D2C] or [RETAIL]) may only
+   * create / approve / cancel / pay a cycle tagged with ITS OWN seller type. It
+   * must NOT touch another type's cycle or a legacy/global (null) cycle. An
+   * unscoped caller (null/empty) is unrestricted — but settlements are delegated
+   * off SUPER_ADMIN, so the controller always passes a real scope here.
+   * Re-checked at every money step so a tampered request can't cross types.
+   */
+  private assertScopeCoversCycle(
+    cycleSellerType: 'D2C' | 'RETAIL' | null,
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
+  ): void {
+    if (!allowedSellerTypes || allowedSellerTypes.length === 0) return;
+    if (
+      cycleSellerType === null ||
+      !allowedSellerTypes.includes(cycleSellerType)
+    ) {
+      throw new ForbiddenAppException(
+        `This settlement cycle is outside your seller scope ` +
+          `(cycle: ${cycleSellerType ?? 'GLOBAL'}, your scope: ${allowedSellerTypes.join('/')}).`,
+      );
+    }
+  }
+
   private async aggregateEligibleCommissions(
     periodStart: Date,
     periodEnd: Date,
+    // Delegated settlements (2026-06-27) — restrict the eligible commission
+    // records to a type-scoped admin's own seller type(s). null/empty =
+    // unrestricted (legacy/global).
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
   ): Promise<{
     pendingRecords: Array<{ id: string }>;
     sellerMap: Map<string, EligibleSellerGroup>;
@@ -102,6 +132,12 @@ export class SettlementService {
           { settlableAt: { gte: periodStart, lte: periodEnd } },
           { settlableAt: null, createdAt: { gte: periodStart, lte: periodEnd } },
         ],
+        // Delegated settlements (2026-06-27) — a type-scoped admin aggregates
+        // ONLY its own seller type's records (same relation filter that
+        // getAdminSellerBreakdown uses). null/empty = unrestricted.
+        ...(allowedSellerTypes && allowedSellerTypes.length > 0
+          ? { seller: { sellerType: { in: allowedSellerTypes } } }
+          : {}),
       },
       include: {
         seller: { select: { id: true, sellerShopName: true, gstStateCode: true } },
@@ -191,16 +227,32 @@ export class SettlementService {
     periodStart: Date,
     periodEnd: Date,
     actor?: { adminId?: string },
+    // Delegated settlements (2026-06-27) — the actor's seller-type scope. A
+    // dedicated admin passes exactly ONE type ([D2C] or [RETAIL]); the cycle is
+    // tagged with it and aggregates only that type. null/empty = legacy global
+    // (no longer reachable now that settlements are delegated off SUPER_ADMIN).
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
   ) {
+    const cycleSellerType: 'D2C' | 'RETAIL' | null =
+      allowedSellerTypes && allowedSellerTypes.length === 1
+        ? (allowedSellerTypes[0] ?? null)
+        : null;
+
     // Phase 141 — reject a period that overlaps an existing non-cancelled
     // cycle. The settlementId:null claim already prevents a record landing in
     // two cycles, but two coexisting cycles for overlapping ranges confuse
     // finance reporting. Fail fast before doing any work.
+    //
+    // Delegated settlements (2026-06-27) — SCOPE-AWARE overlap: a RETAIL cycle
+    // only conflicts with other RETAIL cycles, so a Retailer admin and a D2C
+    // admin can both run the SAME period. A legacy/global cycle (null) conflicts
+    // only with other null cycles.
     const overlap = await this.prisma.settlementCycle.findFirst({
       where: {
         status: { notIn: ['CANCELLED'] },
         periodStart: { lte: periodEnd },
         periodEnd: { gte: periodStart },
+        sellerType: cycleSellerType,
       },
       select: { id: true, status: true },
     });
@@ -216,7 +268,11 @@ export class SettlementService {
     // settlementId:null filter inside keeps cycle assignment idempotent — a
     // record can only ever be grouped into one cycle.
     const { pendingRecords, sellerMap, cycleTotalAmount, cycleTotalMargin } =
-      await this.aggregateEligibleCommissions(periodStart, periodEnd);
+      await this.aggregateEligibleCommissions(
+        periodStart,
+        periodEnd,
+        allowedSellerTypes,
+      );
 
     if (pendingRecords.length === 0) {
       return {
@@ -253,6 +309,9 @@ export class SettlementService {
           periodStart,
           periodEnd,
           status: 'DRAFT',
+          // Delegated settlements (2026-06-27) — stamp the seller type this cycle
+          // settles, so approve/cancel/pay can scope-check the actor against it.
+          sellerType: cycleSellerType,
           // Phase 141 — created-by provenance (the most consequential write
           // in the flow; the audit row below records the rest).
           createdByAdminId: actor?.adminId ?? null,
@@ -521,12 +580,20 @@ export class SettlementService {
     periodStart: Date,
     periodEnd: Date,
     actor?: { adminId?: string },
+    // Delegated settlements (2026-06-27) — scope the dry-run to the actor's own
+    // seller type so the preview matches what their createCycle would produce.
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
   ) {
+    const cycleSellerType: 'D2C' | 'RETAIL' | null =
+      allowedSellerTypes && allowedSellerTypes.length === 1
+        ? (allowedSellerTypes[0] ?? null)
+        : null;
     const overlap = await this.prisma.settlementCycle.findFirst({
       where: {
         status: { notIn: ['CANCELLED'] },
         periodStart: { lte: periodEnd },
         periodEnd: { gte: periodStart },
+        sellerType: cycleSellerType,
       },
       select: { id: true, status: true, periodStart: true, periodEnd: true },
     });
@@ -535,7 +602,11 @@ export class SettlementService {
     // exactly what a subsequent create would write (only-PENDING, settlementId
     // null, settlableAt-windowed). No mutation: no transaction, no writes.
     const { pendingRecords, sellerMap, cycleTotalAmount, cycleTotalMargin } =
-      await this.aggregateEligibleCommissions(periodStart, periodEnd);
+      await this.aggregateEligibleCommissions(
+        periodStart,
+        periodEnd,
+        allowedSellerTypes,
+      );
 
     // Phase 150 — surface the post-settlement claw-backs createCycle will net
     // off each seller's payout, so the dry-run matches the commit (audit #6).
@@ -660,6 +731,7 @@ export class SettlementService {
     cycleId: string,
     actor: { adminId?: string },
     reason: string,
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
   ) {
     const safeReason = (reason ?? '').replace(/<[^>]*>/g, '').trim();
     if (safeReason.length < 3) {
@@ -674,6 +746,9 @@ export class SettlementService {
         include: { sellerSettlements: { select: { id: true, status: true } } },
       });
       if (!cycle) throw new NotFoundAppException('Settlement cycle not found');
+      // Delegated settlements (2026-06-27) — a scoped admin can only cancel its
+      // OWN seller type's cycle (money-safety; re-checked under the tx lock).
+      this.assertScopeCoversCycle(cycle.sellerType, allowedSellerTypes);
       // Phase 253 — reject is allowed for DRAFT/PREVIEWED and now also APPROVED
       // cycles, as long as NO settlement has been paid (money already moved
       // can't be un-rejected here — that needs the reversal/refund flow).
@@ -1019,7 +1094,12 @@ export class SettlementService {
   }
 
   /* ── T3: Approve cycle ── */
-  async approveCycle(cycleId: string, actorId?: string, notes?: string) {
+  async approveCycle(
+    cycleId: string,
+    actorId?: string,
+    notes?: string,
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
+  ) {
     // Phase 144 — approval is the most consequential write in the finance
     // pipeline (it commits sellers' payouts + triggers TCS/TDS). Load the
     // settlements + their live commission state so we can re-validate before
@@ -1040,6 +1120,10 @@ export class SettlementService {
     if (!cycle) {
       return { success: false, message: 'Settlement cycle not found' };
     }
+
+    // Delegated settlements (2026-06-27) — a scoped admin can only approve its
+    // OWN seller type's cycle (the most consequential money write).
+    this.assertScopeCoversCycle(cycle.sellerType, allowedSellerTypes);
 
     if (cycle.status !== 'DRAFT' && cycle.status !== 'PREVIEWED') {
       return {
@@ -1240,6 +1324,7 @@ export class SettlementService {
       paymentMethod?: string;
       paymentProofUrl?: string;
     },
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
   ) {
     const settlement = await this.prisma.sellerSettlement.findUnique({
       where: { id: settlementId },
@@ -1249,6 +1334,14 @@ export class SettlementService {
     if (!settlement) {
       return { success: false, message: 'Seller settlement not found' };
     }
+
+    // Delegated settlements (2026-06-27) — money movement. A scoped admin can
+    // only mark its OWN seller type's settlement paid; the owning cycle's
+    // sellerType is the source of truth.
+    this.assertScopeCoversCycle(
+      settlement.cycle.sellerType,
+      allowedSellerTypes,
+    );
 
     if (settlement.status === 'PAID') {
       return { success: false, message: 'Settlement already marked as paid' };

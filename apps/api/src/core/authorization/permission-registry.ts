@@ -906,6 +906,15 @@ export const SUPER_ADMIN_DELEGATED_PERMISSIONS: readonly PermissionKey[] = [
   'sellers.logistics.register',
   'franchise.approve',
   'franchise.suspend',
+  // Delegated settlements (2026-06-27) — the settlement CYCLE lifecycle
+  // (create / approve / pay) is delegated to the type-scoped D2C_ADMIN /
+  // RETAILER_ADMIN, who run it for ONLY their own sellers (the service
+  // scope-locks each step). SUPER_ADMIN no longer creates/approves/pays
+  // settlements. Read keys (settlements.read / settlements.history.read) are
+  // NOT delegated — super admin keeps settlement VISIBILITY for oversight.
+  'settlements.createCycle',
+  'settlements.approve',
+  'settlements.markPaid',
 ];
 
 export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> = {
@@ -1077,6 +1086,10 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
     'catalog.read', 'catalog.write', 'catalog.approve',
     'analytics.read',
     'accounts.read', 'settlements.read', 'settlements.history.read',
+    // Delegated settlements (2026-06-27) — run the settlement CYCLE lifecycle
+    // (create / approve / pay) for D2C sellers only; sellers.scope.d2c is the
+    // lock and SettlementService enforces it on every step.
+    'settlements.createCycle', 'settlements.approve', 'settlements.markPaid',
     'nova.read',
   ],
   // Retailer-portal admin — the SELLER_ADMIN seller-management surface scoped
@@ -1091,6 +1104,10 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
     'catalog.read', 'catalog.write', 'catalog.approve',
     'analytics.read',
     'accounts.read', 'settlements.read', 'settlements.history.read',
+    // Delegated settlements (2026-06-27) — run the settlement CYCLE lifecycle
+    // (create / approve / pay) for RETAIL sellers only; sellers.scope.retail is
+    // the lock and SettlementService enforces it on every step.
+    'settlements.createCycle', 'settlements.approve', 'settlements.markPaid',
     'nova.read',
   ],
   // Franchise-portal admin — owns the franchise lifecycle (approve/suspend),
