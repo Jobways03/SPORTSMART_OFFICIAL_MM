@@ -110,7 +110,7 @@ export default function SellerAccountsPage() {
             <DrillTable
               headers={['Order', 'Product', 'Status', 'Amount', 'Margin', 'Net payable', 'When']}
               rightFrom={3}
-              rows={(commission?.records ?? []).map((r) => ({ id: r.id, cells: [r.orderNumber, r.productTitle, r.status, formatINR(r.totalPlatformAmount), formatINR(r.platformMargin), formatINR(Number((r as any).netPayableInPaise ?? 0) / 100), new Date(r.createdAt).toLocaleDateString('en-IN')] }))}
+              rows={(commission?.records ?? []).map((r) => ({ id: r.id, cells: [r.orderNumber, r.productTitle, r.status, formatINR(r.totalPlatformAmount), formatINR(r.platformMargin), formatINR((Number((r as any).netPayableInPaise ?? 0) / 100).toFixed(2)), new Date(r.createdAt).toLocaleDateString('en-IN')] }))}
               page={page} total={commission?.total ?? 0} limit={commission?.limit ?? 20} onPage={setPage}
             />
           ) : (
