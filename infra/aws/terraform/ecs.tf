@@ -76,6 +76,9 @@ locals {
     MAIL_PORT   = tostring(var.mail_port)
     MAIL_SECURE = var.mail_secure
     MAIL_FROM   = var.mail_from
+    # "false" for cPanel/GoDaddy — their shared wildcard cert mismatches
+    # mail.<domain>, so skip TLS hostname verification (still encrypted).
+    MAIL_TLS_REJECT_UNAUTHORIZED = var.mail_tls_reject_unauthorized
   }
   api_environment = [
     for k, v in merge(local.api_base_environment, var.api_extra_environment) : {

@@ -37,6 +37,9 @@ mail_host   = "mail.sportsmart.com"
 mail_port   = 465
 mail_secure = "true"
 mail_from   = "Sportsmart <support@sportsmart.com>"
+# cPanel/GoDaddy shared cert (*.prod.phx3.secureserver.net) doesn't match
+# mail.sportsmart.com, so skip TLS hostname verification (still encrypted).
+mail_tls_reject_unauthorized = "false"
 
 image_tag                  = "production-latest"
 logistics_facade_image_tag = "production-latest"

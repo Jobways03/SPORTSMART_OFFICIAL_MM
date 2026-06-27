@@ -231,6 +231,10 @@ export const envSchema = z.object({
   MAIL_USER: z.string().optional(),
   MAIL_PASS: z.string().optional(),
   MAIL_FROM: z.string().optional(),
+  // 'false' skips TLS hostname verification — needed for cPanel/shared-hosting
+  // SMTP (e.g. GoDaddy) whose shared wildcard cert doesn't match mail.<domain>.
+  // Connection stays encrypted. Default 'true' (strict) for Gmail/SES/etc.
+  MAIL_TLS_REJECT_UNAUTHORIZED: z.string().default('true'),
 
   // Admin Seed
   ADMIN_SEED_NAME: z.string().optional(),

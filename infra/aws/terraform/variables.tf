@@ -336,3 +336,9 @@ variable "mail_from" {
   type        = string
   default     = ""
 }
+
+variable "mail_tls_reject_unauthorized" {
+  description = "\"false\" skips SMTP TLS hostname verification — needed for cPanel/shared-hosting (e.g. GoDaddy) whose shared wildcard cert doesn't match mail.<domain>. Connection stays encrypted. Default \"true\" (strict) for Gmail/SES/etc."
+  type        = string
+  default     = "true"
+}
