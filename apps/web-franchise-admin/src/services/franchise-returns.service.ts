@@ -48,8 +48,11 @@ export interface FranchiseReturnDetail extends FranchiseReturnListItem {
   }>;
   statusHistory?: Array<{
     id: string;
-    status: string;
-    note?: string | null;
+    // ReturnStatusHistory exposes `toStatus` / `notes` (matches D2C/Retail
+    // services). The prior `status` / `note` fields didn't exist on the row, so
+    // the timeline rendered "—" with no notes.
+    toStatus: string;
+    notes?: string | null;
     createdAt: string;
   }>;
   customer?: {

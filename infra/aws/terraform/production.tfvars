@@ -129,4 +129,10 @@ api_extra_environment = {
   MONEY_DUAL_WRITE_ENABLED     = "true"
   PERMISSIONS_GUARD_STRICT     = "true"
   RBAC_ORPHAN_SWEEP_ENABLED    = "true"
+
+  # Discount-aware allocation pipeline — snapshots per-item discount at checkout
+  # so invoice / credit-note / refund all reflect coupons (GST net-of-discount).
+  # NOT a requiredOnInProd flag. ⚠️ Apply to STAGING and validate a discounted
+  # order (invoice shows discount, refund = net-paid) BEFORE this prod apply.
+  DISCOUNT_ALLOCATION_ENABLED  = "true"
 }

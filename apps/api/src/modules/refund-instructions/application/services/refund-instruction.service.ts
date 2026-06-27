@@ -644,17 +644,23 @@ export class RefundInstructionService {
         ),
       );
 
-    const labelPrefix = claimed.sourceType === 'RETURN' ? 'return' : 'dispute';
+    // Resolve the human-facing reference (RET-…/DSP-…/order number) so the
+    // customer's wallet statement reads "Return RET-2026-000003 — ₹X refunded"
+    // instead of the raw id fallback ("return:114fc67c"). Every refund now
+    // routes through finance approval (REFUND_AUTO_APPROVE_THRESHOLD_PAISE=0),
+    // so this IS the label customers actually see.
+    const cleanLabel = await this.resolveRefundLabel(
+      claimed.sourceType,
+      claimed.sourceId,
+      claimed.orderId,
+    );
     const ranInstruction = await this.runSagaForInstruction(
       claimed,
       claimed.idempotencyKey!,
       {
         sourceType: claimed.sourceType,
         sourceId: claimed.sourceId,
-        // We don't have the original return/dispute number here; the
-        // saga's step builder only uses it for the wallet description
-        // string. The id-prefixed fallback is enough for audit trail.
-        label: `${labelPrefix}:${claimed.sourceId.slice(0, 8)}`,
+        label: cleanLabel,
         customerId: claimed.customerId,
         amountInPaise: Number(claimed.amountInPaise),
       },
@@ -1166,6 +1172,50 @@ export class RefundInstructionService {
     }
   }
 
+  /**
+   * Human-facing reference for the wallet-statement line. Returns the clean
+   * document number the customer recognises — RET-… for a return, DSP-… for a
+   * dispute, or "order SM…" for a cancellation/manual refund — never a raw
+   * uuid. Returns '' when nothing resolves; the caller then renders the generic
+   * "Refund — ₹X". Best-effort: a lookup miss falls back to '' and never blocks
+   * the refund saga.
+   */
+  private async resolveRefundLabel(
+    sourceType: RefundSourceType,
+    sourceId: string,
+    orderId: string | null,
+  ): Promise<string> {
+    try {
+      if (sourceType === 'RETURN') {
+        const r = await this.prisma.return.findUnique({
+          where: { id: sourceId },
+          select: { returnNumber: true },
+        });
+        return r?.returnNumber ?? '';
+      }
+      if (sourceType === 'DISPUTE') {
+        const d = await this.prisma.dispute.findUnique({
+          where: { id: sourceId },
+          select: { disputeNumber: true },
+        });
+        return d?.disputeNumber ?? '';
+      }
+      // MANUAL / cancellation / RTO — reference the order the customer knows.
+      if (orderId) {
+        const o = await this.prisma.masterOrder.findUnique({
+          where: { id: orderId },
+          select: { orderNumber: true },
+        });
+        return o?.orderNumber ? `order ${o.orderNumber}` : '';
+      }
+    } catch (err) {
+      this.logger.warn(
+        `resolveRefundLabel failed for ${sourceType} ${sourceId}: ${(err as Error).message}`,
+      );
+    }
+    return '';
+  }
+
   private walletCreditStep(meta: {
     sourceType: RefundSourceType;
     label: string;
@@ -1177,7 +1227,22 @@ export class RefundInstructionService {
     return {
       name: 'wallet.credit',
       execute: async (ctx) => {
-        const noun = meta.sourceType === 'RETURN' ? 'Return' : 'Dispute';
+        const noun =
+          meta.sourceType === 'RETURN'
+            ? 'Return'
+            : meta.sourceType === 'DISPUTE'
+              ? 'Dispute'
+              : 'Refund for';
+        // Defence-in-depth: never leak a raw idempotency-key / source label
+        // (e.g. "return:114fc67c", "cancel-sub-order:<uuid>") onto the
+        // customer's wallet statement. A key-like label (word[-word]:hex…)
+        // collapses to the clean generic form. Approved refunds already pass a
+        // resolved RET-/DSP-/order reference via resolveRefundLabel; this guards
+        // the rarer auto-process legs that still carry a raw sourceLabel.
+        const rawLabel = meta.label?.trim() ?? '';
+        const cleanLabel = /^[a-z][a-z-]*:[0-9a-f-]{4,}$/i.test(rawLabel)
+          ? ''
+          : rawLabel;
         // Phase 172 (#6) — a goodwill credit reads differently on the customer's
         // wallet statement than a genuine refund: it's an apology, not money we
         // owed. Prefer an explicit customer-visible message if finance set one.
@@ -1185,9 +1250,9 @@ export class RefundInstructionService {
         const description = meta.isGoodwill
           ? meta.customerVisibleMessage?.trim()
             ? meta.customerVisibleMessage.trim()
-            : `${noun}${meta.label ? ` ${meta.label}` : ''} — ₹${rupees} goodwill credit (with our apologies)`
-          : meta.label
-            ? `${noun} ${meta.label} — ₹${rupees} refunded to wallet`
+            : `${noun}${cleanLabel ? ` ${cleanLabel}` : ''} — ₹${rupees} goodwill credit (with our apologies)`
+          : cleanLabel
+            ? `${noun} ${cleanLabel} — ₹${rupees} refunded to wallet`
             : `Refund — ₹${rupees}`;
         // Phase 172 (#9) — goodwill credit lapses after a configurable window
         // (default 180 days); a genuine refund never expires.

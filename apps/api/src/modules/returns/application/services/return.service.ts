@@ -49,6 +49,7 @@ import { ReplacementOrderService } from './replacement-order.service';
 import { RazorpayAdapter } from '../../../../integrations/razorpay/adapters/razorpay.adapter';
 import { verifyRazorpaySignature } from './razorpay-signature';
 import { DiscountAllocationService } from '../../../discounts/application/services/discount-allocation.service';
+import { computeOrderDiscountNetFactor } from './discount-net-factor.util';
 import { MoneyDualWriteHelper } from '../../../../core/money/money-dual-write.helper';
 import {
   CreditNoteService,
@@ -1950,6 +1951,51 @@ export class ReturnService {
     // The reversalSnapshot (when present) is held alongside each
     // refund so the QC commit transaction can write a
     // `return_tax_reversal_lines` row for the credit note.
+    //
+    // Order-level discount net-factor (P0.2 fallback). When NO per-item
+    // discount-allocation snapshot exists (DISCOUNT_ALLOCATION_ENABLED off, the
+    // default — so this covers every order placed via the legacy checkout path),
+    // computeRefundForReturnedItem returns null and we fall back to the GROSS
+    // line price (qty × unitPrice). That over-refunds any order that used a
+    // coupon: SM20260000026 paid ₹818.10 (₹909 − ₹90.90 AMOUNT_OFF_ORDER) but
+    // was refunded the full ₹909. We reconstruct the proportional discount from
+    // the master-order totals and scale the gross refund by it so the customer
+    // gets back exactly what they paid.
+    //
+    //   preDiscountSubtotal = total + discount − shipping   (sum of item gross)
+    //   netFactor           = (total − shipping) / preDiscountSubtotal
+    //                       = (subtotal − discount) / subtotal
+    //
+    // Shipping is excluded from both sides so a non-zero shipping fee can't
+    // dilute the ratio. AMOUNT_OFF_ORDER spreads proportionally across every
+    // line, so the order-level factor is the correct per-item factor regardless
+    // of multi-item / multi-sub-order splits. With no discount the factor is 1
+    // (no behavior change); paise fields fall back to the Decimal siblings for
+    // orders placed before the paise backfill. This ONLY scales the gross
+    // fallback — when a snapshot exists the discount is already baked into
+    // prorated.totalRefundInPaise and must not be applied twice.
+    const mo: any = (ret as any).masterOrder ?? null;
+    const moTotalPaise =
+      Number(mo?.totalAmountInPaise ?? 0) ||
+      Math.round(Number(mo?.totalAmount ?? 0) * 100);
+    const moDiscountPaise =
+      Number(mo?.discountAmountInPaise ?? 0) ||
+      Math.round(Number(mo?.discountAmount ?? 0) * 100);
+    const moShippingPaise = Number(mo?.shippingFeeInPaise ?? 0);
+    const discountNetFactor = computeOrderDiscountNetFactor({
+      totalPaise: moTotalPaise,
+      discountPaise: moDiscountPaise,
+      shippingPaise: moShippingPaise,
+    });
+    if (discountNetFactor < 1) {
+      this.logger.log(
+        `[return-refund-discount] return=${returnId} order=${mo?.orderNumber ?? mo?.id} ` +
+          `totalPaise=${moTotalPaise} discountPaise=${moDiscountPaise} shippingPaise=${moShippingPaise} ` +
+          `netFactor=${discountNetFactor.toFixed(6)} ` +
+          `(legacy no-snapshot path: gross refund scaled to net-paid)`,
+      );
+    }
+
     const perItemRefunds = await Promise.all(
       input.decisions.map(async (decision) => {
         const item = ret.items.find((i: any) => i.id === decision.returnItemId);
@@ -1993,14 +2039,16 @@ export class ReturnService {
 
         // Full (qty-derived) refund for this line before any partial-VALUE
         // override — the discount-aware credit-note total when a snapshot
-        // exists, else gross (qty × unitPrice). REJECTED / DAMAGED stay 0.
+        // exists, else gross (qty × unitPrice) scaled by the order discount
+        // net-factor so a coupon order refunds net-paid, not gross. REJECTED /
+        // DAMAGED stay 0.
         const fullRefundPaise =
           prorated !== null
             ? Number(prorated.totalRefundInPaise)
             : decision.qcOutcome === 'REJECTED' ||
                 decision.qcOutcome === 'DAMAGED'
               ? 0
-              : Math.round(grossRefund * 100);
+              : Math.round(grossRefund * 100 * discountNetFactor);
 
         // Partial-VALUE refund: the admin chose to give back a specific
         // gross (tax-inclusive) amount for this item instead of the whole
