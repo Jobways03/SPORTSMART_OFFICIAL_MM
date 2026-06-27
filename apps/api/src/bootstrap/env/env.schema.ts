@@ -618,13 +618,21 @@ export const envSchema = z.object({
   // stands up OpenSearch + runs POST /admin/search/reindex backfill.
   SEARCH_OPENSEARCH_ENABLED: z.string().default('false'),
 
-  // Return window in days. Customer can file a return up to this many
-  // days after sub-order delivery. **PROD MUST SET 14** — the previous
-  // hard-coded 2-minute value (`RETURN_WINDOW_MS = 2 * 60 * 1000` in
-  // orders.service.ts) was a dev/demo override to test the commission
-  // confirm path quickly without waiting two weeks. Local dev can keep
-  // 0.0014 (~2 min) by setting `RETURN_WINDOW_DAYS=0.0014`.
-  RETURN_WINDOW_DAYS: z.string().default('14'),
+  // Return window in days. Customer can file a return up to this many days
+  // after sub-order delivery. The default is ENV-AWARE (gated on NODE_ENV):
+  //   • production            → '7'  — the real customer-facing policy. Matches
+  //     the storefront's advertised "7-day easy returns". Production sets NO
+  //     RETURN_WINDOW_DAYS override, so THIS is prod's effective window.
+  //   • staging / dev / local → '0.0020833' (~3 min: 0.0020833 d * 86400000 ≈
+  //     180000 ms) so the commission-confirm / return path can be exercised
+  //     without waiting days. NODE_ENV gating means production can NEVER inherit
+  //     the short test window, even on a bad deploy.
+  // Override per-env by setting RETURN_WINDOW_DAYS explicitly (e.g. a tfvars
+  // api_extra_environment entry). To raise the test window, change the non-prod
+  // branch; to change the customer policy, change the production branch.
+  RETURN_WINDOW_DAYS: z.string().default(() =>
+    (process.env.NODE_ENV ?? '').toLowerCase() === 'production' ? '7' : '0.0020833',
+  ),
 
   // Phase B (P0.1, P0.5) — feature flag for the new allocation/
   // reservation pipeline at checkout. When OFF, the legacy
