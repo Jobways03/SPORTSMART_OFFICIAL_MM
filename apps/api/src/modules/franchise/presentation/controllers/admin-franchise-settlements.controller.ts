@@ -43,11 +43,16 @@ export class AdminFranchiseSettlementsController {
   @HttpCode(HttpStatus.CREATED)
   // Delegated settlements (2026-06-27) — franchise settlements are DECOUPLED from
   // the seller `settlements.*` perms (those were delegated to the type-scoped
-  // D2C/Retailer admins and removed from SUPER_ADMIN). Re-gated on
-  // `franchise.finance` (which SUPER_ADMIN still holds) + @Roles('SUPER_ADMIN'),
-  // so franchise settlements keep working, HQ-run. Per-franchise delegation to
-  // FRANCHISE_ADMIN is a separate, later feature.
-  @Roles('SUPER_ADMIN')
+  // D2C/Retailer admins). Gated on `franchise.finance`, which BOTH SUPER_ADMIN and
+  // FRANCHISE_ADMIN already hold (see permission-registry: FRANCHISE_ADMIN "owns
+  // the franchise finance/settlement surface"). The cycle lifecycle
+  // (create / approve / pay) is now DELEGATED to FRANCHISE_ADMIN — the HQ franchise
+  // team runs the franchise network's payouts, mirroring how D2C_ADMIN /
+  // RETAILER_ADMIN run their own seller settlements. `fail` stays SUPER_ADMIN-only.
+  // Money-out stays protected by step-up (below) — the franchise-admin portal's
+  // StepUpHandlerProvider drives the MFA modal — so this is delegation, not a
+  // weakening of the control.
+  @Roles('SUPER_ADMIN', 'FRANCHISE_ADMIN')
   @Permissions('franchise.finance')
   // Phase 26 — opens a new settlement cycle; mutates the ledger
   // grouping for the period.
@@ -245,10 +250,10 @@ export class AdminFranchiseSettlementsController {
 
   @Patch(':id/approve')
   @HttpCode(HttpStatus.OK)
-  @Roles('SUPER_ADMIN')
-  // Delegated settlements (2026-06-27) — decoupled from seller settlements.*;
-  // gated on franchise.finance (SUPER_ADMIN holds it) so franchise approve/fail
-  // keep working HQ-run after the seller-settlement delegation.
+  // Delegated settlements (2026-06-27) — create/approve/pay delegated to
+  // FRANCHISE_ADMIN (both it and SUPER_ADMIN hold franchise.finance). `fail`
+  // below stays SUPER_ADMIN-only.
+  @Roles('SUPER_ADMIN', 'FRANCHISE_ADMIN')
   @Permissions('franchise.finance')
   // Phase 26 — terminal state pin before pay; 1-min window because pay
   // typically follows immediately and the admin should re-prove freshness.
@@ -270,10 +275,10 @@ export class AdminFranchiseSettlementsController {
 
   @Patch(':id/fail')
   @HttpCode(HttpStatus.OK)
+  // Marking a settlement FAILED stays SUPER_ADMIN-only — an HQ override, mirroring
+  // the seller settlements mark-failed gate. create/approve/pay are delegated to
+  // FRANCHISE_ADMIN; fail is deliberately NOT. Still gated on franchise.finance.
   @Roles('SUPER_ADMIN')
-  // Delegated settlements (2026-06-27) — decoupled from seller settlements.*;
-  // gated on franchise.finance (SUPER_ADMIN holds it) so franchise approve/fail
-  // keep working HQ-run after the seller-settlement delegation.
   @Permissions('franchise.finance')
   @RequiresStepUp()
   async markSettlementFailed(
@@ -294,10 +299,10 @@ export class AdminFranchiseSettlementsController {
 
   @Patch(':id/pay')
   @HttpCode(HttpStatus.OK)
-  @Roles('SUPER_ADMIN')
-  // Delegated settlements (2026-06-27) — decoupled from seller settlements.markPaid;
-  // gated on franchise.finance (SUPER_ADMIN holds it) so franchise pay keeps
-  // working HQ-run after the seller-settlement delegation.
+  // Delegated settlements (2026-06-27) — pay (money-out) delegated to
+  // FRANCHISE_ADMIN (both it and SUPER_ADMIN hold franchise.finance). Step-up +
+  // throttle below remain the money-out guards.
+  @Roles('SUPER_ADMIN', 'FRANCHISE_ADMIN')
   @Permissions('franchise.finance')
   // Phase 26 — terminal money-out; tight 1-min window.
   @RequiresStepUp({ maxAgeMs: 60_000 })

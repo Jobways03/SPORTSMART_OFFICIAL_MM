@@ -672,6 +672,26 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
     customerStatusLabel(effectiveOrderStatus, order.paymentStatus);
   const displayStatusColor = orderStatusColor(effectiveOrderStatus, order.paymentStatus);
 
+  // Price Breakdown reconciliation (see the panel below). The tax engine's
+  // recorded base can be GROSS (post-supply discount → GST on full value, the
+  // discount reduces the total afterwards) or already NET (pre-supply →
+  // taxable = gross − discount). Rather than assume one model, derive the
+  // shortfall between the recorded Sub Total (+ shipping) and the authoritative
+  // amount paid: that shortfall IS the post-supply discount, and it is exactly
+  // zero for a pre-supply discount (where Sub Total already equals the total).
+  // This keeps the panel reconciled to `totalAmount` under either treatment.
+  const taxBreak = order.taxSummary;
+  const goodsSubtotalPaise = taxBreak
+    ? Number(taxBreak.taxableInPaise) + Number(taxBreak.totalTaxInPaise)
+    : 0;
+  const shippingPaise = order.shipping ? Number(order.shipping.feeInPaise) : 0;
+  const totalPaidPaise = Math.round(Number(order.totalAmount) * 100);
+  const discountGapPaise = Math.max(
+    0,
+    goodsSubtotalPaise + shippingPaise - totalPaidPaise,
+  );
+  const showPriceReconciliation = discountGapPaise > 0 || shippingPaise > 0;
+
   return (
     <StorefrontShell>
       <div style={{ maxWidth: 900, margin: '0 auto', padding: '32px 24px 60px' }}>
@@ -866,12 +886,64 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                   </dd>
                 </>
               )}
-              <dt style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', color: '#111827', fontWeight: 600 }}>
-                Sub Total
-              </dt>
-              <dd style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', textAlign: 'right', margin: 0, fontWeight: 600 }}>
-                ₹{((Number(order.taxSummary.taxableInPaise) + Number(order.taxSummary.totalTaxInPaise)) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </dd>
+              {showPriceReconciliation ? (
+                <>
+                  {/* Goods value at the recorded tax base (de-emphasised — the
+                      bold line is now the amount actually paid, below). */}
+                  <dt style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', color: '#6b7280' }}>
+                    Sub Total
+                  </dt>
+                  <dd style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', textAlign: 'right', margin: 0 }}>
+                    ₹{(goodsSubtotalPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </dd>
+
+                  {/* Discount = the shortfall to the amount paid. Only non-zero
+                      for a post-supply discount (GST stayed on the gross); a
+                      pre-supply discount already lowered the Sub Total above. */}
+                  {discountGapPaise > 0 && (
+                    <>
+                      <dt style={{ color: '#16a34a' }}>
+                        Discount{order.appliedDiscount?.code ? ` (${order.appliedDiscount.code})` : ''}
+                      </dt>
+                      <dd style={{ textAlign: 'right', margin: 0, color: '#16a34a' }}>
+                        −₹{(discountGapPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </dd>
+                    </>
+                  )}
+
+                  {/* Shipping is included in totalAmount, so it belongs here. */}
+                  {shippingPaise > 0 && (
+                    <>
+                      <dt style={{ color: '#6b7280' }}>
+                        Shipping{order.shipping?.optionName ? ` (${order.shipping.optionName})` : ''}
+                      </dt>
+                      <dd style={{ textAlign: 'right', margin: 0 }}>
+                        ₹{(shippingPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </dd>
+                    </>
+                  )}
+
+                  {/* Authoritative amount paid — the lines above reconcile to it
+                      (Sub Total − Discount + Shipping = Total Paid). */}
+                  <dt style={{ paddingTop: 8, borderTop: '1px solid #e5e7eb', color: '#111827', fontWeight: 700 }}>
+                    Total Paid
+                  </dt>
+                  <dd style={{ paddingTop: 8, borderTop: '1px solid #e5e7eb', textAlign: 'right', margin: 0, fontWeight: 700 }}>
+                    ₹{(totalPaidPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </dd>
+                </>
+              ) : (
+                <>
+                  {/* Nothing to reconcile (no post-supply discount, no shipping)
+                      — Sub Total already equals what was paid. */}
+                  <dt style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', color: '#111827', fontWeight: 600 }}>
+                    Sub Total
+                  </dt>
+                  <dd style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', textAlign: 'right', margin: 0, fontWeight: 600 }}>
+                    ₹{(goodsSubtotalPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </dd>
+                </>
+              )}
             </dl>
           </div>
         )}
