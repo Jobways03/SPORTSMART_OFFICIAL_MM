@@ -130,33 +130,33 @@ describe('pickDocumentType', () => {
 });
 
 describe('computeInvoiceRoundOff', () => {
+  // Policy (2026-06): no whole-rupee round-off — invoices carry the EXACT
+  // 2-decimal total. computeInvoiceRoundOff is now a pass-through: roundOff is
+  // always 0 and the rounded total equals the raw paise total verbatim, so the
+  // printed grand total matches the exact paise amount the customer is charged.
   it('exact rupee — no round-off', () => {
     const r = computeInvoiceRoundOff(118_00n);
     expect(r.roundOffInPaise).toBe(0n);
     expect(r.roundedAmountInPaise).toBe(118_00n);
   });
-  it('rounds up (≥50 paise)', () => {
-    // ₹1234.67 → ₹1235.00
+  it('preserves paise — never rounds up', () => {
     const r = computeInvoiceRoundOff(1234_67n);
-    expect(r.roundedAmountInPaise).toBe(1235_00n);
-    expect(r.roundOffInPaise).toBe(33n); // customer pays ₹0.33 more
+    expect(r.roundedAmountInPaise).toBe(1234_67n);
+    expect(r.roundOffInPaise).toBe(0n);
   });
-  it('rounds down (<50 paise)', () => {
-    // ₹1234.34 → ₹1234.00
+  it('preserves paise — never rounds down', () => {
     const r = computeInvoiceRoundOff(1234_34n);
-    expect(r.roundedAmountInPaise).toBe(1234_00n);
-    expect(r.roundOffInPaise).toBe(-34n); // customer pays ₹0.34 less
+    expect(r.roundedAmountInPaise).toBe(1234_34n);
+    expect(r.roundOffInPaise).toBe(0n);
   });
-  it('exactly 50 paise rounds up (half-away-from-zero)', () => {
-    // ₹100.50 → ₹101.00
+  it('preserves exactly-50-paise totals', () => {
     const r = computeInvoiceRoundOff(100_50n);
-    expect(r.roundedAmountInPaise).toBe(101_00n);
-    expect(r.roundOffInPaise).toBe(50n);
+    expect(r.roundedAmountInPaise).toBe(100_50n);
+    expect(r.roundOffInPaise).toBe(0n);
   });
-  it('handles negative (credit-note total)', () => {
-    // -₹1234.34 (credit note negative) → -₹1234.00
+  it('passes negative (credit-note) totals through unchanged', () => {
     const r = computeInvoiceRoundOff(-1234_34n);
-    expect(r.roundedAmountInPaise).toBe(-1234_00n);
-    expect(r.roundOffInPaise).toBe(34n); // makes the absolute value smaller
+    expect(r.roundedAmountInPaise).toBe(-1234_34n);
+    expect(r.roundOffInPaise).toBe(0n);
   });
 });

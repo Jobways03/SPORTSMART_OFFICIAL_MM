@@ -321,7 +321,7 @@ export function renderInvoiceHtml(input: TemplateInput): string {
     <tr><td class="k">IGST:</td><td class="v">${paiseToRupees(d.igstAmountInPaise)}</td></tr>
     <tr><td class="k">Cess:</td><td class="v">${paiseToRupees(d.cessAmountInPaise)}</td></tr>
     <tr><td class="k">Total GST:</td><td class="v">${paiseToRupees(d.totalTaxAmountInPaise)}</td></tr>
-    <tr><td class="k">Round Off:</td><td class="v">${paiseToRupees(d.roundOffAmountInPaise)}</td></tr>
+    ${Number(d.roundOffAmountInPaise) !== 0 ? `<tr><td class="k">Round Off:</td><td class="v">${paiseToRupees(d.roundOffAmountInPaise)}</td></tr>` : ''}
     <tr class="grand"><td class="k">Grand Total:</td><td class="v">${paiseToRupees(d.documentTotalInPaise)}</td></tr>
   </table>
   ${d.amountInWords ? `<div class="words"><em>Amount in words:</em> ${e(d.amountInWords)}</div>` : ''}
@@ -1197,7 +1197,7 @@ function baseEnvelope(opts: EnvelopeOptions): string {
       <tr><td class="label">Total Tax:</td><td class="text-right">${paiseToRupees(d.totalTaxAmountInPaise)}</td></tr>`
         : ''
     }
-    <tr><td class="label">Round Off:</td><td class="text-right">${paiseToRupees(d.roundOffAmountInPaise)}</td></tr>
+    ${Number(d.roundOffAmountInPaise) !== 0 ? `<tr><td class="label">Round Off:</td><td class="text-right">${paiseToRupees(d.roundOffAmountInPaise)}</td></tr>` : ''}
     <tr class="grand"><td class="label">Grand Total:</td><td class="text-right">${paiseToRupees(d.documentTotalInPaise)}</td></tr>
     ${
       d.amountInWords
