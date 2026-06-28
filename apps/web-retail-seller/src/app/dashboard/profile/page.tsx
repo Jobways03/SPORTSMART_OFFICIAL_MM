@@ -609,7 +609,8 @@ export default function SellerProfilePage() {
     const newErrors: FormErrors = {};
     const readonly =
       (profile ? isReadOnly(profile.status) : false) ||
-      profile?.logisticsLocked === true;
+      profile?.logisticsLocked === true ||
+      profile?.profileLocked === true;
     if (readonly) return true;
 
     const contentRestricted = profile ? isContentRestricted(profile.status) : false;
@@ -687,7 +688,7 @@ export default function SellerProfilePage() {
   const handleSave = async (e: FormEvent) => {
     e.preventDefault();
     if (!authReady || !profile || !initialFormData) return;
-    if (isReadOnly(profile.status)) return;
+    if (isReadOnly(profile.status) || profile.profileLocked === true) return;
 
     if (!validateAll()) {
       const firstError = document.querySelector('[aria-invalid="true"]') as HTMLElement;
@@ -876,8 +877,13 @@ export default function SellerProfilePage() {
   // fields are frozen (they feed the courier warehouse). Lock the whole form
   // and show a banner; the seller contacts their admin to change anything.
   const logisticsLocked = profile?.logisticsLocked === true;
+  // Profile approval lock — once an admin approves the seller, the whole
+  // profile page is read-only; changes go through the admin.
+  const profileApprovalLocked = profile?.profileLocked === true;
   const readonly =
-    (profile ? isReadOnly(profile.status) : false) || logisticsLocked;
+    (profile ? isReadOnly(profile.status) : false) ||
+    logisticsLocked ||
+    profileApprovalLocked;
   const contentRestricted = profile ? isContentRestricted(profile.status) : false;
   const mediaRestricted = profile ? isMediaRestricted(profile.status) : false;
 
@@ -1011,6 +1017,22 @@ export default function SellerProfilePage() {
           Your account is under review. You can still complete your profile.
         </div>
       )}
+      {/* Profile approval lock — set once an admin approves the profile. */}
+      {profileApprovalLocked && (
+        <div className="status-banner banner-info">
+          Your profile is approved and locked. To change any details, please
+          contact your admin — they make the change for you.
+        </div>
+      )}
+      {/* Sent back for changes — surface the admin's reason so the seller knows
+          what to fix before resubmitting for approval. */}
+      {profile.verificationStatus === 'REJECTED' &&
+        profile.kycRejectionReason && (
+          <div className="status-banner banner-warning">
+            Your profile was sent back by the admin: {profile.kycRejectionReason}.
+            Please update your details and resubmit for approval.
+          </div>
+        )}
       {logisticsLocked && (
         <div className="status-banner banner-warning">
           Your business name, contact, and pickup address are locked because

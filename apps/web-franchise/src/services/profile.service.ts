@@ -37,6 +37,10 @@ export interface FranchiseProfile {
   /** True once registered with a logistics partner — pickup/warehouse
    *  fields are frozen; the portal locks the form + shows a banner. */
   logisticsLocked?: boolean;
+  // Profile approval lock (2026-06): true once an admin marks the franchise
+  // VERIFIED — the profile page is read-only and changes go through the admin.
+  profileLocked?: boolean;
+  verificationRejectionReason?: string | null;
   /** True once payout bank details are on file — hides the "Add bank
    *  details" banner for approved franchises. */
   hasBankDetails?: boolean;

@@ -602,14 +602,17 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
             type="button"
             className="btn btn-primary"
             onClick={async () => {
-              // Locked once registered with a logistics partner — the
-              // franchise can't edit here; pop a modal pointing them to
-              // support so the franchise admin makes the change.
-              if (profile?.logisticsLocked) {
+              // Locked — either registered with a logistics partner, or the
+              // admin has approved the profile (approval lock). Either way the
+              // franchise can't edit here; pop a modal pointing them to support
+              // so the franchise admin makes the change.
+              if (profile?.logisticsLocked || profile?.profileLocked) {
                 const ok = await confirmDialog({
                   title: 'Profile locked',
                   message:
-                    "This profile is registered with a logistics partner, so these details can't be edited here. Please ask your franchise admin to update them. Open a support request now?",
+                    profile?.profileLocked && !profile?.logisticsLocked
+                      ? 'Your profile is approved and locked. To change any details, please ask your franchise admin — they make the change for you. Open a support request now?'
+                      : "This profile is registered with a logistics partner, so these details can't be edited here. Please ask your franchise admin to update them. Open a support request now?",
                   confirmText: 'Talk to Support',
                 });
                 if (ok) router.push('/dashboard/support/new');
@@ -640,6 +643,23 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
           franchise admin to change them.
         </div>
       )}
+      {/* Profile approval lock — set once an admin marks the franchise VERIFIED. */}
+      {profile?.profileLocked && (
+        <div className="alert alert-info" role="status" style={{ marginBottom: 12 }}>
+          Your profile is approved and locked. To change any details, please
+          contact your franchise admin — they make the change for you.
+        </div>
+      )}
+      {/* Sent back for changes — surface the admin's reason so the franchise
+          knows what to fix before resubmitting for approval. */}
+      {profile?.verificationStatus === 'REJECTED' &&
+        profile?.verificationRejectionReason && (
+          <div className="alert alert-warning" role="alert" style={{ marginBottom: 12 }}>
+            Your profile was sent back by the admin:{' '}
+            {profile.verificationRejectionReason}. Please update your details and
+            resubmit for approval.
+          </div>
+        )}
 
       {/* Profile Completion */}
       <div className="progress-card">
@@ -668,7 +688,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                   type="text"
                   value={form.ownerName}
                   onChange={(e) => handleChange('ownerName', e.target.value)}
-                  disabled={isSaving || profile?.logisticsLocked}
+                  disabled={isSaving || profile?.logisticsLocked || profile?.profileLocked}
                 />
               ) : (
                 <div className="value">{profile.ownerName}</div>
@@ -683,7 +703,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                   type="text"
                   value={form.businessName}
                   onChange={(e) => handleChange('businessName', e.target.value)}
-                  disabled={isSaving || profile?.logisticsLocked}
+                  disabled={isSaving || profile?.logisticsLocked || profile?.profileLocked}
                 />
               ) : (
                 <div className="value">{profile.businessName}</div>
@@ -726,7 +746,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                 id="address"
                 value={form.address}
                 onChange={(e) => handleChange('address', e.target.value)}
-                disabled={isSaving || profile?.logisticsLocked}
+                disabled={isSaving || profile?.logisticsLocked || profile?.profileLocked}
                 rows={3}
               />
             ) : (
@@ -741,7 +761,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
               idPrefix="store"
               forceLocality
               showCountry
-              disabled={isSaving || profile?.logisticsLocked}
+              disabled={isSaving || profile?.logisticsLocked || profile?.profileLocked}
               value={{
                 pincode: form.pincode,
                 city: form.city,
@@ -815,7 +835,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                     maxLength={15}
                     value={form.gstNumber}
                     onChange={(e) => handleChange('gstNumber', e.target.value)}
-                    disabled={isSaving || profile?.logisticsLocked}
+                    disabled={isSaving || profile?.logisticsLocked || profile?.profileLocked}
                     placeholder="e.g. 27AAAPA1234A1Z5"
                     autoCapitalize="characters"
                     spellCheck={false}
@@ -848,7 +868,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                     maxLength={10}
                     value={form.panNumber}
                     onChange={(e) => handleChange('panNumber', e.target.value)}
-                    disabled={isSaving || profile?.logisticsLocked}
+                    disabled={isSaving || profile?.logisticsLocked || profile?.profileLocked}
                     placeholder="e.g. ABCDE1234F"
                     autoCapitalize="characters"
                     spellCheck={false}
@@ -915,7 +935,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                 margin: '4px 0 16px',
                 fontSize: 14,
                 color: '#374151',
-                cursor: profile?.logisticsLocked ? 'not-allowed' : 'pointer',
+                cursor: (profile?.logisticsLocked || profile?.profileLocked) ? 'not-allowed' : 'pointer',
                 userSelect: 'none',
               }}
             >
@@ -924,7 +944,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                 id="warehouseSameAsAddress"
                 checked={warehouseSameAsAddress}
                 onChange={(e) => setWarehouseSameAsAddress(e.target.checked)}
-                disabled={isSaving || profile?.logisticsLocked}
+                disabled={isSaving || profile?.logisticsLocked || profile?.profileLocked}
                 style={{ width: 16, height: 16 }}
               />
               Same as Franchise Address
@@ -938,7 +958,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                   id="warehouseAddress"
                   value={form.warehouseAddress}
                   onChange={(e) => handleChange('warehouseAddress', e.target.value)}
-                  disabled={isSaving || profile?.logisticsLocked || warehouseSameAsAddress}
+                  disabled={isSaving || profile?.logisticsLocked || profile?.profileLocked || warehouseSameAsAddress}
                 />
               ) : (
                 <div className={`value${profile.warehouseAddress ? '' : ' muted'}`}>
@@ -954,7 +974,7 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
                   forceLocality
                   showCountry
                   pincodeLabel="Warehouse Pincode"
-                  disabled={isSaving || profile?.logisticsLocked || warehouseSameAsAddress}
+                  disabled={isSaving || profile?.logisticsLocked || profile?.profileLocked || warehouseSameAsAddress}
                   value={{
                     pincode: form.warehousePincode,
                     city: form.warehouseCity,
@@ -1107,11 +1127,11 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
               type="button"
               className="btn btn-secondary"
               onClick={handleCancel}
-              disabled={isSaving || profile?.logisticsLocked}
+              disabled={isSaving || profile?.logisticsLocked || profile?.profileLocked}
             >
               Cancel
             </button>
-            <button type="submit" className="btn btn-primary" disabled={isSaving || profile?.logisticsLocked}>
+            <button type="submit" className="btn btn-primary" disabled={isSaving || profile?.logisticsLocked || profile?.profileLocked}>
               {isSaving ? 'Saving...' : 'Save Changes'}
             </button>
           </div>

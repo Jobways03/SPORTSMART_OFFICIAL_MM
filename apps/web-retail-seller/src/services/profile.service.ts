@@ -63,6 +63,9 @@ export interface SellerProfileData {
   // fields are frozen (the data feeds the courier warehouse), so the
   // portal locks the form and shows a "contact your admin" banner.
   logisticsLocked?: boolean;
+  // Profile approval lock (2026-06): true once an admin approves the seller —
+  // the profile page is read-only and all changes go through the admin.
+  profileLocked?: boolean;
   // Phase 19 (2026-05-20) — first-listing wizard flags. Returned by
   // the API so the wizard can show real "done / to-do" state for the
   // three post-approval steps.
