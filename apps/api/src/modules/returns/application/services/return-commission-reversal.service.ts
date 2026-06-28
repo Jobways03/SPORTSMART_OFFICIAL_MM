@@ -278,11 +278,26 @@ export class ReturnCommissionReversalService {
         // Audit row: one per reversal event so the history survives even if
         // the commission record itself is later adjusted. The parent record's
         // `refundedAdminEarning` is a running sum of these rows.
-        const itemRefund = new Prisma.Decimal(orderItem.unitPrice)
-          .mul(approvedQty)
-          .mul(valueFraction)
-          .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
-          .toNumber();
+        //
+        // `totalRefundAmount` here records the CUSTOMER refund for this item
+        // for the reversal timeline/history (reporting only — no payout or
+        // margin math reads it). Prefer the net, discount-aware per-item refund
+        // threaded in by the QC step (`netRefundAmount`: snapshot proration /
+        // order net-factor + partial-VALUE fraction) so the audit row mirrors
+        // what the customer actually got back (matching Return.refundAmount).
+        // Fall back to the gross qty × unitPrice × fraction for callers that
+        // don't supply a net (e.g. legacy/direct invocations).
+        const threadedNet = (item as any)?.netRefundAmount;
+        const itemRefund =
+          typeof threadedNet === 'number' && Number.isFinite(threadedNet) && threadedNet >= 0
+            ? new Prisma.Decimal(threadedNet)
+                .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+                .toNumber()
+            : new Prisma.Decimal(orderItem.unitPrice)
+                .mul(approvedQty)
+                .mul(valueFraction)
+                .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+                .toNumber();
         await db.commissionReversalRecord.create({
           data: {
             commissionRecordId: commissionRecord.id,

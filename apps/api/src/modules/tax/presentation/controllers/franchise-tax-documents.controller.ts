@@ -21,6 +21,7 @@ import { FranchiseAuthGuard } from '../../../../core/guards';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { TaxDocumentDownloadService } from '../../application/services/tax-document-download.service';
 import { mapDownloadError } from './customer-tax-documents.controller';
+import { isPdfDownloadable } from '../../domain/tax-document-state-machine';
 
 @ApiTags('Franchise / Tax Documents')
 @Controller('franchise/tax-documents')
@@ -91,6 +92,7 @@ export class FranchiseTaxDocumentsController {
           financialYear: true,
           generatedAt: true,
           status: true,
+          pdfStoragePath: true,
           einvoiceStatus: true,
           irn: true,
           documentTotalInPaise: true,
@@ -117,6 +119,9 @@ export class FranchiseTaxDocumentsController {
           financialYear: d.financialYear,
           generatedAt: d.generatedAt,
           status: d.status,
+          // Downloadable even after a credit note reverses it (the rendered
+          // PDF survives) — UI gates on this, not status === 'PDF_GENERATED'.
+          downloadable: isPdfDownloadable(d.status, d.pdfStoragePath),
           einvoiceStatus: d.einvoiceStatus,
           irn: d.irn,
           documentTotalInPaise: d.documentTotalInPaise?.toString() ?? '0',

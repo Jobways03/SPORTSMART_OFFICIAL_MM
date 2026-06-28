@@ -10,6 +10,7 @@ export interface SellerTaxDocument {
   financialYear: string;
   generatedAt: string | null;
   status: string;
+  downloadable?: boolean;
   einvoiceStatus: string;
   irn: string | null;
   documentTotalInPaise: string;

@@ -34,6 +34,7 @@ interface TaxDocItem {
   financialYear: string;
   generatedAt: string;
   status: string;
+  downloadable?: boolean;
   einvoiceStatus: string;
   irn: string | null;
   documentTotalInPaise: string; // BigInt serialised
@@ -277,11 +278,11 @@ export default function SellerTaxInvoicesPage() {
                       type="button"
                       onClick={() => handleDownload(doc)}
                       disabled={
-                        downloadingId === doc.id || doc.status !== 'PDF_GENERATED'
+                        downloadingId === doc.id || !(doc.downloadable ?? doc.status === 'PDF_GENERATED')
                       }
                       className="tax-invoices__download"
                       title={
-                        doc.status !== 'PDF_GENERATED'
+                        !(doc.downloadable ?? doc.status === 'PDF_GENERATED')
                           ? 'PDF still being generated — try again in a minute'
                           : 'Download invoice'
                       }

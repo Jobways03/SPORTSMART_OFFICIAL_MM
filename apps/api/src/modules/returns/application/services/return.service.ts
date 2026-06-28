@@ -2270,6 +2270,11 @@ export class ReturnService {
                 // scales the seller chargeback by this so a partial refund
                 // only claws back a proportional slice of the margin.
                 refundValueFraction: decision.refundValueFraction ?? 1,
+                // Net (discount-aware) per-item refund — threaded so the
+                // commission-reversal AUDIT row records the actual customer
+                // refund (matching Return.refundAmount) instead of the gross
+                // qty × unitPrice. Does not affect the margin clawback math.
+                netRefundAmount: decision.refundAmount,
               }
             : it;
         }),
@@ -2390,6 +2395,11 @@ export class ReturnService {
                 // scales the seller chargeback by this so a partial refund
                 // only claws back a proportional slice of the margin.
                 refundValueFraction: decision.refundValueFraction ?? 1,
+                // Net (discount-aware) per-item refund — threaded so the
+                // commission-reversal AUDIT row records the actual customer
+                // refund (matching Return.refundAmount) instead of the gross
+                // qty × unitPrice. Does not affect the margin clawback math.
+                netRefundAmount: decision.refundAmount,
               }
             : it;
         }),

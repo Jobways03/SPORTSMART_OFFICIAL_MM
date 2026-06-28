@@ -132,3 +132,35 @@ export function isIssuedStatus(status: TaxDocumentStatus): boolean {
     status === 'SUPERSEDED'
   );
 }
+
+/**
+ * Statuses in which the document's PDF has been rendered AND the document is
+ * still a legally-issued, downloadable artifact.
+ *
+ * Crucially this includes PARTIALLY_REVERSED / FULLY_REVERSED: issuing a credit
+ * note against a tax invoice does NOT void the invoice — the original is a
+ * legal document that must remain downloadable alongside its credit note (the
+ * CN offsets it; both are kept for GST records). Before this set existed,
+ * the download gate accepted ONLY 'PDF_GENERATED', so the moment a credit note
+ * flipped the invoice to FULLY_REVERSED its already-rendered PDF became
+ * un-downloadable — that's the "Pending" / can-only-download-one-PDF bug.
+ *
+ * A non-null `pdfStoragePath` is STILL required at the call site: a document
+ * can reach PARTIALLY/FULLY_REVERSED from PDF_PENDING/PDF_FAILED without ever
+ * rendering, in which case there is no file to serve. Use
+ * `isPdfDownloadable(status, pdfStoragePath)` for the combined check.
+ */
+export const PDF_RENDERED_STATUSES: readonly TaxDocumentStatus[] = [
+  'PDF_GENERATED',
+  'PARTIALLY_REVERSED',
+  'FULLY_REVERSED',
+];
+
+/** True when the document has a rendered PDF that may be downloaded — both the
+ *  status is one that retains a rendered PDF AND a storage path is present. */
+export function isPdfDownloadable(
+  status: TaxDocumentStatus,
+  pdfStoragePath: string | null | undefined,
+): boolean {
+  return !!pdfStoragePath && PDF_RENDERED_STATUSES.includes(status);
+}

@@ -5,6 +5,7 @@ import {
   InvalidTaxDocumentTransitionError,
   isTerminalStatus,
   isIssuedStatus,
+  isPdfDownloadable,
   ALLOWED_TRANSITIONS,
 } from '../../src/modules/tax/domain/tax-document-state-machine';
 import type { TaxDocumentStatus } from '@prisma/client';
@@ -157,6 +158,34 @@ describe('isIssuedStatus', () => {
   it('DRAFT and VOIDED_DRAFT are not issued', () => {
     expect(isIssuedStatus('DRAFT')).toBe(false);
     expect(isIssuedStatus('VOIDED_DRAFT')).toBe(false);
+  });
+});
+
+describe('isPdfDownloadable — a credit note must not hide the original invoice', () => {
+  const KEY = 'tax-pdfs/2026/SM-INV-000006.pdf';
+
+  it('a rendered tax invoice is downloadable', () => {
+    expect(isPdfDownloadable('PDF_GENERATED', KEY)).toBe(true);
+  });
+
+  it('stays downloadable after a credit note reverses it (the bug)', () => {
+    // Issuing a credit note flips the invoice to PARTIALLY/FULLY_REVERSED but
+    // keeps its rendered PDF — both documents must remain downloadable.
+    expect(isPdfDownloadable('PARTIALLY_REVERSED', KEY)).toBe(true);
+    expect(isPdfDownloadable('FULLY_REVERSED', KEY)).toBe(true);
+  });
+
+  it('is NOT downloadable without a rendered PDF, even in a reversed status', () => {
+    // Reached PARTIALLY/FULLY_REVERSED from PDF_PENDING/PDF_FAILED → no file.
+    expect(isPdfDownloadable('FULLY_REVERSED', null)).toBe(false);
+    expect(isPdfDownloadable('PARTIALLY_REVERSED', undefined)).toBe(false);
+    expect(isPdfDownloadable('PDF_GENERATED', null)).toBe(false);
+  });
+
+  it('is NOT downloadable for pre-render or non-issued statuses', () => {
+    for (const s of ['DRAFT', 'GENERATED', 'PDF_PENDING', 'PDF_FAILED', 'VOIDED_DRAFT', 'SUPERSEDED'] as TaxDocumentStatus[]) {
+      expect(isPdfDownloadable(s, KEY)).toBe(false);
+    }
   });
 });
 

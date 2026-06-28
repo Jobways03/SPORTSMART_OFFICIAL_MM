@@ -24,6 +24,7 @@ interface InvoiceItem {
   financialYear: string;
   generatedAt: string;
   status: string;
+  downloadable?: boolean;
   einvoiceStatus: string;
   documentTotalInPaise: string;
 }
@@ -167,18 +168,18 @@ export default function CustomerInvoicesPage() {
                   type="button"
                   onClick={() => handleDownload(doc)}
                   disabled={
-                    downloadingId === doc.id || doc.status !== 'PDF_GENERATED'
+                    downloadingId === doc.id || !(doc.downloadable ?? doc.status === 'PDF_GENERATED')
                   }
                   className="invoices__download"
                   title={
-                    doc.status !== 'PDF_GENERATED'
+                    !(doc.downloadable ?? doc.status === 'PDF_GENERATED')
                       ? 'PDF is still being generated — check back shortly'
                       : 'Download invoice'
                   }
                 >
                   {downloadingId === doc.id
                     ? '…'
-                    : doc.status !== 'PDF_GENERATED'
+                    : !(doc.downloadable ?? doc.status === 'PDF_GENERATED')
                       ? 'Preparing'
                       : 'Download invoice'}
                 </button>

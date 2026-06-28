@@ -41,6 +41,7 @@ import {
 } from '../../infrastructure/pdf/tax-pdf-storage.provider';
 import { HtmlToPdfService } from '../../infrastructure/pdf/html-to-pdf.service';
 import { TaxModeService } from './tax-mode.service';
+import { isPdfDownloadable } from '../../domain/tax-document-state-machine';
 
 export class PdfDocumentNotReadyError extends Error {
   constructor(
@@ -261,12 +262,17 @@ export class TaxDocumentPdfService {
       },
     });
     if (!doc) throw new PdfDocumentNotFoundError(args.documentId);
-    if (doc.status !== 'PDF_GENERATED' || !doc.pdfStoragePath) {
+    // Downloadable iff a PDF was rendered AND the status still retains it.
+    // This deliberately includes PARTIALLY_REVERSED / FULLY_REVERSED: a credit
+    // note does not void the original tax invoice — both stay downloadable.
+    if (!isPdfDownloadable(doc.status, doc.pdfStoragePath)) {
       throw new PdfDocumentNotReadyError(doc.id, doc.status);
     }
+    // isPdfDownloadable guarantees a non-null pdfStoragePath here.
+    const storagePath = doc.pdfStoragePath as string;
 
     const url = await this.storage.createSignedUrl({
-      storagePath: doc.pdfStoragePath,
+      storagePath,
       expiresInSeconds: args.expiresInSeconds,
     });
 

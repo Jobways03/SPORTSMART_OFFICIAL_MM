@@ -34,6 +34,7 @@ interface TaxDocItem {
   financialYear: string;
   generatedAt: string;
   status: string;
+  downloadable?: boolean;
   einvoiceStatus: string;
   irn: string | null;
   documentTotalInPaise: string;
@@ -262,11 +263,11 @@ export default function FranchiseTaxInvoicesPage() {
                       <button
                         type="button"
                         onClick={() => handleDownload(doc)}
-                        disabled={downloadingId === doc.id || doc.status !== 'PDF_GENERATED'}
-                        title={doc.status !== 'PDF_GENERATED'
+                        disabled={downloadingId === doc.id || !(doc.downloadable ?? doc.status === 'PDF_GENERATED')}
+                        title={!(doc.downloadable ?? doc.status === 'PDF_GENERATED')
                           ? 'PDF still being generated — try again in a minute'
                           : 'Download invoice'}
-                        style={{ padding: '6px 12px', fontSize: 12, fontWeight: 600, border: '1px solid #2563eb', background: doc.status === 'PDF_GENERATED' ? '#2563eb' : '#9ca3af', color: '#fff', borderRadius: 4, cursor: doc.status === 'PDF_GENERATED' && downloadingId !== doc.id ? 'pointer' : 'not-allowed' }}
+                        style={{ padding: '6px 12px', fontSize: 12, fontWeight: 600, border: '1px solid #2563eb', background: (doc.downloadable ?? doc.status === 'PDF_GENERATED') ? '#2563eb' : '#9ca3af', color: '#fff', borderRadius: 4, cursor: (doc.downloadable ?? doc.status === 'PDF_GENERATED') && downloadingId !== doc.id ? 'pointer' : 'not-allowed' }}
                       >
                         {downloadingId === doc.id ? '…' : 'Download'}
                       </button>

@@ -86,7 +86,7 @@ export function SellerInvoiceCard({ orderId, subOrderId }: { orderId?: string; s
         </thead>
         <tbody>
           {docs.map((d) => {
-            const ready = d.status === 'PDF_GENERATED';
+            const ready = d.downloadable ?? d.status === 'PDF_GENERATED';
             return (
               <tr key={d.id} style={{ borderTop: '1px solid #f3f4f6' }}>
                 <td style={{ ...td, fontFamily: 'monospace', fontSize: 12 }}>{d.documentNumber}</td>

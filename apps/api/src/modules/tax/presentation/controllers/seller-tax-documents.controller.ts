@@ -17,6 +17,7 @@ import { SellerAuthGuard } from '../../../../core/guards';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import { TaxDocumentDownloadService } from '../../application/services/tax-document-download.service';
 import { mapDownloadError } from './customer-tax-documents.controller';
+import { isPdfDownloadable } from '../../domain/tax-document-state-machine';
 
 @ApiTags('Seller / Tax Documents')
 @Controller('seller/tax-documents')
@@ -58,6 +59,7 @@ export class SellerTaxDocumentsController {
           financialYear: true,
           generatedAt: true,
           status: true,
+          pdfStoragePath: true,
           einvoiceStatus: true,
           irn: true,
           documentTotalInPaise: true,
@@ -84,6 +86,11 @@ export class SellerTaxDocumentsController {
           financialYear: d.financialYear,
           generatedAt: d.generatedAt,
           status: d.status,
+          // A rendered PDF stays downloadable after a credit note reverses the
+          // invoice (PARTIALLY/FULLY_REVERSED) — the UI gates on this, not on
+          // status === 'PDF_GENERATED', so both invoice and credit note can be
+          // downloaded.
+          downloadable: isPdfDownloadable(d.status, d.pdfStoragePath),
           einvoiceStatus: d.einvoiceStatus,
           irn: d.irn,
           documentTotalInPaise: d.documentTotalInPaise?.toString() ?? '0',

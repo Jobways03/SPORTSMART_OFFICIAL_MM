@@ -44,6 +44,7 @@ import {
   TaxDocumentPdfService,
   PdfDocumentNotFoundError,
 } from './tax-document-pdf.service';
+import { isPdfDownloadable } from '../../domain/tax-document-state-machine';
 
 export class TaxDocumentDownloadDeniedError extends Error {
   constructor(
@@ -110,6 +111,7 @@ export class TaxDocumentDownloadService {
         id: true,
         documentNumber: true,
         status: true,
+        pdfStoragePath: true,
         customerId: true,
         sellerId: true,
         // Franchise-fulfilled invoices are written with sellerId=null;
@@ -155,8 +157,11 @@ export class TaxDocumentDownloadService {
     }
 
     // 3. PDF readiness — the PDF service does its own check, but we
-    //    surface a richer audit outcome here.
-    if (doc.status !== 'PDF_GENERATED') {
+    //    surface a richer audit outcome here. A rendered PDF stays
+    //    downloadable after a credit note reverses the invoice
+    //    (PARTIALLY_REVERSED / FULLY_REVERSED), so gate on
+    //    isPdfDownloadable rather than PDF_GENERATED alone.
+    if (!isPdfDownloadable(doc.status, doc.pdfStoragePath)) {
       await this.writeAudit({
         documentId: doc.id,
         actor: args.actor,

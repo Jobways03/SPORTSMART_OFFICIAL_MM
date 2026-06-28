@@ -28,6 +28,7 @@ import {
   PdfDocumentNotFoundError,
   TaxDocumentPdfService,
 } from '../../application/services/tax-document-pdf.service';
+import { isPdfDownloadable } from '../../domain/tax-document-state-machine';
 
 @ApiTags('Customer / Tax Documents')
 @Controller('customer/tax-documents')
@@ -136,6 +137,7 @@ export class CustomerTaxDocumentsController {
           financialYear: true,
           generatedAt: true,
           status: true,
+          pdfStoragePath: true,
           einvoiceStatus: true,
           documentTotalInPaise: true,
         },
@@ -194,6 +196,10 @@ function toListShape(d: any) {
     financialYear: d.financialYear,
     generatedAt: d.generatedAt,
     status: d.status,
+    // A rendered PDF stays downloadable after a credit note reverses the
+    // invoice — the UI gates on this, not status === 'PDF_GENERATED', so the
+    // customer can download both the tax invoice and its credit note.
+    downloadable: isPdfDownloadable(d.status, d.pdfStoragePath),
     einvoiceStatus: d.einvoiceStatus,
     // Always serialise BigInt to string at the HTTP boundary.
     documentTotalInPaise: d.documentTotalInPaise?.toString() ?? '0',
