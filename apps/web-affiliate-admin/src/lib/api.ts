@@ -109,10 +109,52 @@ async function rawFetch(path: string, init: RequestInit) {
   return { res, body };
 }
 
+// Generate an idempotency key. Prefers crypto.randomUUID; falls back to a
+// timestamp+random string so it never throws. Always 8–128 printable-ASCII
+// chars (the backend's X-Idempotency-Key validation rule).
+function genIdempotencyKey(): string {
+  try {
+    const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+    if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  } catch {
+    /* fall through to the non-crypto fallback */
+  }
+  return `idem-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
+}
+
+// Auto-attach an X-Idempotency-Key on mutating requests that don't already
+// carry one. Backend endpoints decorated with @Idempotent REJECT mutations
+// lacking the header (e.g. PATCH /admin/affiliates/:id/approve). This app does
+// NOT use the shared `createApiClient` (which auto-attaches), so we mirror that
+// behavior here. Injected ONCE — before the step-up replay in apiFetch — so the
+// replay reuses the SAME key (that's what makes it idempotent). Explicit keys
+// passed by the caller still win; non-idempotent routes ignore it.
+function ensureIdempotencyKey(init: RequestInit): RequestInit {
+  const method = (init.method ?? 'GET').toUpperCase();
+  if (
+    method !== 'POST' &&
+    method !== 'PUT' &&
+    method !== 'PATCH' &&
+    method !== 'DELETE'
+  ) {
+    return init;
+  }
+  const existing = init.headers as Record<string, string> | undefined;
+  const hasKey =
+    !!existing &&
+    Object.keys(existing).some((k) => k.toLowerCase() === 'x-idempotency-key');
+  if (hasKey) return init;
+  return {
+    ...init,
+    headers: { ...(existing ?? {}), 'X-Idempotency-Key': genIdempotencyKey() },
+  };
+}
+
 export async function apiFetch<T = any>(
   path: string,
   init: RequestInit = {},
 ): Promise<T> {
+  init = ensureIdempotencyKey(init);
   let { res, body } = await rawFetch(path, init);
 
   if (res.status === 401) {

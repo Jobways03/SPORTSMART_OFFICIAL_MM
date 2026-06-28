@@ -875,6 +875,14 @@ export default function OrderDetailPage() {
     try {
       await apiClient(`/admin/orders/${id}/verify`, {
         method: 'POST',
+        // Backend @Idempotent endpoint REQUIRES X-Idempotency-Key. Send a
+        // stable per-order key (matching the reject/mark-paid/reassign
+        // siblings) so a double-tap returns the original response instead of
+        // verifying twice — and so verify works independently of the shared
+        // apiClient auto-attach.
+        headers: {
+          'X-Idempotency-Key': `verify-${id}`,
+        },
         body: JSON.stringify({ remarks: verifyRemarks || undefined }),
         signal: abort.signal,
       });

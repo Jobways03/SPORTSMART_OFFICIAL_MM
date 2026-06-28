@@ -148,11 +148,24 @@ export const adminPayoutsService = {
     const token = sessionStorage.getItem('adminAccessToken');
     const form = new FormData();
     form.append('file', file);
+    // This endpoint is @Idempotent on the backend, so it REQUIRES an
+    // X-Idempotency-Key. We bypass apiClient (which would auto-attach one)
+    // because this is a multipart upload, so attach it explicitly. A fresh
+    // per-attempt key satisfies the header requirement without blocking a
+    // corrected re-upload — the backend's sha256-of-bytes check already
+    // dedupes a genuinely identical file into the same batch.
+    const idempotencyKey =
+      typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+        ? crypto.randomUUID()
+        : `ingest-${batchId}-${Date.now()}`;
     const res = await fetch(
       `${API_BASE}/api/v1/admin/payouts/${batchId}/ingest-response-file`,
       {
         method: 'POST',
-        headers: { Authorization: token ? `Bearer ${token}` : '' },
+        headers: {
+          Authorization: token ? `Bearer ${token}` : '',
+          'X-Idempotency-Key': idempotencyKey,
+        },
         body: form,
       },
     );
