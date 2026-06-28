@@ -2401,15 +2401,25 @@ export class ReturnService {
           tx,
         );
       }
-      const totalRefund = !isFranchise
-        ? await this.commissionReversalService.reverseCommissionForReturn(
-            projectedReturn,
-            tx,
-          )
-        : // For franchise path the commission has already been reversed
-          // above via the facade — just compute the refund amount locally
-          // for the return record.
-          this.computeRefundAmount(projectedReturn);
+      // Commission clawback (seller path only; franchise commission was already
+      // reversed above via the facade). We call it for its side effect — the
+      // per-item margin reversal — but NOT for its returned total: that total is
+      // the GROSS Σ(qty × unitPrice), which over-refunds any coupon order
+      // (SM20260000037 paid ₹2,523.60 after TEST_2026 but was refunded ₹2,804).
+      if (!isFranchise) {
+        await this.commissionReversalService.reverseCommissionForReturn(
+          projectedReturn,
+          tx,
+        );
+      }
+      // Authoritative customer refund = sum of the discount-aware per-item
+      // refunds already computed above (snapshot proration / order-discount
+      // net-factor, incl. any partial-VALUE fraction). This is exactly what the
+      // customer paid for the returned items. Rounded to paise to avoid drift.
+      const totalRefund =
+        Math.round(
+          perItemRefunds.reduce((sum, r) => sum + (r.refundAmount ?? 0), 0) * 100,
+        ) / 100;
 
       // 3. Update the return record itself
       await tx.return.update({
@@ -2859,32 +2869,6 @@ export class ReturnService {
     }
 
     return this.returnRepo.findByIdWithItems(returnId);
-  }
-
-  /**
-   * Compute the total refund amount for a return based on the QC-approved
-   * quantities. Used for the franchise path where the commission reversal
-   * helper has already executed via the facade and only the local refund
-   * total is needed for the return record.
-   */
-  private computeRefundAmount(returnRecord: any): number {
-    let total = 0;
-    for (const item of returnRecord.items ?? []) {
-      const orderItem = item.orderItem;
-      if (!orderItem) continue;
-      const approvedQty = item.qcQuantityApproved || 0;
-      // Partial-VALUE refunds scale the line total by the same fraction the
-      // QC step applied (1 = full); keeps the franchise refund consistent
-      // with the customer credit and the GST reversal.
-      const valueFraction =
-        typeof item.refundValueFraction === 'number' &&
-        item.refundValueFraction >= 0 &&
-        item.refundValueFraction <= 1
-          ? item.refundValueFraction
-          : 1;
-      total += approvedQty * Number(orderItem.unitPrice) * valueFraction;
-    }
-    return Math.round(total * 100) / 100;
   }
 
   // ── Phase R3: Fulfillment node helpers ──────────────────────────────────
