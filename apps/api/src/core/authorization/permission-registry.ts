@@ -1083,6 +1083,12 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
     'sellers.scope.d2c',
     'products.read', 'products.approve',
     'orders.read', 'returns.read',
+    // Returns lifecycle for D2C sellers only (2026-06-28) — AdminReturnSellerScopeGuard
+    // confines every action to the admin's seller type, so the D2C admin runs its
+    // own returns end-to-end: approve/reject → pickup → receive → QC → close/export.
+    'returns.approve', 'returns.reject', 'returns.schedulePickup',
+    'returns.receive', 'returns.qcDecide', 'returns.uploadQcEvidence',
+    'returns.close', 'returns.export',
     'catalog.read', 'catalog.write', 'catalog.approve',
     'analytics.read',
     'accounts.read', 'settlements.read', 'settlements.history.read',
@@ -1101,6 +1107,12 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
     'sellers.scope.retail',
     'products.read', 'products.approve',
     'orders.read', 'returns.read',
+    // Returns lifecycle for RETAIL sellers only (2026-06-28) — AdminReturnSellerScopeGuard
+    // confines every action to the admin's seller type, so the retail admin runs its
+    // own returns end-to-end: approve/reject → pickup → receive → QC → close/export.
+    'returns.approve', 'returns.reject', 'returns.schedulePickup',
+    'returns.receive', 'returns.qcDecide', 'returns.uploadQcEvidence',
+    'returns.close', 'returns.export',
     'catalog.read', 'catalog.write', 'catalog.approve',
     'analytics.read',
     'accounts.read', 'settlements.read', 'settlements.history.read',
