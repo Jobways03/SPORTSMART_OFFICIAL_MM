@@ -144,13 +144,21 @@ export class AdminSettlementController {
   @Get('cycles')
   @Permissions('settlements.read')
   async listCycles(
+    @Req() req: Request,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
     const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
     const limitNum = Math.min(50, Math.max(1, parseInt(limit || '20', 10) || 20));
 
-    const result = await this.settlementService.listCycles(pageNum, limitNum);
+    // Delegated settlements (2026-06-28) — scope the list to the admin's seller
+    // type so D2C_ADMIN/RETAILER_ADMIN don't see each other's cycles.
+    const allowedSellerTypes = resolveScopedTypes((req as any).user?.permissions);
+    const result = await this.settlementService.listCycles(
+      pageNum,
+      limitNum,
+      allowedSellerTypes,
+    );
 
     return {
       success: true,
@@ -162,8 +170,15 @@ export class AdminSettlementController {
   /* ── GET /admin/settlements/cycles/:cycleId ── */
   @Get('cycles/:cycleId')
   @Permissions('settlements.read')
-  async getCycleDetail(@Param('cycleId') cycleId: string) {
-    const cycle = await this.settlementService.getCycleDetail(cycleId);
+  async getCycleDetail(
+    @Req() req: Request,
+    @Param('cycleId') cycleId: string,
+  ) {
+    const allowedSellerTypes = resolveScopedTypes((req as any).user?.permissions);
+    const cycle = await this.settlementService.getCycleDetail(
+      cycleId,
+      allowedSellerTypes,
+    );
 
     if (!cycle) {
       throw new NotFoundException('Settlement cycle not found');
@@ -336,11 +351,16 @@ export class AdminSettlementController {
     @Param('cycleId', ParseUUIDPipe) cycleId: string,
     @Res() res: any,
   ) {
-    const csv = await this.settlementService.exportCycleToTallyCsv(cycleId, {
-      adminId: (req as any).adminId,
-      ipAddress: req.ip,
-      userAgent: req.get('user-agent') ?? undefined,
-    });
+    const allowedSellerTypes = resolveScopedTypes((req as any).user?.permissions);
+    const csv = await this.settlementService.exportCycleToTallyCsv(
+      cycleId,
+      {
+        adminId: (req as any).adminId,
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent') ?? undefined,
+      },
+      allowedSellerTypes,
+    );
     res.setHeader(
       'Content-Disposition',
       `attachment; filename="settlement-cycle-${cycleId.slice(0, 8)}.csv"`,
@@ -358,9 +378,14 @@ export class AdminSettlementController {
   @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
   @Permissions('settlements.read')
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
-  async getCycleBalances(@Param('cycleId', ParseUUIDPipe) cycleId: string) {
+  async getCycleBalances(
+    @Req() req: Request,
+    @Param('cycleId', ParseUUIDPipe) cycleId: string,
+  ) {
+    const allowedSellerTypes = resolveScopedTypes((req as any).user?.permissions);
     const data = await this.settlementService.computeOpeningClosingBalance(
       cycleId,
+      allowedSellerTypes,
     );
     return {
       success: true,

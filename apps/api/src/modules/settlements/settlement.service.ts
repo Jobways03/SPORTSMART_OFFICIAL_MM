@@ -911,10 +911,25 @@ export class SettlementService {
     );
   }
 
-  async listCycles(page: number, limit: number) {
+  async listCycles(
+    page: number,
+    limit: number,
+    // Delegated settlements (2026-06-28) — a type-scoped admin (D2C_ADMIN /
+    // RETAILER_ADMIN) lists ONLY its own seller type's cycles. The filter excludes
+    // other types AND legacy null-type cycles. Unscoped (null/empty, e.g.
+    // SUPER_ADMIN / platform finance) is unrestricted. Closes the read-side leak
+    // where both type-admins saw (and the UI offered Approve/Reject on) every
+    // cycle; the write side already scope-locked via assertScopeCoversCycle.
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
+  ) {
     const skip = (page - 1) * limit;
+    const where: Prisma.SettlementCycleWhereInput =
+      allowedSellerTypes && allowedSellerTypes.length > 0
+        ? { sellerType: { in: allowedSellerTypes } }
+        : {};
     const [cycles, total] = await Promise.all([
       this.prisma.settlementCycle.findMany({
+        where,
         orderBy: { createdAt: 'desc' },
         skip,
         take: limit,
@@ -922,7 +937,7 @@ export class SettlementService {
           _count: { select: { sellerSettlements: true } },
         },
       }),
-      this.prisma.settlementCycle.count(),
+      this.prisma.settlementCycle.count({ where }),
     ]);
 
     return {
@@ -940,7 +955,10 @@ export class SettlementService {
   }
 
   /* ── T3: Get cycle detail ── */
-  async getCycleDetail(cycleId: string) {
+  async getCycleDetail(
+    cycleId: string,
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
+  ) {
     const cycle = await this.prisma.settlementCycle.findUnique({
       where: { id: cycleId },
       include: {
@@ -963,6 +981,10 @@ export class SettlementService {
     if (!cycle) {
       return null;
     }
+
+    // Delegated settlements (2026-06-28) — a type-scoped admin can't read another
+    // seller type's cycle (or a legacy null-type one). Mirrors the write guard.
+    this.assertScopeCoversCycle(cycle.sellerType, allowedSellerTypes);
 
     // Phase B (P0.5) — attach seller-funded discount deductions per
     // seller. Pulls from `discount_liability_ledger` filtered to
@@ -2337,6 +2359,7 @@ export class SettlementService {
   async exportCycleToTallyCsv(
     cycleId: string,
     actor?: { adminId?: string; ipAddress?: string; userAgent?: string },
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
   ): Promise<string> {
     const cycle = await this.prisma.settlementCycle.findUnique({
       where: { id: cycleId },
@@ -2372,6 +2395,9 @@ export class SettlementService {
       },
     });
     if (!cycle) throw new NotFoundAppException(`SettlementCycle ${cycleId} not found`);
+    // Delegated settlements (2026-06-28) — scope-lock the export (the CSV exposes
+    // seller financials) to the actor's seller type. Mirrors the write guard.
+    this.assertScopeCoversCycle(cycle.sellerType, allowedSellerTypes);
 
     const dateStr = formatDDMMYYYY(cycle.periodEnd ?? new Date());
     // Phase 148 — 12-char cycle prefix (was 8) to cut voucher-no collision risk.
@@ -2520,6 +2546,7 @@ export class SettlementService {
    */
   async computeOpeningClosingBalance(
     cycleId: string,
+    allowedSellerTypes?: ('D2C' | 'RETAIL')[] | null,
   ): Promise<
     Array<{
       settlementType: 'SELLER' | 'FRANCHISE';
@@ -2534,6 +2561,15 @@ export class SettlementService {
       closingBalanceInPaise: string;
     }>
   > {
+    // Delegated settlements (2026-06-28) — scope-lock to the actor's seller type
+    // (balances expose every seller's outstanding payable). Mirrors the write
+    // guard; a non-existent cycle for a scoped actor surfaces as out-of-scope.
+    const scopeCycle = await this.prisma.settlementCycle.findUnique({
+      where: { id: cycleId },
+      select: { sellerType: true },
+    });
+    this.assertScopeCoversCycle(scopeCycle?.sellerType ?? null, allowedSellerTypes);
+
     // Phase 149 — TRUE outstanding-balance ledger (was "cumulative-paid +
     // cycle-amount", which is a running payment flow, not a balance):
     //   opening  = outstanding carried forward = SUM of prior settlements still
