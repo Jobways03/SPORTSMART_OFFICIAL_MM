@@ -672,25 +672,45 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
     customerStatusLabel(effectiveOrderStatus, order.paymentStatus);
   const displayStatusColor = orderStatusColor(effectiveOrderStatus, order.paymentStatus);
 
-  // Price Breakdown reconciliation (see the panel below). The tax engine's
-  // recorded base can be GROSS (post-supply discount → GST on full value, the
-  // discount reduces the total afterwards) or already NET (pre-supply →
-  // taxable = gross − discount). Rather than assume one model, derive the
-  // shortfall between the recorded Sub Total (+ shipping) and the authoritative
-  // amount paid: that shortfall IS the post-supply discount, and it is exactly
-  // zero for a pre-supply discount (where Sub Total already equals the total).
-  // This keeps the panel reconciled to `totalAmount` under either treatment.
+  // Price Breakdown. Goal: whenever a discount was applied, ALWAYS show a
+  // gross → discount → "Total Paid" breakdown — regardless of how the tax engine
+  // recorded it. A PRE-supply discount (the default once allocation is on) lowers
+  // the taxable, so taxSummary is already NET (Sub Total == amount paid, no gap);
+  // a POST-supply discount leaves taxSummary GROSS. To present both identically,
+  // anchor on the GROSS (pre-discount) value = amount paid + discount − shipping,
+  // and scale the recorded (net) tax components up to gross so every line
+  // reconciles: components sum to Sub Total, and Sub Total − Discount + Shipping
+  // = Total Paid. With no discount the scale is 1 → the plain net breakdown.
   const taxBreak = order.taxSummary;
-  const goodsSubtotalPaise = taxBreak
-    ? Number(taxBreak.taxableInPaise) + Number(taxBreak.totalTaxInPaise)
+  const netTaxablePaise = taxBreak ? Number(taxBreak.taxableInPaise) : 0;
+  const netCgstPaise = taxBreak ? Number(taxBreak.cgstInPaise) : 0;
+  const netSgstPaise = taxBreak ? Number(taxBreak.sgstInPaise) : 0;
+  const netIgstPaise = taxBreak ? Number(taxBreak.igstInPaise) : 0;
+  const netSubtotalPaise = taxBreak
+    ? netTaxablePaise + Number(taxBreak.totalTaxInPaise)
     : 0;
   const shippingPaise = order.shipping ? Number(order.shipping.feeInPaise) : 0;
   const totalPaidPaise = Math.round(Number(order.totalAmount) * 100);
-  const discountGapPaise = Math.max(
-    0,
-    goodsSubtotalPaise + shippingPaise - totalPaidPaise,
-  );
-  const showPriceReconciliation = discountGapPaise > 0 || shippingPaise > 0;
+  // Discount: prefer the recorded applied-discount (matches the "You saved" line
+  // in the header); fall back to the shortfall to the amount paid for legacy /
+  // post-supply orders that have no appliedDiscount row.
+  const recordedDiscountPaise = order.appliedDiscount
+    ? Math.round(Number(order.appliedDiscount.discountAmount) * 100)
+    : 0;
+  const discountPaise =
+    recordedDiscountPaise > 0
+      ? recordedDiscountPaise
+      : Math.max(0, netSubtotalPaise + shippingPaise - totalPaidPaise);
+  // Gross (pre-discount, incl GST) goods value, and the factor to lift net tax
+  // components up to gross (1 when there's no discount).
+  const grossSubtotalPaise = totalPaidPaise + discountPaise - shippingPaise;
+  const grossScale =
+    netSubtotalPaise > 0 ? grossSubtotalPaise / netSubtotalPaise : 1;
+  const dispTaxablePaise = Math.round(netTaxablePaise * grossScale);
+  const dispCgstPaise = Math.round(netCgstPaise * grossScale);
+  const dispSgstPaise = Math.round(netSgstPaise * grossScale);
+  const dispIgstPaise = Math.round(netIgstPaise * grossScale);
+  const showDiscountBreakdown = discountPaise > 0 || shippingPaise > 0;
 
   return (
     <StorefrontShell>
@@ -858,55 +878,58 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
               snapshotted from the tax engine at order time.
             </p>
             <dl style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', columnGap: 16, rowGap: 6, margin: 0, fontSize: 14 }}>
+              {/* Tax components, lifted to the GROSS (pre-discount) value so they
+                  sum to the Sub Total below. Identical to the recorded values
+                  when there's no discount (scale = 1). */}
               <dt style={{ color: '#6b7280' }}>Product value</dt>
               <dd style={{ textAlign: 'right', margin: 0 }}>
-                ₹{(Number(order.taxSummary.taxableInPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                ₹{(dispTaxablePaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
               </dd>
-              {Number(order.taxSummary.cgstInPaise) > 0 && (
+              {dispCgstPaise > 0 && (
                 <>
                   <dt style={{ color: '#6b7280' }}>CGST</dt>
                   <dd style={{ textAlign: 'right', margin: 0 }}>
-                    ₹{(Number(order.taxSummary.cgstInPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ₹{(dispCgstPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </dd>
                 </>
               )}
-              {Number(order.taxSummary.sgstInPaise) > 0 && (
+              {dispSgstPaise > 0 && (
                 <>
                   <dt style={{ color: '#6b7280' }}>SGST</dt>
                   <dd style={{ textAlign: 'right', margin: 0 }}>
-                    ₹{(Number(order.taxSummary.sgstInPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ₹{(dispSgstPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </dd>
                 </>
               )}
-              {Number(order.taxSummary.igstInPaise) > 0 && (
+              {dispIgstPaise > 0 && (
                 <>
                   <dt style={{ color: '#6b7280' }}>IGST</dt>
                   <dd style={{ textAlign: 'right', margin: 0 }}>
-                    ₹{(Number(order.taxSummary.igstInPaise) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ₹{(dispIgstPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </dd>
                 </>
               )}
-              {showPriceReconciliation ? (
+              {showDiscountBreakdown ? (
                 <>
-                  {/* Goods value at the recorded tax base (de-emphasised — the
-                      bold line is now the amount actually paid, below). */}
+                  {/* Gross (pre-discount) goods value — the tax components above
+                      sum to this; de-emphasised since the bold line is now the
+                      amount actually paid, below. */}
                   <dt style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', color: '#6b7280' }}>
                     Sub Total
                   </dt>
                   <dd style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', textAlign: 'right', margin: 0 }}>
-                    ₹{(goodsSubtotalPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ₹{(grossSubtotalPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </dd>
 
-                  {/* Discount = the shortfall to the amount paid. Only non-zero
-                      for a post-supply discount (GST stayed on the gross); a
-                      pre-supply discount already lowered the Sub Total above. */}
-                  {discountGapPaise > 0 && (
+                  {/* The applied coupon — always shown when a discount exists, for
+                      both pre- and post-supply orders. */}
+                  {discountPaise > 0 && (
                     <>
                       <dt style={{ color: '#16a34a' }}>
                         Discount{order.appliedDiscount?.code ? ` (${order.appliedDiscount.code})` : ''}
                       </dt>
                       <dd style={{ textAlign: 'right', margin: 0, color: '#16a34a' }}>
-                        −₹{(discountGapPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        −₹{(discountPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </dd>
                     </>
                   )}
@@ -923,8 +946,7 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                     </>
                   )}
 
-                  {/* Authoritative amount paid — the lines above reconcile to it
-                      (Sub Total − Discount + Shipping = Total Paid). */}
+                  {/* Authoritative amount paid — Sub Total − Discount + Shipping. */}
                   <dt style={{ paddingTop: 8, borderTop: '1px solid #e5e7eb', color: '#111827', fontWeight: 700 }}>
                     Total Paid
                   </dt>
@@ -934,13 +956,12 @@ const { orderNumber } = useParams<{ orderNumber: string }>();
                 </>
               ) : (
                 <>
-                  {/* Nothing to reconcile (no post-supply discount, no shipping)
-                      — Sub Total already equals what was paid. */}
+                  {/* No discount, no shipping — Sub Total is what was paid. */}
                   <dt style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', color: '#111827', fontWeight: 600 }}>
                     Sub Total
                   </dt>
                   <dd style={{ paddingTop: 8, borderTop: '1px solid #f3f4f6', textAlign: 'right', margin: 0, fontWeight: 600 }}>
-                    ₹{(goodsSubtotalPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    ₹{(grossSubtotalPaise / 100).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                   </dd>
                 </>
               )}
