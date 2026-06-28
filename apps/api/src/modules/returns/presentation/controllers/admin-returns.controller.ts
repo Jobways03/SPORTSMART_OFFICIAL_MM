@@ -381,7 +381,7 @@ export class AdminReturnsController {
   // reject, schedule pickup, and run QC — they just can't touch the
   // money at the gateway.
   @Patch(':returnId/initiate-refund')
-  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN', 'D2C_ADMIN', 'RETAILER_ADMIN')
   @Permissions('refunds.initiate')
   @Idempotent()
   async initiateRefund(
@@ -400,7 +400,7 @@ export class AdminReturnsController {
 
   // PATCH /admin/returns/:returnId/confirm-refund — confirm refund completed
   @Patch(':returnId/confirm-refund')
-  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN', 'D2C_ADMIN', 'RETAILER_ADMIN')
   @Permissions('refunds.confirm')
   @Idempotent()
   async confirmRefund(
@@ -424,7 +424,7 @@ export class AdminReturnsController {
   // action from refunds.retry. @Idempotent dedups network retries.
   // @Throttle caps per-admin frequency.
   @Patch(':returnId/mark-refund-failed')
-  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN', 'D2C_ADMIN', 'RETAILER_ADMIN')
   @Permissions('refunds.markFailed')
   @Idempotent()
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
@@ -444,7 +444,7 @@ export class AdminReturnsController {
 
   // PATCH /admin/returns/:returnId/retry-refund — retry refund via gateway
   @Patch(':returnId/retry-refund')
-  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  @Roles('SUPER_ADMIN', 'SELLER_ADMIN', 'D2C_ADMIN', 'RETAILER_ADMIN')
   @Permissions('refunds.retry')
   @Idempotent()
   async retryRefund(

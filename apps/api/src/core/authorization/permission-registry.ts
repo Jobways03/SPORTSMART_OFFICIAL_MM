@@ -1089,6 +1089,10 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
     'returns.approve', 'returns.reject', 'returns.schedulePickup',
     'returns.receive', 'returns.qcDecide', 'returns.uploadQcEvidence',
     'returns.close', 'returns.export',
+    // Refund movement for the admin's own seller type — same scope guard
+    // (AdminReturnSellerScopeGuard) confines it; the endpoints also @Roles-allow
+    // these roles. confirm/initiate/markFailed/retry.
+    'refunds.confirm', 'refunds.initiate', 'refunds.markFailed', 'refunds.retry',
     'catalog.read', 'catalog.write', 'catalog.approve',
     'analytics.read',
     'accounts.read', 'settlements.read', 'settlements.history.read',
@@ -1113,6 +1117,10 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
     'returns.approve', 'returns.reject', 'returns.schedulePickup',
     'returns.receive', 'returns.qcDecide', 'returns.uploadQcEvidence',
     'returns.close', 'returns.export',
+    // Refund movement for the admin's own seller type — same scope guard
+    // (AdminReturnSellerScopeGuard) confines it; the endpoints also @Roles-allow
+    // these roles. confirm/initiate/markFailed/retry.
+    'refunds.confirm', 'refunds.initiate', 'refunds.markFailed', 'refunds.retry',
     'catalog.read', 'catalog.write', 'catalog.approve',
     'analytics.read',
     'accounts.read', 'settlements.read', 'settlements.history.read',
