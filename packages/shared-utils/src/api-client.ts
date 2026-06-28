@@ -374,11 +374,45 @@ export function createApiClient(config: ApiClientConfig): ApiClient {
     }
   };
 
+  // Generate an idempotency key. Prefers crypto.randomUUID (browser secure
+  // context + Node 19+ global crypto); falls back to a timestamp+random string
+  // so it never throws. Always 8–128 ascii-printable chars (backend rule).
+  const genIdempotencyKey = (): string => {
+    try {
+      const c = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
+      if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+    } catch {
+      /* fall through to the non-crypto fallback */
+    }
+    return `idem-${Date.now()}-${Math.random().toString(36).slice(2, 14)}`;
+  };
+
   const apiClient = async <T = unknown>(
     endpoint: string,
     options: RequestInit = {},
   ): Promise<ApiResponse<T>> => {
     const url = `${API_BASE}/api/v1${endpoint}`;
+
+    // Auto-attach an idempotency key on mutating requests that don't already set
+    // one. Backend endpoints decorated with @Idempotent REJECT mutations lacking
+    // an `X-Idempotency-Key` (e.g. POST /customer/cart/items — add-to-cart). The
+    // key is injected ONCE here, before the retry loop below, so the 401-refresh
+    // and step-up retries reuse the SAME key (that's what makes the retry actually
+    // idempotent). Callers that need a specific/stable key (place-order, payment
+    // verify) set it explicitly and that wins; non-idempotent endpoints ignore it.
+    const method = (options.method ?? 'GET').toUpperCase();
+    if (method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE') {
+      const existing = options.headers as Record<string, string> | undefined;
+      const hasKey =
+        !!existing &&
+        Object.keys(existing).some((k) => k.toLowerCase() === 'x-idempotency-key');
+      if (!hasKey) {
+        options = {
+          ...options,
+          headers: { ...(existing ?? {}), 'X-Idempotency-Key': genIdempotencyKey() },
+        };
+      }
+    }
 
     let attempt = await makeRequest<T>(url, options);
 
