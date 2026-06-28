@@ -1,6 +1,9 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { AppLoggerService } from '../../../../bootstrap/logging/app-logger.service';
-import { NotFoundAppException } from '../../../../core/exceptions';
+import {
+  NotFoundAppException,
+  ForbiddenAppException,
+} from '../../../../core/exceptions';
 import { MediaStorageAdapter } from '../../../../integrations/media/media-storage.adapter';
 import { computeProfileCompletion } from '../../../../core/utils';
 import { MediaType } from './upload-seller-media.use-case';
@@ -8,6 +11,7 @@ import {
   SellerRepository,
   SELLER_REPOSITORY,
 } from '../../domain/repositories/seller.repository.interface';
+import { isSellerProfileLocked } from '../../domain/policies/seller-access.policy';
 
 @Injectable()
 export class DeleteSellerMediaUseCase {
@@ -25,6 +29,15 @@ export class DeleteSellerMediaUseCase {
 
     if (!seller) {
       throw new NotFoundAppException('Seller profile not found');
+    }
+
+    // Profile approval lock — media is part of the profile page; locked once
+    // the admin approves the seller. Admin-only edits thereafter.
+    if (isSellerProfileLocked(seller)) {
+      throw new ForbiddenAppException(
+        'Your profile is approved and locked. Contact your admin to change your profile media.',
+        'PROFILE_LOCKED_CONTACT_ADMIN',
+      );
     }
 
     const isProfileImage = mediaType === 'profile-image';

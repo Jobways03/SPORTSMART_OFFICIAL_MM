@@ -144,6 +144,11 @@ export class AdminUpdateFranchiseVerificationUseCase {
       updateData.verificationRejectionReason = null;
       updateData.verificationApprovalNotes = null;
     }
+    // Profile approval lock (2026-06) — VERIFIED freezes the franchise's
+    // profile for self-service (admin-only edits thereafter); any other
+    // transition (REJECTED / NOT_VERIFIED reset / UNDER_REVIEW) re-opens it so
+    // the franchise can edit and resubmit.
+    updateData.profileLocked = verificationStatus === 'VERIFIED';
 
     // Phase 159j (audit) — atomic status-CAS + an ordered verification-history
     // row, mirroring the status flow. The CAS (where verificationStatus =

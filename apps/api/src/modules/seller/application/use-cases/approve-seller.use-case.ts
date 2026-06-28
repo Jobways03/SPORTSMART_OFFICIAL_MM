@@ -106,6 +106,11 @@ export class ApproveSellerUseCase {
       {
         status: 'ACTIVE',
         verificationStatus: 'VERIFIED',
+        // Profile approval lock (2026-06) — approval freezes the seller's
+        // profile for self-service. The seller can no longer edit it; all
+        // further changes go through the admin's edit endpoint. Rejection
+        // clears this flag (see RejectSellerUseCase).
+        profileLocked: true,
         // Phase 19 (2026-05-20) — kyc-review columns (split from
         // legacy gst_verification_notes overloading).
         kycApprovalNotes: notes ?? null,

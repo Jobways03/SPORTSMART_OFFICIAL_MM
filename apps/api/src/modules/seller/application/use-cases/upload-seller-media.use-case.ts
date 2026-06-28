@@ -12,6 +12,7 @@ import {
   SellerRepository,
   SELLER_REPOSITORY,
 } from '../../domain/repositories/seller.repository.interface';
+import { isSellerProfileLocked } from '../../domain/policies/seller-access.policy';
 
 const ALLOWED_MIME_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB
@@ -73,6 +74,16 @@ export class UploadSellerMediaUseCase {
 
     if (!seller) {
       throw new NotFoundAppException('Seller profile not found');
+    }
+
+    // Profile approval lock — logo/profile image are part of the profile page,
+    // so they freeze too once an admin approves the seller. Admin-only edits
+    // thereafter; rejection re-opens it.
+    if (isSellerProfileLocked(seller)) {
+      throw new ForbiddenAppException(
+        'Your profile is approved and locked. Contact your admin to change your profile media.',
+        'PROFILE_LOCKED_CONTACT_ADMIN',
+      );
     }
 
     const uploadAllowedStatuses = ['ACTIVE', 'PENDING_APPROVAL', 'INACTIVE'];

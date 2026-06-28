@@ -41,6 +41,17 @@ export class UpdateFranchiseProfileUseCase {
       throw new ForbiddenAppException('Account is suspended. Profile editing is not allowed.');
     }
 
+    // Profile approval lock — once an admin marks the franchise VERIFIED, the
+    // profile is read-only for self-service; every change goes through the
+    // admin. Cleared on rejection/reset so the franchise can fix & resubmit.
+    // (The admin-only edit endpoint ignores this flag.)
+    if ((franchise as { profileLocked?: boolean | null }).profileLocked === true) {
+      throw new ForbiddenAppException(
+        'Your profile is approved and locked. Contact your admin to make any changes.',
+        'PROFILE_LOCKED_CONTACT_ADMIN',
+      );
+    }
+
     // Logistics lock — once the franchise is registered with a logistics
     // partner, the fields that make up the courier pickup warehouse
     // (business name, owner/contact, address, city, state, pincode,

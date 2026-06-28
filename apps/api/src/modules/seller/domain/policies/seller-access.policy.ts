@@ -59,3 +59,25 @@ export const LOGIN_ALLOWED_STATUSES: readonly SellerStatus[] = [
 export function canLogin(status: SellerStatus): boolean {
   return LOGIN_ALLOWED_STATUSES.includes(status);
 }
+
+/**
+ * Profile approval lock (2026-06).
+ *
+ * Once an admin APPROVES a seller (verificationStatus → VERIFIED) the seller's
+ * profile is frozen for self-service: `profileLocked` is set true and the
+ * seller can no longer edit any profile field or profile media. From then on
+ * every change must go through the admin, who edits via the admin-only
+ * AdminEditSeller endpoint (that path intentionally does NOT consult this flag).
+ * Rejection clears the lock so the seller can fix and resubmit.
+ *
+ * `profileLocked` is deliberately a separate flag (not derived from
+ * `verificationStatus`) so an admin can re-open self-editing later by clearing
+ * it without de-verifying KYC — and so the read-only rule has a single source
+ * of truth that every seller self-write path consults. Use this helper instead
+ * of inline `profileLocked === true` checks so the rule stays consistent.
+ */
+export function isSellerProfileLocked(
+  seller: { profileLocked?: boolean | null } | null | undefined,
+): boolean {
+  return seller?.profileLocked === true;
+}

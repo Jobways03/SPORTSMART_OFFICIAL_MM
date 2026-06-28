@@ -94,6 +94,9 @@ export class RejectSellerUseCase {
       sellerId,
       {
         verificationStatus: 'REJECTED',
+        // Profile approval lock (2026-06) — rejection re-opens the profile so
+        // the seller can fix the flagged issues and resubmit for approval.
+        profileLocked: false,
         // Phase 19 (2026-05-20) — dedicated rejection-reason column.
         kycRejectionReason: reason,
         kycReviewedAt: now,

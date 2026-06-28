@@ -74,6 +74,9 @@ export class GetSellerProfileUseCase {
       gstVerifiedAt: true,
       panVerified: true,
       verificationStatus: true,
+      // Profile approval lock (2026-06) — drives the seller portal's
+      // read-only state + "contact admin" banner after approval.
+      profileLocked: true,
       // Phase 19 (2026-05-20) — replace the overloaded
       // gstVerificationNotes with the dedicated kyc columns. We keep
       // the legacy column out of the response to avoid frontend code
@@ -158,6 +161,10 @@ export class GetSellerProfileUseCase {
       gstVerifiedAt: (seller as any).gstVerifiedAt ?? null,
       panVerified: (seller as any).panVerified ?? false,
       verificationStatus: (seller as any).verificationStatus ?? 'NOT_VERIFIED',
+      // True once an admin approves the seller — the portal renders the
+      // profile read-only with a "contact admin to make changes" banner.
+      // Enforced server-side in the profile/media use-cases regardless.
+      profileLocked: (seller as any).profileLocked ?? false,
       kycApprovalNotes: (seller as any).kycApprovalNotes ?? null,
       kycRejectionReason: (seller as any).kycRejectionReason ?? null,
       kycReviewedAt: (seller as any).kycReviewedAt ?? null,

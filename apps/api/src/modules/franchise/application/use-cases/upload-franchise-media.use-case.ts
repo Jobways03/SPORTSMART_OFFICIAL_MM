@@ -75,6 +75,16 @@ export class UploadFranchiseMediaUseCase {
       throw new NotFoundAppException('Franchise profile not found');
     }
 
+    // Profile approval lock — logo/profile image are part of the profile page,
+    // so they freeze once an admin marks the franchise VERIFIED. Admin-only
+    // edits thereafter; rejection/reset re-opens it.
+    if ((franchise as { profileLocked?: boolean | null }).profileLocked === true) {
+      throw new ForbiddenAppException(
+        'Your profile is approved and locked. Contact your admin to change your profile media.',
+        'PROFILE_LOCKED_CONTACT_ADMIN',
+      );
+    }
+
     const uploadAllowedStatuses = ['ACTIVE', 'APPROVED', 'PENDING'];
     if (!uploadAllowedStatuses.includes(franchise.status)) {
       throw new ForbiddenAppException(

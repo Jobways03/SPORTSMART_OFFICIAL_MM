@@ -34,6 +34,10 @@ export class GetFranchiseProfileUseCase {
       panNumber: true,
       status: true,
       verificationStatus: true,
+      // Profile approval lock (2026-06) + rejection reason — drive the
+      // franchise portal's read-only state + pending/rejected/approved banners.
+      profileLocked: true,
+      verificationRejectionReason: true,
       onlineFulfillmentRate: true,
       procurementFeeRate: true,
       contractStartDate: true,
@@ -116,6 +120,13 @@ export class GetFranchiseProfileUseCase {
       panNumber: franchise.panNumber,
       status: franchise.status,
       verificationStatus: franchise.verificationStatus,
+      // True once an admin marks the franchise VERIFIED — the portal renders
+      // the profile read-only with a "contact admin" banner. Enforced
+      // server-side in the profile/media use-cases regardless.
+      profileLocked: (franchise as { profileLocked?: boolean | null }).profileLocked ?? false,
+      verificationRejectionReason:
+        (franchise as { verificationRejectionReason?: string | null })
+          .verificationRejectionReason ?? null,
       onlineFulfillmentRate: franchise.onlineFulfillmentRate,
       procurementFeeRate: franchise.procurementFeeRate,
       contractStartDate: franchise.contractStartDate,

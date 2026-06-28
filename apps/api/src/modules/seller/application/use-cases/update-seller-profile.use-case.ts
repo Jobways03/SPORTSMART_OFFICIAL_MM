@@ -18,6 +18,7 @@ import {
   SELLER_REPOSITORY,
 } from '../../domain/repositories/seller.repository.interface';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
+import { isSellerProfileLocked } from '../../domain/policies/seller-access.policy';
 
 @Injectable()
 export class UpdateSellerProfileUseCase {
@@ -44,6 +45,16 @@ export class UpdateSellerProfileUseCase {
     }
     if (seller.status === 'SUSPENDED') {
       throw new ForbiddenAppException('Account is suspended. Profile editing is not allowed.');
+    }
+
+    // Profile approval lock — once an admin approves the seller, the profile is
+    // read-only for self-service; every change goes through the admin. See
+    // seller-access.policy.ts. (The admin-only edit endpoint ignores this flag.)
+    if (isSellerProfileLocked(seller)) {
+      throw new ForbiddenAppException(
+        'Your profile is approved and locked. Contact your admin to make any changes.',
+        'PROFILE_LOCKED_CONTACT_ADMIN',
+      );
     }
 
     // INACTIVE sellers can only update contact and address fields
