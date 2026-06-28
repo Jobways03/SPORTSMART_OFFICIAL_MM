@@ -126,21 +126,66 @@ export class ReturnCommissionReversalService {
         `Return ${returnRecord.returnNumber} for franchise sub-order ${subOrder.id}`,
       );
 
-      // Franchise: create reversal ledger entry
-      try {
-        await this.franchiseFacade.recordReturnReversal({
-          franchiseId: subOrder.franchiseId,
-          subOrderId: subOrder.id,
-          reversalAmount: totalRefundAmount,
+      // Reverse the franchise's ACTUAL EARNING, scaled to the value returned —
+      // NOT the gross customer refund. `totalRefundAmount` is the GST-inclusive
+      // customer price (unitPrice × qty); it bundles the 18% GST and the
+      // platform's commission, NEITHER of which the franchise was ever credited
+      // (recordOnlineOrderCommission credits only the net franchiseEarning, e.g.
+      // ₹654.78 on a ₹909 gross / ₹770.33 taxable line). Reversing the gross
+      // over-claws — it can leave a fully-returned order at a NET LOSS for the
+      // franchise and drive a settlement's payable negative (then floored to
+      // ₹0). We mirror the counter-return path in franchise-orders.service:
+      // proportion = returnedGross / subOrderGross, then reverse that share of
+      // the ORIGINAL franchiseEarning so a full return nets the franchise to ₹0.
+      // Falls back to the gross only when no original ONLINE_ORDER ledger row
+      // exists (return landed before the commission was recorded — rare; the
+      // facade logs a warning and still books a standalone reversal).
+      let franchiseReversalEarning = totalRefundAmount;
+      if (originalLedger) {
+        const fullFranchiseEarning = new Prisma.Decimal(
+          (originalLedger.franchiseEarning as any) ?? 0,
+        );
+        const subOrderItems = await this.prisma.orderItem.findMany({
+          where: { subOrderId: subOrder.id },
+          select: { unitPrice: true, quantity: true },
         });
+        const subOrderGross = subOrderItems.reduce(
+          (acc, i) => acc.plus(new Prisma.Decimal(i.unitPrice).mul(i.quantity)),
+          new Prisma.Decimal(0),
+        );
+        const proportion = subOrderGross.gt(0)
+          ? Prisma.Decimal.min(
+              new Prisma.Decimal(1),
+              new Prisma.Decimal(totalRefundAmount).div(subOrderGross),
+            )
+          : new Prisma.Decimal(1);
+        franchiseReversalEarning = fullFranchiseEarning
+          .mul(proportion)
+          .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+          .toNumber();
+      }
+
+      // Franchise: create reversal ledger entry
+      if (franchiseReversalEarning > 0) {
+        try {
+          await this.franchiseFacade.recordReturnReversal({
+            franchiseId: subOrder.franchiseId,
+            subOrderId: subOrder.id,
+            reversalAmount: franchiseReversalEarning,
+          });
+          this.logger.log(
+            `Franchise commission reversed: ₹${franchiseReversalEarning} (franchise-earning share; gross customer refund ₹${totalRefundAmount}) for return ${returnRecord.returnNumber}`,
+          );
+        } catch (err) {
+          this.logger.error(
+            `Failed to reverse franchise commission: ${(err as Error).message}`,
+          );
+          throw err;
+        }
+      } else {
         this.logger.log(
-          `Franchise commission reversed: ₹${totalRefundAmount} for return ${returnRecord.returnNumber}`,
+          `Franchise reversal computed as ₹0 for return ${returnRecord.returnNumber} (gross refund ₹${totalRefundAmount}) — nothing to reverse`,
         );
-      } catch (err) {
-        this.logger.error(
-          `Failed to reverse franchise commission: ${(err as Error).message}`,
-        );
-        throw err;
       }
     } else {
       // Seller: update CommissionRecord.refundedAdminEarning proportionally per item

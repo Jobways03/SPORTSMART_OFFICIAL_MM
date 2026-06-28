@@ -116,6 +116,7 @@ export default function DashboardLayout({
     { href: '/dashboard/settlements', label: 'Settlements', icon: '&#128202;' },
     { href: '/dashboard/accounts', label: 'Accounts', icon: '&#128181;' },
     { href: '/dashboard/commission', label: 'Commission', icon: '&#128176;' },
+    { href: '/dashboard/reversals', label: 'Reversals', icon: '&#8634;' },
     // Settings hub — currently surfaces the Logistics-partners panel
     // for self-registration of pickup locations with each courier.
     { href: '/dashboard/settings', label: 'Settings', icon: '&#9881;' },

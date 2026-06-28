@@ -4,6 +4,12 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { adminFranchisesService } from '@/services/admin-franchises.service';
 
+// Return / POS reversals are shown on their own Reversals page (they reduce
+// earnings and would otherwise clutter the commission ledger). They remain in
+// the underlying FranchiseFinanceLedger and are still summed into the
+// settlement — this is a display split only.
+const REVERSAL_TYPES = ['RETURN_REVERSAL', 'POS_SALE_REVERSAL'];
+
 export default function FranchiseCommissionPage() {
   const [franchises, setFranchises] = useState<any[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
@@ -24,7 +30,9 @@ export default function FranchiseCommissionPage() {
     try {
       const res = await adminFranchisesService.getFinanceLedger(id, { limit: 50 });
       const d = res.data as any;
-      setLedger(d?.entries || (Array.isArray(d) ? d : []));
+      const all = d?.entries || (Array.isArray(d) ? d : []);
+      // Reversals live on the dedicated Reversals page — exclude them here.
+      setLedger(all.filter((e: any) => !REVERSAL_TYPES.includes(e.sourceType)));
     } catch { setLedger([]); }
     finally { setLedLoading(false); }
   };
@@ -49,7 +57,10 @@ export default function FranchiseCommissionPage() {
           Commission Settings &rarr;
         </Link>
       </div>
-      <p style={{ color: '#6b7280', fontSize: 14, marginBottom: 24 }}>View commission ledger and finance entries for each franchise.</p>
+      <p style={{ color: '#6b7280', fontSize: 14, marginBottom: 24 }}>
+        View commission ledger and finance entries for each franchise. Return &amp; POS reversals are shown on the{' '}
+        <Link href="/dashboard/reversals" style={{ color: '#2563eb', fontWeight: 600, textDecoration: 'none' }}>Reversals</Link>{' '}page.
+      </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '280px 1fr', gap: 24 }}>
         <div style={{ background: '#fff', border: '1px solid #e5e7eb', borderRadius: 10, padding: 16 }}>
