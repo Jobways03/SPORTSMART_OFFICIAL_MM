@@ -62,12 +62,13 @@ export class AdminImpersonateFranchiseUseCase {
   async execute(input: ImpersonateInput) {
     const { adminId, adminRole, franchiseId, reason, ipAddress, userAgent } = input;
 
-    // Phase 28 — defense-in-depth role check.
-    if (!['SUPER_ADMIN', 'SELLER_ADMIN'].includes(adminRole)) {
-      throw new ForbiddenAppException(
-        'You do not have permission to impersonate franchise partners',
-      );
-    }
+    // Authorization is enforced at the controller by
+    // @Permissions('franchise.approve') (effective perms = primary role ∪
+    // custom roles) + @RequiresStepUp. A primary-role check here
+    // (adminRole ∈ {SUPER_ADMIN,SELLER_ADMIN}) wrongly rejected functional
+    // seller-type admins, who use primary role STAFF + a custom role that
+    // grants franchise.approve — so it's removed. This use-case is only
+    // invoked from that guarded route, so the controller gate is authoritative.
 
     const franchise = await this.franchiseRepo.findById(franchiseId);
     if (!franchise || franchise.isDeleted) {
