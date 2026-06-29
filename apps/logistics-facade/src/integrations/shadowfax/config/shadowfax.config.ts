@@ -78,6 +78,13 @@ export type ShadowfaxConfig = z.infer<typeof shadowfaxConfigSchema>;
  *                        tests that don't yet have sandbox creds.
  *                        Calling the partner with a placeholder still
  *                        fails at the HTTP layer (401 from Shadowfax).
+ *
+ * MVP-launch defer — `SHADOWFAX_ENABLED` (default false) gates the strict
+ * production parse. Shadowfax is a dormant "future carrier" (the active
+ * carrier is Delhivery); without this flag the strict parse would force
+ * Shadowfax credentials just to boot. While disabled the facade boots
+ * Delhivery-only with placeholder Shadowfax config that is never called.
+ * Set SHADOWFAX_ENABLED=true with real SHADOWFAX_* creds to go live.
  */
 export function loadShadowfaxConfig(env: NodeJS.ProcessEnv): ShadowfaxConfig {
   const candidate = {
@@ -90,7 +97,8 @@ export function loadShadowfaxConfig(env: NodeJS.ProcessEnv): ShadowfaxConfig {
     maxRetries: env.SHADOWFAX_MAX_RETRIES,
   };
 
-  if (env.NODE_ENV === 'production') {
+  const enabled = (env.SHADOWFAX_ENABLED ?? 'false').toLowerCase() === 'true';
+  if (env.NODE_ENV === 'production' && enabled) {
     return shadowfaxConfigSchemaStrict.parse(candidate);
   }
 

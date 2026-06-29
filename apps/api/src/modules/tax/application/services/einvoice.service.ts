@@ -147,6 +147,11 @@ export class EInvoiceService {
    * kill switch actually gate provider calls at runtime.
    */
   async isEnabled(): Promise<boolean> {
+    // MVP-launch defer — EINVOICE_PROVIDER=disabled turns the feature off at
+    // the boot layer (no NIC IRP creds). Report disabled regardless of the
+    // tax-config flag so generation is always skipped. Defence-in-depth: the
+    // disabled provider also refuses if reached.
+    if (this.provider.name === 'disabled') return false;
     if (!this.taxConfig) return true;
     try {
       return await this.taxConfig.getBoolean('einvoice_enabled' as any, false);

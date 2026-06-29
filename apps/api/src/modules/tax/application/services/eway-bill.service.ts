@@ -173,6 +173,12 @@ export class EWayBillService {
    * undefined (unit-test mocks), keeping the default-on behaviour.
    */
   async isEnabled(): Promise<boolean> {
+    // MVP-launch defer — EWAY_BILL_PROVIDER=disabled turns the feature off at
+    // the boot layer (no NIC creds). Report disabled WITHOUT a config read so
+    // generation is skipped and canShip() does not block dispatch. Operators
+    // handle the occasional >₹50k EWB manually on the NIC portal until NIC is
+    // wired. Takes precedence over the tax-config flag.
+    if (this.provider.name === 'disabled') return false;
     // getBoolean returns the `true` fallback for a missing config row, so the
     // only way this throws is a hard config-store failure — which we let
     // PROPAGATE (fail-loud) rather than swallow. Swallowing to `true` would
@@ -1257,6 +1263,19 @@ export class EWayBillService {
    * transition in orders.service.ts so the gate is actually enforced.
    */
   async canShip(subOrderId: string): Promise<{ allowed: boolean; reason: string }> {
+    // MVP-launch defer — EWAY_BILL_PROVIDER=disabled means the platform has no
+    // EWB capability at all (no NIC creds), so it must NOT block dispatch: the
+    // operator generates any required >₹50k EWB manually on the NIC portal.
+    // This is scoped to the boot-layer `disabled` provider ONLY — the
+    // operational `eway_bill_enabled=false` kill switch deliberately keeps
+    // blocking REQUIRED rows (forcing an audited per-ship override), so it
+    // falls through to the normal logic below.
+    if (this.provider.name === 'disabled') {
+      return {
+        allowed: true,
+        reason: 'E-way-bill is disabled for this deployment (EWAY_BILL_PROVIDER=disabled) — dispatch not gated; operator handles EWB manually.',
+      };
+    }
     const ewb = await this.prisma.eWayBill.findFirst({
       where: { subOrderId, status: { not: 'CANCELLED' } },
       orderBy: { createdAt: 'desc' },

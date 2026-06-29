@@ -1131,7 +1131,14 @@ export const envSchema = z.object({
   // e-Waybill API (lands in a later phase tied to e-invoicing). Keep
   // 'stub' in dev/test so engineers can exercise the ship-block + retry
   // UI without NIC credentials.
-  EWAY_BILL_PROVIDER: z.enum(['stub', 'nic']).default('stub'),
+  // 'disabled' = e-way-bill generation deferred for this deployment (MVP
+  // launch without NIC GSP credentials). The factory returns a provider that
+  // refuses if ever called; EWayBillService.isEnabled() reports false so
+  // generation is skipped and canShip() never blocks. Mints NOTHING — unlike
+  // 'stub', which is refused in production precisely because it forges EWB
+  // numbers. Operators handle >₹50k EWBs manually on the NIC portal until NIC
+  // is wired (then switch to 'nic').
+  EWAY_BILL_PROVIDER: z.enum(['stub', 'nic', 'disabled']).default('stub'),
   // Phase 89 (2026-05-23) — NIC e-Waybill API credentials. All
   // optional at the env layer (dev uses stub), but the NIC adapter's
   // constructor throws if any are missing when EWAY_BILL_PROVIDER=nic
@@ -1185,7 +1192,13 @@ export const envSchema = z.object({
   // cancel / retry) is exercisable in dev/test without NIC creds.
   // 'nic' wires the real CBIC IRP API (crashes loudly until wired
   // — see TaxModule factory).
-  EINVOICE_PROVIDER: z.enum(['stub', 'nic']).default('stub'),
+  // 'disabled' = e-invoicing (IRN) deferred for this deployment (MVP launch
+  // below the ₹5cr e-invoicing turnover threshold / without NIC IRP creds).
+  // The factory returns a provider that refuses if called; EInvoiceService
+  // reports disabled so no IRN is generated. Mints NOTHING — unlike 'stub',
+  // which is refused in production because it forges IRNs. Switch to 'nic'
+  // once a GSP is onboarded.
+  EINVOICE_PROVIDER: z.enum(['stub', 'nic', 'disabled']).default('stub'),
   // Phase 90 (2026-05-23) — NIC IRP credentials. All optional at
   // env layer (dev uses stub). The NIC adapter's constructor throws
   // if any are missing when EINVOICE_PROVIDER=nic, so a misconfigured
@@ -1201,7 +1214,14 @@ export const envSchema = z.object({
   // exercise the verification UI without GSTN credentials. `sandbox`
   // is reserved for the real GSTN sandbox API (crashes loudly at
   // boot until wired — see TaxModule factory).
-  GSTN_PROVIDER: z.enum(['stub', 'sandbox']).default('stub'),
+  // 'disabled' = GSTN portal verification deferred for this deployment (MVP
+  // launch without GSTN API access). The factory returns a provider whose
+  // verify() reports found=false / UNKNOWN — it never claims a GSTIN is
+  // verified (unlike 'stub', which is refused in production because it marks
+  // GSTINs verified from a local checksum = a false compliance signal).
+  // GSTINs stay unverified for manual admin review until a real provider is
+  // wired.
+  GSTN_PROVIDER: z.enum(['stub', 'sandbox', 'disabled']).default('stub'),
   // Phase 161 (Seller GSTIN Verification audit #13) — re-verify cooldown.
   // 0 (default) = no cooldown; >0 = skip the provider call (return the cached
   // row) when the GSTIN was checked within this many hours, unless force=true.

@@ -104,6 +104,8 @@ import {
 import { StubEInvoiceProvider } from './infrastructure/einvoice/stub-einvoice-provider';
 // Phase 90 (2026-05-23) — Gap #2 NIC IRP adapter.
 import { NicEInvoiceProvider } from './infrastructure/einvoice/nic-einvoice-provider';
+// MVP-launch defer — 'disabled' provider (boots in prod, mints nothing).
+import { DisabledEInvoiceProvider } from './infrastructure/einvoice/disabled-einvoice-provider';
 import {
   TAX_PDF_STORAGE_PROVIDER,
   type TaxPdfStorageProvider,
@@ -118,11 +120,15 @@ import {
 import { StubEWayBillProvider } from './infrastructure/eway-bill/stub-eway-bill-provider';
 // Phase 89 (2026-05-23) — Gap #1 NIC adapter.
 import { NicEWayBillProvider } from './infrastructure/eway-bill/nic-eway-bill-provider';
+// MVP-launch defer — 'disabled' provider (boots in prod, mints nothing).
+import { DisabledEWayBillProvider } from './infrastructure/eway-bill/disabled-eway-bill-provider';
 import {
   GSTN_PROVIDER,
   type GstnProvider,
 } from './infrastructure/gstn/gstn-provider';
 import { StubGstnProvider } from './infrastructure/gstn/stub-gstn-provider';
+// MVP-launch defer — 'disabled' provider (boots in prod, claims nothing).
+import { DisabledGstnProvider } from './infrastructure/gstn/disabled-gstn-provider';
 import { GstnVerificationService } from './application/services/gstn-verification.service';
 import { EnvService } from '../../bootstrap/env/env.service';
 
@@ -150,6 +156,10 @@ const ewayBillProvider = {
         // Phase 89 — Gap #1 closure. Real adapter; refuses to
         // construct without all NIC_* env vars set.
         return new NicEWayBillProvider(env);
+      case 'disabled':
+        // MVP-launch defer — boots in prod, mints nothing. The service
+        // reports the feature disabled so generation/canShip skip it.
+        return new DisabledEWayBillProvider();
       default:
         throw new Error(`Unknown EWAY_BILL_PROVIDER='${choice}'`);
     }
@@ -181,6 +191,10 @@ const einvoiceProvider = {
         return new StubEInvoiceProvider();
       case 'nic':
         return new NicEInvoiceProvider(env);
+      case 'disabled':
+        // MVP-launch defer — boots in prod, mints nothing. The service
+        // reports the feature disabled so IRN generation is skipped.
+        return new DisabledEInvoiceProvider();
       default:
         throw new Error(`Unknown EINVOICE_PROVIDER='${choice}'`);
     }
@@ -216,6 +230,11 @@ const gstnProvider = {
           "GSTN_PROVIDER='sandbox' selected but SandboxGstnProvider is " +
             'not yet implemented. Set GSTN_PROVIDER=stub or wire the GSTN sandbox.',
         );
+      case 'disabled':
+        // MVP-launch defer — boots in prod, claims nothing. verify() returns
+        // found=false/UNKNOWN so GSTINs stay unverified for manual review,
+        // never minting a false "verified" signal the way the stub would.
+        return new DisabledGstnProvider();
       default:
         throw new Error(`Unknown GSTN_PROVIDER='${choice}'`);
     }

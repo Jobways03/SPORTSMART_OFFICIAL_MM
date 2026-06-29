@@ -153,4 +153,16 @@ api_extra_environment = {
   # NOT a requiredOnInProd flag. ⚠️ Apply to STAGING and validate a discounted
   # order (invoice shows discount, refund = net-paid) BEFORE this prod apply.
   DISCOUNT_ALLOCATION_ENABLED = "true"
+
+  # MVP-launch defer — GST e-compliance providers set to 'disabled' (no NIC GSP
+  # / GSTN credentials yet). 'disabled' boots cleanly and mints NOTHING — the
+  # default 'stub' is refused in production because it forges IRN/EWB/GSTIN-
+  # verified signals (CGST §122 fraud). Switch each to 'nic' (+ NIC_*/NIC_IRP_*
+  # creds) / a real GSTN provider once a GSP is onboarded. Until then: EWBs for
+  # >₹50k shipments are generated manually on the NIC portal; invoices carry no
+  # IRN (legal below the ₹5cr e-invoicing turnover threshold); seller GSTINs are
+  # reviewed manually. See apps/api/src/modules/tax/module.ts.
+  EWAY_BILL_PROVIDER = "disabled"
+  EINVOICE_PROVIDER  = "disabled"
+  GSTN_PROVIDER      = "disabled"
 }
