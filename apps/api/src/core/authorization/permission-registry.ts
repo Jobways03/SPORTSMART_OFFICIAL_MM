@@ -411,6 +411,10 @@ export const PERMISSIONS = {
   'franchise.penalty.approve': 'Approve or reject a high-value franchise penalty',
   'franchise.inventory':    'View franchise inventory + ledger',
   'franchise.orders':       'Manage franchise sub-orders',
+  // Franchise analogue of sellers.logistics.register — lets a franchise admin
+  // register the franchise store as a courier pickup location + update its
+  // pickup address (own franchise only).
+  'franchise.logistics':    'Register the franchise store with a logistics partner + update pickup address',
   'franchise.procurement_pricing': 'Set per-franchise procurement cost overrides',
   'franchise.pincodes.read':  'View a franchise pincode coverage map',
   'franchise.pincodes.write': 'Assign / remove franchise pincode coverage',
@@ -745,6 +749,9 @@ export const PERMISSION_RISK: Partial<Record<PermissionKey, RiskLevel>> = {
   'franchise.procurement.approve': 'CRITICAL',
   'franchise.procurement.dispatch': 'HIGH',
   'franchise.procurement.settle': 'CRITICAL',
+  // Courier pickup-location registration (ops, no money) — mirrors
+  // sellers.logistics.register's MEDIUM tier.
+  'franchise.logistics': 'MEDIUM',
   'franchise.pos.report.read': 'MEDIUM',
   // Phase 185 — notification template edits drive customer-facing comms and
   // are a content-fraud / XSS surface → HIGH; dispatch + DLQ ops are HIGH
@@ -1154,6 +1161,7 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<string, readonly PermissionKey[]> =
     'franchise.read', 'franchise.approve', 'franchise.suspend',
     'franchise.finance', 'franchise.finance.read', 'franchise.penalty.approve',
     'franchise.inventory', 'franchise.orders', 'franchise.procurement_pricing',
+    'franchise.logistics',
     'franchise.pincodes.read', 'franchise.pincodes.write',
     'franchise.catalog.approve',
     'franchise.procurement.approve', 'franchise.procurement.dispatch',

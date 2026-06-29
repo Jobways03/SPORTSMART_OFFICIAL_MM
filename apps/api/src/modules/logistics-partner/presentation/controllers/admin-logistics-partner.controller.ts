@@ -20,7 +20,10 @@ import {
   AdminAuthGuard,
   PermissionsGuard,
 } from '../../../../core/guards';
-import { Permissions } from '../../../../core/decorators/permissions.decorator';
+import {
+  Permissions,
+  AnyPermissions,
+} from '../../../../core/decorators/permissions.decorator';
 import { LogisticsFacadePartnersService } from '../../../../integrations/logistics-facade/services/logistics-facade-partners.service';
 import { ListSellerRegistrationsService } from '../../application/services/list-seller-registrations.service';
 import { RegisterSellerWithPartnerService } from '../../application/services/register-seller-with-partner.service';
@@ -71,7 +74,9 @@ export class AdminLogisticsPartnerController {
    */
   @Get('partners')
   @HttpCode(HttpStatus.OK)
-  @Permissions('sellers.read')
+  // Shared courier-capability list (no seller/franchise data) — both seller
+  // admins (sellers.read) and franchise admins (franchise.read) need it.
+  @AnyPermissions('sellers.read', 'franchise.read')
   async listPartners(): Promise<{ success: true; data: ListPartnersResponse }> {
     const result = await this.facadePartners.listPartners();
     if (!result.ok) {
@@ -185,7 +190,7 @@ export class AdminLogisticsPartnerController {
 
   @Get('franchises/:franchiseId/registrations')
   @HttpCode(HttpStatus.OK)
-  @Permissions('sellers.read')
+  @Permissions('franchise.read')
   async listForFranchise(
     @Param('franchiseId') franchiseId: string,
   ): Promise<{ success: true; data: ListSellerRegistrationsResponse }> {
@@ -206,7 +211,7 @@ export class AdminLogisticsPartnerController {
 
   @Post('franchises/:franchiseId/partners/:code/register')
   @HttpCode(HttpStatus.OK)
-  @Permissions('sellers.logistics.register')
+  @Permissions('franchise.logistics')
   @UsePipes()
   async registerFranchise(
     @Param('franchiseId') franchiseId: string,
@@ -226,7 +231,7 @@ export class AdminLogisticsPartnerController {
 
   @Post('franchises/:franchiseId/partners/:code/update-address')
   @HttpCode(HttpStatus.OK)
-  @Permissions('sellers.logistics.register')
+  @Permissions('franchise.logistics')
   @UsePipes()
   async updateFranchiseAddress(
     @Param('franchiseId') franchiseId: string,

@@ -9,7 +9,10 @@ import { Reflector } from '@nestjs/core';
 import { EnvService } from '../../bootstrap/env/env.service';
 import { PrismaService } from '../../bootstrap/database/prisma.service';
 import { ForbiddenAppException } from '../exceptions';
-import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
+import {
+  PERMISSIONS_KEY,
+  ANY_PERMISSIONS_KEY,
+} from '../decorators/permissions.decorator';
 import { AuthorizationAuditService } from '../authorization/authorization-audit.service';
 import { AuthzModeService } from '../authorization/authz-mode.service';
 import { AuditPublicFacade } from '../../modules/audit/application/facades/audit-public.facade';
@@ -64,22 +67,40 @@ export class PermissionsGuard implements CanActivate {
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
-    const requiredPermissions = this.reflector.getAllAndOverride<string[]>(
-      PERMISSIONS_KEY,
-      [context.getHandler(), context.getClass()],
-    );
-    if (!requiredPermissions || requiredPermissions.length === 0) {
+    // AND-gate: the user must hold EVERY one of these (@Permissions).
+    const requiredAll =
+      this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? [];
+    // OR-gate: the user must hold ANY ONE of these (@AnyPermissions) — shared,
+    // low-sensitivity routes used by multiple admin personas.
+    const requiredAny =
+      this.reflector.getAllAndOverride<string[]>(ANY_PERMISSIONS_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]) ?? [];
+    if (requiredAll.length === 0 && requiredAny.length === 0) {
       return true;
     }
+    // Combined set used downstream for audit logging + CRITICAL step-up
+    // classification; the granted check below keeps the AND vs OR distinction.
+    const requiredPermissions = [...requiredAll, ...requiredAny];
 
     const req = context.switchToHttp().getRequest();
     const user = req.user as
       | { id?: string; roles?: string[]; permissions?: string[] }
       | undefined;
 
-    const granted =
-      !!user?.permissions &&
-      requiredPermissions.every((perm) => user.permissions!.includes(perm));
+    const everyOk =
+      requiredAll.length === 0 ||
+      (!!user?.permissions &&
+        requiredAll.every((perm) => user.permissions!.includes(perm)));
+    const anyOk =
+      requiredAny.length === 0 ||
+      (!!user?.permissions &&
+        requiredAny.some((perm) => user.permissions!.includes(perm)));
+    const granted = everyOk && anyOk;
 
     const routeLabel = this.routeLabel(context);
     const adminId = req.adminId ?? user?.id ?? null;
