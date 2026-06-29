@@ -98,23 +98,26 @@ enable_vpc_endpoints = false
 # 30-day secret recovery window (prod safety).
 secret_recovery_window_days = 30
 
-# Keep api + customer storefront at 2 tasks (rolling deploys + crash
-# redundancy), admin storefront at 1, and spin the 8 seldom-hit seller/
-# franchise/affiliate portals to 0 — scale on demand:
-#   aws ecs update-service --cluster sportsmart-production --service <svc> --desired-count 1
-# 13 always-on tasks -> 5; autoscale burst capped at 3 (api + web-storefront).
+# api + customer storefront at 2 tasks (rolling deploys + crash redundancy),
+# every other service at 1. All 8 seller/franchise/affiliate portals were
+# turned ON (0 -> 1) 2026-06-29 so all production URLs are live.
+# NOTE: desired_count is ignore_changes'd on the ECS service (ecs.tf) and the
+# portals have NO autoscaling target (only api + web-storefront do, see
+# autoscaling.tf), so changing these values does NOT alter a running service —
+# this block only sets the INITIAL count at create. To change a live count:
+#   aws ecs update-service --cluster sportsmart-production --service <svc> --desired-count N
 service_desired_count = {
   api                     = 2
   web-storefront          = 2
   web-admin-storefront    = 1
-  web-d2c-seller          = 0
-  web-d2c-seller-admin    = 0
-  web-retail-seller       = 0
-  web-retail-seller-admin = 0
-  web-franchise           = 0
-  web-franchise-admin     = 0
-  web-affiliate           = 0
-  web-affiliate-admin     = 0
+  web-d2c-seller          = 1
+  web-d2c-seller-admin    = 1
+  web-retail-seller       = 1
+  web-retail-seller-admin = 1
+  web-franchise           = 1
+  web-franchise-admin     = 1
+  web-affiliate           = 1
+  web-affiliate-admin     = 1
 }
 autoscaling_max_count = 3
 
