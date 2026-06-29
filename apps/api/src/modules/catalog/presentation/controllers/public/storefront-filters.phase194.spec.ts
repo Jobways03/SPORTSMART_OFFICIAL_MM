@@ -41,6 +41,10 @@ describe('StorefrontFiltersController — Phase 194 faceting', () => {
         },
       ]),
       findCollectionProductCategoryIds: jest.fn().mockResolvedValue([]),
+      // In-stock predicate used by buildBaseConditions (seller OR franchise).
+      inStockCondition: jest.fn().mockReturnValue(
+        Prisma.sql`(EXISTS (SELECT 1 FROM seller_product_mappings spm WHERE spm.product_id = p.id) OR EXISTS (SELECT 1 FROM franchise_catalog_mappings fcm WHERE fcm.product_id = p.id))`,
+      ),
       computeBrandFacets: jest.fn().mockResolvedValue([{ value: 'b1', label: 'Nike', count: 5 }]),
       computePriceRange: jest.fn().mockResolvedValue({ min: '500', max: '2000' }),
       computeAvailabilityFacets: jest.fn().mockResolvedValue({ in_stock: 10, out_of_stock: 2 }),

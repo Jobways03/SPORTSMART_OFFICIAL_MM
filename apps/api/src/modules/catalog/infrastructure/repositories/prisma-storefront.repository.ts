@@ -12,6 +12,90 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
 
   constructor(private readonly prisma: PrismaService) {}
 
+  // ── Storefront availability (seller + franchise) ────────────────────
+  // A product is purchasable on the storefront if EITHER a D2C/retail seller
+  // OR an active franchise has an approved, listed, in-stock mapping. Before
+  // this, the storefront only consulted `seller_product_mappings`, so
+  // franchise-tier products (which live in `franchise_catalog_mappings` +
+  // `franchise_stock`) were structurally invisible despite being active,
+  // listed, and in stock. The catalog lists nationwide exactly like seller
+  // products — pincode serviceability is resolved later by the allocation
+  // cascade at checkout, not by hiding products from the listing.
+  //
+  // All these fragments assume the outer query aliases `products` as `p`.
+
+  private sellerInStockExists(): Prisma.Sql {
+    return Prisma.sql`EXISTS (
+      SELECT 1 FROM seller_product_mappings spm
+      WHERE spm.product_id = p.id AND spm.is_active = true
+        AND spm.approval_status = 'APPROVED' AND (spm.stock_qty - spm.reserved_qty) > 0
+    )`;
+  }
+
+  private franchiseInStockExists(): Prisma.Sql {
+    return Prisma.sql`EXISTS (
+      SELECT 1 FROM franchise_catalog_mappings fcm
+      JOIN franchise_stock fs ON fs.franchise_id = fcm.franchise_id
+        AND fs.product_id = fcm.product_id
+        AND fs.variant_id IS NOT DISTINCT FROM fcm.variant_id
+      JOIN franchise_partners fp ON fp.id = fcm.franchise_id
+      WHERE fcm.product_id = p.id AND fcm.is_active = true
+        AND fcm.is_listed_for_online_fulfillment = true
+        AND fcm.approval_status = 'APPROVED' AND fp.status = 'ACTIVE'
+        AND fs.available_qty > 0
+    )`;
+  }
+
+  /** Product is in stock from at least one seller OR franchise source. */
+  private inStockExists(): Prisma.Sql {
+    return Prisma.sql`(${this.sellerInStockExists()} OR ${this.franchiseInStockExists()})`;
+  }
+
+  /**
+   * Public accessor for the in-stock predicate so the storefront-filters
+   * controller's facet base-conditions use the SAME seller-OR-franchise gate
+   * as the listing (otherwise franchise products would be missing from the
+   * brand/price/availability sidebar counts). Returns Prisma.Sql.
+   */
+  inStockCondition(): Prisma.Sql {
+    return this.inStockExists();
+  }
+
+  /** Product is out of stock from BOTH seller and franchise sources. */
+  private outOfStockExists(): Prisma.Sql {
+    return Prisma.sql`(NOT ${this.sellerInStockExists()} AND NOT ${this.franchiseInStockExists()})`;
+  }
+
+  /**
+   * `LEFT JOIN LATERAL (...) agg ON true` computing per-product
+   * total_available_stock + seller_count (distinct sources) across BOTH
+   * seller_product_mappings and active-franchise franchise_stock. Used by the
+   * listing + related cards so they show real franchise stock, not 0.
+   */
+  private availabilityAggLateral(): Prisma.Sql {
+    return Prisma.sql`LEFT JOIN LATERAL (
+      SELECT COALESCE(SUM(available), 0)::int AS total_available_stock,
+        COUNT(DISTINCT source_id)::int AS seller_count
+      FROM (
+        SELECT spm.seller_id AS source_id, GREATEST(spm.stock_qty - spm.reserved_qty, 0) AS available
+        FROM seller_product_mappings spm
+        WHERE spm.product_id = p.id AND spm.is_active = true
+          AND spm.approval_status = 'APPROVED' AND (spm.stock_qty - spm.reserved_qty) > 0
+        UNION ALL
+        SELECT fcm.franchise_id AS source_id, GREATEST(fs.available_qty, 0) AS available
+        FROM franchise_catalog_mappings fcm
+        JOIN franchise_stock fs ON fs.franchise_id = fcm.franchise_id
+          AND fs.product_id = fcm.product_id
+          AND fs.variant_id IS NOT DISTINCT FROM fcm.variant_id
+        JOIN franchise_partners fp ON fp.id = fcm.franchise_id
+        WHERE fcm.product_id = p.id AND fcm.is_active = true
+          AND fcm.is_listed_for_online_fulfillment = true
+          AND fcm.approval_status = 'APPROVED' AND fp.status = 'ACTIVE'
+          AND fs.available_qty > 0
+      ) sources
+    ) agg ON true`;
+  }
+
   async findProductsPaginated(params: StorefrontListParams): Promise<{ products: any[]; total: number }> {
     const { page, limit, search, categoryId, brandId, collectionId, sortBy, minPrice, maxPrice, tag, filterObj } = params;
     const sport = (params as { sport?: string }).sport;
@@ -30,13 +114,9 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
     const brandFilter = filterObj?.brand || null;
 
     if (availabilityFilter === 'out_of_stock') {
-      conditions.push(Prisma.sql`NOT EXISTS (
-        SELECT 1 FROM seller_product_mappings spm WHERE spm.product_id = p.id AND spm.is_active = true AND spm.approval_status = 'APPROVED' AND (spm.stock_qty - spm.reserved_qty) > 0
-      )`);
+      conditions.push(this.outOfStockExists());
     } else {
-      conditions.push(Prisma.sql`EXISTS (
-        SELECT 1 FROM seller_product_mappings spm WHERE spm.product_id = p.id AND spm.is_active = true AND spm.approval_status = 'APPROVED' AND (spm.stock_qty - spm.reserved_qty) > 0
-      )`);
+      conditions.push(this.inStockExists());
     }
 
     // brandFilter arrives as a comma-joined list of brand ids (the storefront
@@ -212,12 +292,7 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
       FROM products p
       LEFT JOIN categories c ON c.id = p.category_id
       LEFT JOIN brands b ON b.id = p.brand_id
-      LEFT JOIN LATERAL (
-        SELECT SUM(GREATEST(spm.stock_qty - spm.reserved_qty, 0))::int AS total_available_stock,
-          COUNT(DISTINCT spm.seller_id)::int AS seller_count
-        FROM seller_product_mappings spm
-        WHERE spm.product_id = p.id AND spm.is_active = true AND spm.approval_status = 'APPROVED' AND (spm.stock_qty - spm.reserved_qty) > 0
-      ) agg ON true
+      ${this.availabilityAggLateral()}
       LEFT JOIN LATERAL (
         SELECT COUNT(*)::int AS variant_count FROM product_variants pv WHERE pv.product_id = p.id AND pv.is_deleted = false
       ) vc ON true
@@ -240,7 +315,7 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
       SELECT DISTINCT p.title, p.slug FROM products p
       WHERE p.is_deleted = false AND p.status = 'ACTIVE' AND p.moderation_status = 'APPROVED'
         AND (p.title ILIKE ${searchPattern} OR p.product_code ILIKE ${searchPattern})
-        AND EXISTS (SELECT 1 FROM seller_product_mappings spm WHERE spm.product_id = p.id AND spm.is_active = true AND spm.approval_status = 'APPROVED' AND (spm.stock_qty - spm.reserved_qty) > 0)
+        AND ${this.inStockExists()}
       ORDER BY p.title ASC LIMIT 5
     `);
   }
@@ -327,32 +402,42 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
       FROM products p
       LEFT JOIN brands b ON b.id = p.brand_id
       LEFT JOIN categories c ON c.id = p.category_id
-      LEFT JOIN LATERAL (
-        SELECT SUM(GREATEST(spm.stock_qty - spm.reserved_qty, 0))::int AS total_available_stock,
-          COUNT(DISTINCT spm.seller_id)::int AS seller_count
-        FROM seller_product_mappings spm
-        WHERE spm.product_id = p.id AND spm.is_active = true
-          AND spm.approval_status = 'APPROVED' AND (spm.stock_qty - spm.reserved_qty) > 0
-      ) agg ON true
+      ${this.availabilityAggLateral()}
       WHERE p.id <> ${productId}
         AND p.is_deleted = false AND p.status = 'ACTIVE' AND p.moderation_status = 'APPROVED'
         AND (${Prisma.join(relevance, ' OR ')})
-        AND EXISTS (
-          SELECT 1 FROM seller_product_mappings spm
-          WHERE spm.product_id = p.id AND spm.is_active = true
-            AND spm.approval_status = 'APPROVED'
-            AND (spm.stock_qty - spm.reserved_qty) > 0
-        )
+        AND ${this.inStockExists()}
       ORDER BY (CASE WHEN ${categoryId ? Prisma.sql`p.category_id = ${categoryId}` : Prisma.sql`false`} THEN 0 ELSE 1 END), p.created_at DESC
       LIMIT ${limit}
     `);
   }
 
   async findSellerMappingsForProduct(productId: string): Promise<any[]> {
-    return this.prisma.sellerProductMapping.findMany({
+    const sellerMappings = await this.prisma.sellerProductMapping.findMany({
       where: { productId, isActive: true, approvalStatus: 'APPROVED' },
       select: { variantId: true, stockQty: true, reservedQty: true, sellerId: true },
     });
+    // Franchise availability surfaced as seller-shaped rows so the PDP's stock
+    // aggregate (stockQty - reservedQty) counts franchise stock too. Franchise
+    // `available_qty` is already net of reservations, so reservedQty is 0 here;
+    // franchise_id stands in as the source id for the seller-count. Same
+    // active+listed+approved+in-stock gate as the listing/facets.
+    const franchiseRows = await this.prisma.$queryRaw<
+      { variantId: string | null; stockQty: number; reservedQty: number; sellerId: string }[]
+    >(Prisma.sql`
+      SELECT fcm.variant_id AS "variantId", fs.available_qty AS "stockQty",
+        0 AS "reservedQty", fcm.franchise_id AS "sellerId"
+      FROM franchise_catalog_mappings fcm
+      JOIN franchise_stock fs ON fs.franchise_id = fcm.franchise_id
+        AND fs.product_id = fcm.product_id
+        AND fs.variant_id IS NOT DISTINCT FROM fcm.variant_id
+      JOIN franchise_partners fp ON fp.id = fcm.franchise_id
+      WHERE fcm.product_id = ${productId} AND fcm.is_active = true
+        AND fcm.is_listed_for_online_fulfillment = true
+        AND fcm.approval_status = 'APPROVED' AND fp.status = 'ACTIVE'
+        AND fs.available_qty > 0
+    `);
+    return [...sellerMappings, ...franchiseRows];
   }
 
   async findFilterConfigs(where: any): Promise<any[]> {
@@ -572,18 +657,8 @@ export class PrismaStorefrontRepository implements IStorefrontRepository {
   async computeAvailabilityFacets(baseConditions: Prisma.Sql[]): Promise<{ in_stock: number; out_of_stock: number }> {
     const results = await this.prisma.$queryRaw<{ in_stock: number; out_of_stock: number }[]>(Prisma.sql`
       SELECT
-        COUNT(DISTINCT CASE WHEN EXISTS (
-          SELECT 1 FROM seller_product_mappings spm
-          WHERE spm.product_id = p.id AND spm.is_active = true
-            AND spm.approval_status = 'APPROVED'
-            AND (spm.stock_qty - spm.reserved_qty) > 0
-        ) THEN p.id END)::int AS in_stock,
-        COUNT(DISTINCT CASE WHEN NOT EXISTS (
-          SELECT 1 FROM seller_product_mappings spm
-          WHERE spm.product_id = p.id AND spm.is_active = true
-            AND spm.approval_status = 'APPROVED'
-            AND (spm.stock_qty - spm.reserved_qty) > 0
-        ) THEN p.id END)::int AS out_of_stock
+        COUNT(DISTINCT CASE WHEN ${this.inStockExists()} THEN p.id END)::int AS in_stock,
+        COUNT(DISTINCT CASE WHEN ${this.outOfStockExists()} THEN p.id END)::int AS out_of_stock
       FROM products p
       WHERE p.is_deleted = false AND p.status = 'ACTIVE' AND p.moderation_status = 'APPROVED'
       ${baseConditions.length > 2 ? Prisma.sql`AND ${Prisma.join(baseConditions.slice(2), ' AND ')}` : Prisma.sql``}

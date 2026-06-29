@@ -51,6 +51,13 @@ export interface IStorefrontRepository {
   // ── Browse catalog for sellers ──
   findBrowsableProducts(sellerId: string, page: number, limit: number, search?: string, categoryId?: string, brandId?: string): Promise<{ products: any[]; total: number }>;
 
+  // Storefront in-stock predicate (Prisma.Sql) — a product is purchasable if a
+  // seller OR an active franchise has an approved, listed, in-stock mapping.
+  // Single source of truth so the facet base-conditions stay consistent with
+  // the listing/detail availability gate. Returns Prisma.Sql (typed `any` here
+  // to keep this domain interface free of the Prisma import).
+  inStockCondition(): any;
+
   // ── Storefront filter faceted counts (raw SQL) ──
   computeBrandFacets(baseConditions: any[], otherConditions: any[]): Promise<{ value: string; label: string; count: number }[]>;
   // Phase 194 (#13) — price bounds are money: returned as Decimal-precise

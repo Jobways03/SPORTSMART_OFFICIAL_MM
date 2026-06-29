@@ -359,13 +359,9 @@ export class StorefrontFiltersController {
       // Phase 192 (#2) — facets must only count publicly-visible (approved)
       // products, consistent with the listing query.
       Prisma.sql`p.moderation_status = 'APPROVED'`,
-      Prisma.sql`EXISTS (
-        SELECT 1 FROM seller_product_mappings spm
-        WHERE spm.product_id = p.id
-          AND spm.is_active = true
-          AND spm.approval_status = 'APPROVED'
-          AND (spm.stock_qty - spm.reserved_qty) > 0
-      )`,
+      // In-stock from a seller OR an active franchise — same predicate the
+      // listing uses, so franchise products are counted in the sidebar facets.
+      this.storefrontRepo.inStockCondition(),
     ];
 
     if (categoryId) conditions.push(Prisma.sql`p.category_id = ${categoryId}`);
