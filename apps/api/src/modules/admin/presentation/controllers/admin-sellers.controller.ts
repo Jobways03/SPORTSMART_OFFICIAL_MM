@@ -326,7 +326,12 @@ export class AdminSellersController {
 
   @Post(':sellerId/impersonate')
   @HttpCode(HttpStatus.OK)
-  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  // Gated by @Permissions('sellers.approve') (effective perms = primary role ∪
+  // custom roles) + step-up, NOT by a primary-role allowlist. Functional
+  // seller-type admins (d2c/retail admin portals) use primary role STAFF + a
+  // custom role, so the old @Roles('SUPER_ADMIN','SELLER_ADMIN') wrongly 403'd
+  // them ("Forbidden resource") even with sellers.approve. SELLER_SUPPORT has
+  // only read, so it still can't impersonate.
   @Permissions('sellers.approve')
   // Phase 26 — impersonation grants the admin a temporary seller token
   // with the seller's full surface, including bank/KYC pages. Treat
@@ -373,7 +378,8 @@ export class AdminSellersController {
    */
   @Post('impersonations/:jti/end')
   @HttpCode(HttpStatus.OK)
-  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  // Permission-gated (not primary-role), same rationale as the start route —
+  // an admin who could start impersonation must be able to end it.
   @Permissions('sellers.approve')
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   async endImpersonation(

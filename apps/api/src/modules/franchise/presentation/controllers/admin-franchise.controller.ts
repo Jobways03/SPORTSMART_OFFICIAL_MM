@@ -522,12 +522,14 @@ export class AdminFranchiseController {
 
   @Post(':franchiseId/impersonate')
   @HttpCode(HttpStatus.OK)
-  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
-  // Phase 28 (2026-05-21) — parity with the seller impersonate route.
-  // The class-level @Permissions('franchise.read') is overlaid with
-  // 'franchise.approve' so SELLER_SUPPORT (which has read) can't
-  // impersonate; only SELLER_ADMIN + SUPER_ADMIN (which have
-  // approve) reach this surface.
+  // Gated by @Permissions('franchise.approve') (effective perms = primary role
+  // ∪ custom roles) + step-up, NOT by a primary-role allowlist. Functional
+  // seller-type admins (the franchise/d2c/retail admin portals) use primary
+  // role STAFF + a custom role for their perms, so the old
+  // @Roles('SUPER_ADMIN','SELLER_ADMIN') wrongly 403'd them ("Forbidden
+  // resource") even when their custom role granted franchise.approve. The
+  // approve permission IS the authority gate — SELLER_SUPPORT has only read,
+  // so it still can't impersonate.
   @Permissions('franchise.approve')
   // Phase 28 — step-up + throttle matching seller side.
   @RequiresStepUp({ maxAgeMs: 60_000 })
@@ -558,7 +560,8 @@ export class AdminFranchiseController {
    */
   @Post('impersonations/:jti/end')
   @HttpCode(HttpStatus.OK)
-  @Roles('SUPER_ADMIN', 'SELLER_ADMIN')
+  // Permission-gated (not primary-role), same rationale as the start route —
+  // an admin who could start impersonation must be able to end it.
   @Permissions('franchise.approve')
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
   async endImpersonation(
