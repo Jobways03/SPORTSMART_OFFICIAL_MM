@@ -46,7 +46,8 @@ describe('PrismaCartRepository — Phase 196', () => {
       .fn()
       .mockResolvedValueOnce([{ productId: 'p1', variantId: 'v1', _sum: { stockQty: 10, reservedQty: 3 } }])
       .mockResolvedValueOnce([{ productId: 'p2', _sum: { stockQty: 5, reservedQty: 0 } }]);
-    const prisma: any = { sellerProductMapping: { groupBy } };
+    // franchiseAvailableBatch runs raw SUM queries; no franchise stock here.
+    const prisma: any = { sellerProductMapping: { groupBy }, $queryRaw: jest.fn().mockResolvedValue([]) };
     const repo = new PrismaCartRepository(prisma);
     const map = await repo.getAggregatedStockBatch([
       { productId: 'p1', variantId: 'v1' },

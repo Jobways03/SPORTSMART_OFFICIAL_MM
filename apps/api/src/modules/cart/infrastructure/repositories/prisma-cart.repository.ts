@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../../../bootstrap/database/prisma.service';
 import {
   CartRepository,
@@ -9,6 +10,88 @@ import {
 @Injectable()
 export class PrismaCartRepository implements CartRepository {
   constructor(private readonly prisma: PrismaService) {}
+
+  // ── Franchise availability (cart/checkout stock gate) ───────────────
+  // The cart's available-stock is computed from seller_product_mappings only,
+  // so a franchise-tier product (stock in franchise_stock) reads as 0 and
+  // can't be added ("Insufficient stock. Available: 0"). These helpers sum
+  // franchise_stock.available_qty for ACTIVE franchises with an APPROVED +
+  // is_active + is_listed_for_online_fulfillment catalog mapping — the same
+  // gate the storefront catalog uses — so it's ADDED on top of the seller
+  // total. (D2C + retail sellers are unaffected; they keep flowing through the
+  // seller_product_mappings aggregate.) Order fulfillment routing to the right
+  // source already happens in the franchise-aware allocation cascade.
+  //
+  // variantId === null sums across all of the product's franchise stock,
+  // matching the seller aggregate's product-level behaviour.
+
+  private async franchiseAvailable(
+    productId: string,
+    variantId: string | null,
+    tx?: Prisma.TransactionClient,
+  ): Promise<number> {
+    const db = (tx ?? this.prisma) as Prisma.TransactionClient;
+    const rows = await db.$queryRaw<{ available: number }[]>(Prisma.sql`
+      SELECT COALESCE(SUM(fs.available_qty), 0)::int AS available
+      FROM franchise_catalog_mappings fcm
+      JOIN franchise_stock fs ON fs.franchise_id = fcm.franchise_id
+        AND fs.product_id = fcm.product_id
+        AND fs.variant_id IS NOT DISTINCT FROM fcm.variant_id
+      JOIN franchise_partners fp ON fp.id = fcm.franchise_id
+      WHERE fcm.product_id = ${productId}
+        ${variantId ? Prisma.sql`AND fcm.variant_id = ${variantId}` : Prisma.empty}
+        AND fcm.is_active = true
+        AND fcm.is_listed_for_online_fulfillment = true
+        AND fcm.approval_status = 'APPROVED'
+        AND fp.status = 'ACTIVE'
+    `);
+    return Number(rows[0]?.available ?? 0);
+  }
+
+  /** Batched franchise availability → Map keyed `${productId}:${variantId ?? 'null'}`. */
+  private async franchiseAvailableBatch(
+    variantIds: string[],
+    baseProductIds: string[],
+  ): Promise<Map<string, number>> {
+    const map = new Map<string, number>();
+    if (variantIds.length > 0) {
+      const rows = await this.prisma.$queryRaw<
+        { productId: string; variantId: string; available: number }[]
+      >(Prisma.sql`
+        SELECT fcm.product_id AS "productId", fcm.variant_id AS "variantId",
+          COALESCE(SUM(fs.available_qty), 0)::int AS available
+        FROM franchise_catalog_mappings fcm
+        JOIN franchise_stock fs ON fs.franchise_id = fcm.franchise_id
+          AND fs.product_id = fcm.product_id
+          AND fs.variant_id IS NOT DISTINCT FROM fcm.variant_id
+        JOIN franchise_partners fp ON fp.id = fcm.franchise_id
+        WHERE fcm.variant_id IN (${Prisma.join(variantIds)})
+          AND fcm.is_active = true AND fcm.is_listed_for_online_fulfillment = true
+          AND fcm.approval_status = 'APPROVED' AND fp.status = 'ACTIVE'
+        GROUP BY fcm.product_id, fcm.variant_id
+      `);
+      for (const r of rows) map.set(`${r.productId}:${r.variantId}`, Number(r.available));
+    }
+    if (baseProductIds.length > 0) {
+      const rows = await this.prisma.$queryRaw<
+        { productId: string; available: number }[]
+      >(Prisma.sql`
+        SELECT fcm.product_id AS "productId",
+          COALESCE(SUM(fs.available_qty), 0)::int AS available
+        FROM franchise_catalog_mappings fcm
+        JOIN franchise_stock fs ON fs.franchise_id = fcm.franchise_id
+          AND fs.product_id = fcm.product_id
+          AND fs.variant_id IS NOT DISTINCT FROM fcm.variant_id
+        JOIN franchise_partners fp ON fp.id = fcm.franchise_id
+        WHERE fcm.product_id IN (${Prisma.join(baseProductIds)})
+          AND fcm.is_active = true AND fcm.is_listed_for_online_fulfillment = true
+          AND fcm.approval_status = 'APPROVED' AND fp.status = 'ACTIVE'
+        GROUP BY fcm.product_id
+      `);
+      for (const r of rows) map.set(`${r.productId}:null`, Number(r.available));
+    }
+    return map;
+  }
 
   async findByCustomerId(customerId: string): Promise<CartWithItems | null> {
     // Phase 61 (2026-05-22) — enriched projection (audit Gaps #2 +
@@ -168,7 +251,9 @@ export class PrismaCartRepository implements CartRepository {
         where,
         _sum: { stockQty: true, reservedQty: true },
       });
-      const available = Math.max(0, (agg._sum.stockQty ?? 0) - (agg._sum.reservedQty ?? 0));
+      const sellerAvailable = Math.max(0, (agg._sum.stockQty ?? 0) - (agg._sum.reservedQty ?? 0));
+      const available =
+        sellerAvailable + (await this.franchiseAvailable(productId, variantId, tx));
       if (available < quantity) {
         throw Object.assign(
           new Error(`Insufficient stock. Available: ${available}, Requested: ${quantity}`),
@@ -211,7 +296,10 @@ export class PrismaCartRepository implements CartRepository {
 
     const totalStock = result._sum.stockQty ?? 0;
     const totalReserved = result._sum.reservedQty ?? 0;
-    return Math.max(0, totalStock - totalReserved);
+    const sellerAvailable = Math.max(0, totalStock - totalReserved);
+    // Franchise stock counts too — otherwise a franchise-only product reads 0.
+    const franchiseAvailable = await this.franchiseAvailable(productId, variantId ?? null);
+    return sellerAvailable + franchiseAvailable;
   }
 
   /**
@@ -252,6 +340,12 @@ export class PrismaCartRepository implements CartRepository {
         const avail = Math.max(0, (r._sum.stockQty ?? 0) - (r._sum.reservedQty ?? 0));
         map.set(`${r.productId}:null`, avail);
       }
+    }
+    // Add franchise stock on top of the seller totals (same keys), so
+    // franchise-only lines aren't shown as out of stock in the cart.
+    const franchiseMap = await this.franchiseAvailableBatch(variantIds, baseProductIds);
+    for (const [key, franchiseAvail] of franchiseMap) {
+      map.set(key, (map.get(key) ?? 0) + franchiseAvail);
     }
     return map;
   }
@@ -509,7 +603,9 @@ export class PrismaCartRepository implements CartRepository {
       });
       const totalStock = agg._sum.stockQty ?? 0;
       const totalReserved = agg._sum.reservedQty ?? 0;
-      const availableStock = Math.max(0, totalStock - totalReserved);
+      const availableStock =
+        Math.max(0, totalStock - totalReserved) +
+        (await this.franchiseAvailable(productId, variantId, tx));
 
       if (availableStock < quantity) {
         return { moved: false, availableStock };
