@@ -133,4 +133,32 @@ describe('PermissionsGuard', () => {
     );
     await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenAppException);
   });
+
+  // @AnyPermissions (OR semantics) — used for shared, low-sensitivity routes
+  // (e.g. the logistics courier list both seller AND franchise admins read).
+  it('@AnyPermissions allows when actor has ANY ONE of the listed perms', async () => {
+    const { guard, reflector } = buildGuard({ strict: true });
+    reflector.getAllAndOverride
+      .mockReturnValueOnce(undefined) // PERMISSIONS_KEY — no AND-gate
+      .mockReturnValueOnce(['sellers.read', 'franchise.read']) // ANY_PERMISSIONS_KEY
+      .mockReturnValueOnce(undefined); // REQUIRES_STEP_UP_METADATA_KEY
+    const { ctx } = makeCtx(
+      // Franchise admin lacks sellers.read but has franchise.read → allowed.
+      { id: 'fa', roles: ['FRANCHISE_ADMIN'], permissions: ['franchise.read'] },
+      undefined,
+    );
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+  });
+
+  it('@AnyPermissions denies when actor has NONE of the listed perms (strict)', async () => {
+    const { guard, reflector } = buildGuard({ strict: true });
+    reflector.getAllAndOverride
+      .mockReturnValueOnce(undefined) // PERMISSIONS_KEY
+      .mockReturnValueOnce(['sellers.read', 'franchise.read']); // ANY_PERMISSIONS_KEY
+    const { ctx } = makeCtx(
+      { id: 'x', roles: ['SUPPORT'], permissions: ['orders.read'] },
+      undefined,
+    );
+    await expect(guard.canActivate(ctx)).rejects.toThrow(ForbiddenAppException);
+  });
 });
