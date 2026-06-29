@@ -99,8 +99,9 @@ enable_vpc_endpoints = false
 secret_recovery_window_days = 30
 
 # api + customer storefront at 2 tasks (rolling deploys + crash redundancy),
-# every other service at 1. All 8 seller/franchise/affiliate portals were
-# turned ON (0 -> 1) 2026-06-29 so all production URLs are live.
+# the d2c/retail/franchise seller+admin portals at 1 (turned ON 2026-06-29 so
+# their URLs are live), and the 2 affiliate portals at 0 (turned OFF 2026-06-29
+# — not in use yet; scale to 1 when the affiliate programme launches).
 # NOTE: desired_count is ignore_changes'd on the ECS service (ecs.tf) and the
 # portals have NO autoscaling target (only api + web-storefront do, see
 # autoscaling.tf), so changing these values does NOT alter a running service —
@@ -116,8 +117,8 @@ service_desired_count = {
   web-retail-seller-admin = 1
   web-franchise           = 1
   web-franchise-admin     = 1
-  web-affiliate           = 1
-  web-affiliate-admin     = 1
+  web-affiliate           = 0
+  web-affiliate-admin     = 0
 }
 autoscaling_max_count = 3
 
