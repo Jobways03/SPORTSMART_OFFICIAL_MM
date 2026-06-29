@@ -66,6 +66,24 @@ export type UpdateFranchiseProfilePayload = Partial<Pick<
   | 'warehouseCountry'
 >>;
 
+export interface FranchiseBankStatus {
+  hasBankDetails: boolean;
+  details?: {
+    accountHolderName: string;
+    accountNumberLast4: string;
+    ifscCode: string;
+    bankName: string | null;
+  };
+}
+
+export interface UpdateBankDetailsPayload {
+  accountHolderName: string;
+  accountNumber: string;
+  ifscCode: string;
+  bankName: string;
+  upiVpa?: string;
+}
+
 export const franchiseProfileService = {
   getProfile(): Promise<ApiResponse<FranchiseProfile>> {
     return apiClient<FranchiseProfile>('/franchise/profile');
@@ -115,6 +133,22 @@ export const franchiseProfileService = {
   deleteLogo(): Promise<ApiResponse<null>> {
     return apiClient<null>('/franchise/profile/media/logo', {
       method: 'DELETE',
+    });
+  },
+
+  // Payout bank account — self-service add/update (PATCH upserts). The masked
+  // status drives the Bank Account card. Editable by the franchise regardless
+  // of the profile approval lock (payout details are operationally theirs).
+  getBankStatus(): Promise<ApiResponse<FranchiseBankStatus>> {
+    return apiClient<FranchiseBankStatus>('/franchise/bank-details/status');
+  },
+
+  updateBankDetails(
+    data: UpdateBankDetailsPayload,
+  ): Promise<ApiResponse<FranchiseBankStatus['details']>> {
+    return apiClient<FranchiseBankStatus['details']>('/franchise/bank-details', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
     });
   },
 };

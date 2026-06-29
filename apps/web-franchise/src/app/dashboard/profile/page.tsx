@@ -352,6 +352,99 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
       .catch(() => {});
   }, []);
 
+  // Bank account add/edit (self-service). The PATCH upserts; the franchise can
+  // manage their payout account here even when the profile is approval-locked
+  // (payout details are operationally theirs and are needed to receive
+  // settlements). Previously the card was display-only and pointed users to
+  // "onboarding", leaving no way to add bank post-onboarding.
+  const EMPTY_BANK_FORM = {
+    accountHolderName: '',
+    accountNumber: '',
+    ifscCode: '',
+    bankName: '',
+    upiVpa: '',
+  };
+  const [bankEditing, setBankEditing] = useState(false);
+  const [bankSaving, setBankSaving] = useState(false);
+  const [bankError, setBankError] = useState('');
+  const [bankForm, setBankForm] = useState(EMPTY_BANK_FORM);
+
+  const refreshBankInfo = () => {
+    apiClient('/franchise/bank-details/status')
+      .then((res) => setBankInfo((res.data as typeof bankInfo) ?? null))
+      .catch(() => {});
+  };
+
+  const startBankEdit = () => {
+    // Prefill non-secret fields when updating; the account number must be
+    // re-entered (we only ever hold the last 4 digits).
+    setBankForm(
+      bankInfo?.details
+        ? {
+            accountHolderName: bankInfo.details.accountHolderName || '',
+            accountNumber: '',
+            ifscCode: bankInfo.details.ifscCode || '',
+            bankName: bankInfo.details.bankName || '',
+            upiVpa: '',
+          }
+        : EMPTY_BANK_FORM,
+    );
+    setBankError('');
+    setBankEditing(true);
+  };
+
+  const handleSaveBank = async () => {
+    setBankError('');
+    const accountHolderName = bankForm.accountHolderName.trim();
+    const accountNumber = bankForm.accountNumber.replace(/\s+/g, '');
+    const ifscCode = bankForm.ifscCode.trim().toUpperCase();
+    const bankName = bankForm.bankName.trim();
+    const upiVpa = bankForm.upiVpa.trim();
+    if (!accountHolderName) {
+      setBankError('Account holder name is required.');
+      return;
+    }
+    if (!/^[0-9]{9,18}$/.test(accountNumber)) {
+      setBankError('Account number must be 9–18 digits.');
+      return;
+    }
+    if (!/^[A-Z]{4}0[A-Z0-9]{6}$/.test(ifscCode)) {
+      setBankError('IFSC must be 4 letters + 0 + 6 alphanumerics (e.g. HDFC0001234).');
+      return;
+    }
+    if (!bankName) {
+      setBankError('Bank name is required.');
+      return;
+    }
+    if (upiVpa && !/^[\w.\-]+@[A-Za-z]+$/.test(upiVpa)) {
+      setBankError('Enter a valid UPI ID (e.g. name@bank) or leave it blank.');
+      return;
+    }
+    setBankSaving(true);
+    try {
+      await franchiseProfileService.updateBankDetails({
+        accountHolderName,
+        accountNumber,
+        ifscCode,
+        bankName,
+        ...(upiVpa ? { upiVpa } : {}),
+      });
+      refreshBankInfo();
+      setBankEditing(false);
+      setBankForm(EMPTY_BANK_FORM);
+      setError('');
+      setSuccessMessage('Bank account saved.');
+    } catch (err) {
+      setBankError(
+        err instanceof ApiError
+          ? err.body?.message || err.message || 'Failed to save bank details.'
+          : 'Failed to save bank details.',
+      );
+    } finally {
+      setBankSaving(false);
+    }
+  };
+
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   // ── Regex / validators ────────────────────────────────────────────────
@@ -893,31 +986,161 @@ const [profile, setProfile] = useState<FranchiseProfile | null>(null);
           </div>
         </div>
 
-        {/* Bank Account */}
+        {/* Bank Account — self-service add/update of the payout account. */}
         <div className="card">
           <h2>Bank Account</h2>
-          {bankInfo?.hasBankDetails && bankInfo.details ? (
-            <div className="grid-2">
-              <div className="field">
-                <label>Bank Name</label>
-                <div className="value">{bankInfo.details.bankName || 'Not set'}</div>
-              </div>
-              <div className="field">
-                <label>Account Holder</label>
-                <div className="value">{bankInfo.details.accountHolderName}</div>
-              </div>
-              <div className="field">
-                <label>Account Number</label>
-                <div className="value">{`••••••${bankInfo.details.accountNumberLast4}`}</div>
-              </div>
-              <div className="field">
-                <label>IFSC Code</label>
-                <div className="value">{bankInfo.details.ifscCode}</div>
-              </div>
-            </div>
+          {!bankEditing ? (
+            <>
+              {bankInfo?.hasBankDetails && bankInfo.details ? (
+                <div className="grid-2">
+                  <div className="field">
+                    <label>Bank Name</label>
+                    <div className="value">{bankInfo.details.bankName || 'Not set'}</div>
+                  </div>
+                  <div className="field">
+                    <label>Account Holder</label>
+                    <div className="value">{bankInfo.details.accountHolderName}</div>
+                  </div>
+                  <div className="field">
+                    <label>Account Number</label>
+                    <div className="value">{`••••••${bankInfo.details.accountNumberLast4}`}</div>
+                  </div>
+                  <div className="field">
+                    <label>IFSC Code</label>
+                    <div className="value">{bankInfo.details.ifscCode}</div>
+                  </div>
+                </div>
+              ) : (
+                <div className="value muted">
+                  No bank account on file yet. Add your payout account to receive
+                  your settlements.
+                </div>
+              )}
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={startBankEdit}
+                style={{ marginTop: 12 }}
+              >
+                {bankInfo?.hasBankDetails ? 'Update bank account' : 'Add bank account'}
+              </button>
+            </>
           ) : (
-            <div className="value muted">
-              No bank account on file yet. Add your payout account during onboarding.
+            <div
+              onKeyDownCapture={(e) => {
+                // The card lives inside the main profile <form>; stop Enter from
+                // submitting that form while editing bank fields.
+                if (e.key === 'Enter') e.preventDefault();
+              }}
+            >
+              {bankError && (
+                <div className="alert alert-error" role="alert" style={{ marginBottom: 12 }}>
+                  {bankError}
+                </div>
+              )}
+              <div className="grid-2">
+                <div className="field">
+                  <label htmlFor="bankAccountHolder">Account Holder Name</label>
+                  <input
+                    id="bankAccountHolder"
+                    type="text"
+                    value={bankForm.accountHolderName}
+                    onChange={(e) =>
+                      setBankForm((f) => ({ ...f, accountHolderName: e.target.value }))
+                    }
+                    disabled={bankSaving}
+                    maxLength={150}
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="bankName">Bank Name</label>
+                  <input
+                    id="bankName"
+                    type="text"
+                    value={bankForm.bankName}
+                    onChange={(e) =>
+                      setBankForm((f) => ({ ...f, bankName: e.target.value }))
+                    }
+                    disabled={bankSaving}
+                    maxLength={150}
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="bankAccountNumber">Account Number</label>
+                  <input
+                    id="bankAccountNumber"
+                    type="text"
+                    inputMode="numeric"
+                    value={bankForm.accountNumber}
+                    onChange={(e) =>
+                      setBankForm((f) => ({
+                        ...f,
+                        accountNumber: e.target.value.replace(/[^0-9]/g, ''),
+                      }))
+                    }
+                    disabled={bankSaving}
+                    maxLength={18}
+                    placeholder="9–18 digits"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="bankIfsc">IFSC Code</label>
+                  <input
+                    id="bankIfsc"
+                    type="text"
+                    value={bankForm.ifscCode}
+                    onChange={(e) =>
+                      setBankForm((f) => ({
+                        ...f,
+                        ifscCode: e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''),
+                      }))
+                    }
+                    disabled={bankSaving}
+                    maxLength={11}
+                    placeholder="e.g. HDFC0001234"
+                    autoComplete="off"
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor="bankUpi">UPI ID (optional)</label>
+                  <input
+                    id="bankUpi"
+                    type="text"
+                    value={bankForm.upiVpa}
+                    onChange={(e) =>
+                      setBankForm((f) => ({ ...f, upiVpa: e.target.value }))
+                    }
+                    disabled={bankSaving}
+                    maxLength={100}
+                    placeholder="name@bank"
+                    autoComplete="off"
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={handleSaveBank}
+                  disabled={bankSaving}
+                >
+                  {bankSaving ? 'Saving…' : 'Save bank account'}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setBankEditing(false);
+                    setBankError('');
+                  }}
+                  disabled={bankSaving}
+                >
+                  Cancel
+                </button>
+              </div>
             </div>
           )}
         </div>
