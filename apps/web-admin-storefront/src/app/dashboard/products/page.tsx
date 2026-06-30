@@ -10,6 +10,7 @@ import {
 } from '@/services/admin-products.service';
 import { ApiError, apiClient } from '@/lib/api-client';
 import { useModal } from '@sportsmart/ui';
+import { usePermissions } from '@/lib/permissions';
 
 /**
  * Phase 32 (2026-05-21) — bulk response now has three buckets:
@@ -128,6 +129,7 @@ const formatPrice = (price: string | null) => {
 
 export default function ProductsPage() {
   const { confirmDialog } = useModal();
+  const { isSuperAdmin } = usePermissions();
   const router = useRouter();
   const [products, setProducts] = useState<ProductListItem[]>([]);
   const [pagination, setPagination] = useState<Pagination>({
@@ -278,6 +280,26 @@ export default function ProductsPage() {
 
   const handlePageChange = (page: number) => {
     fetchProducts({ page });
+  };
+
+  // SUPER_ADMIN-only — removes the product (soft-delete with its variants)
+  // from the catalog. The trash button that calls this is gated on isSuperAdmin,
+  // and the backend DELETE /admin/products/:id requires catalog.write.
+  const handleDelete = async (target: ProductListItem) => {
+    const ok = await confirmDialog(
+      `Delete "${target.title}"? This removes the product and all its variants from the catalog.`,
+    );
+    if (!ok) return;
+    try {
+      await adminProductsService.deleteProduct(target.id);
+      await fetchProducts({ page: pagination.page });
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.body.message || 'Failed to delete product.'
+          : 'Failed to delete product.',
+      );
+    }
   };
 
   const clearFilters = () => {
@@ -618,6 +640,7 @@ export default function ProductsPage() {
                 onToggleExpand={() => toggleExpanded(p.id)}
                 inventoryData={inventoryCache[p.id]}
                 showCheckboxColumn={selectableIds.length > 0}
+                onDelete={isSuperAdmin ? () => handleDelete(p) : undefined}
               />
             ))}
           </div>
@@ -763,6 +786,7 @@ function ProductCard({
   onToggleExpand,
   inventoryData,
   showCheckboxColumn,
+  onDelete,
 }: {
   product: ProductListItem;
   selected: boolean;
@@ -772,6 +796,8 @@ function ProductCard({
   onToggleExpand: () => void;
   inventoryData: InventoryPanelData | undefined;
   showCheckboxColumn: boolean;
+  /** SUPER_ADMIN only — when present, renders a delete (trash) button. */
+  onDelete?: () => void;
 }) {
   const [hover, setHover] = useState(false);
   const pill = statusPill(p.status);
@@ -912,6 +938,57 @@ function ProductCard({
         <div style={{ flexShrink: 0 }}>
           <Pill label={pill.label} tone={pill.tone} />
         </div>
+
+        {/* Delete — SUPER_ADMIN only (rendered only when onDelete is passed).
+            Stops propagation so it doesn't open the edit page. */}
+        {onDelete && (
+          <button
+            type="button"
+            aria-label={`Delete ${p.title}`}
+            title="Delete product"
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete();
+            }}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 28,
+              height: 28,
+              padding: 0,
+              background: 'transparent',
+              border: 'none',
+              borderRadius: 6,
+              cursor: 'pointer',
+              color: '#94a3b8',
+              transition: 'color 0.12s, background-color 0.12s',
+              flexShrink: 0,
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = '#dc2626';
+              e.currentTarget.style.background = '#fef2f2';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = '#94a3b8';
+              e.currentTarget.style.background = 'transparent';
+            }}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              aria-hidden="true"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M10 11v6M14 11v6" />
+            </svg>
+          </button>
+        )}
 
         {/* Expand chevron — opens the inventory panel inside
             this card. Rotates 90° when open. */}
