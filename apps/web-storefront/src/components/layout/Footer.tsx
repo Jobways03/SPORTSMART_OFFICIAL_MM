@@ -70,6 +70,18 @@ const LEGAL_LINKS = [
   { label: 'Cookies', href: '/legal/cookies' },
 ];
 
+// Policy pages are CMS-managed and rendered by the /pages/[slug] route
+// (StaticPage CMS — see static-pages.service). Each href maps to a page the
+// admin publishes with the matching kebab-case slug.
+const POLICY_LINKS = [
+  { label: 'Terms and Conditions', href: '/pages/terms-and-conditions' },
+  { label: 'Privacy Policy',       href: '/pages/privacy-policy' },
+  { label: 'Product Policy',       href: '/pages/product-policy' },
+  { label: 'Refund Policy',        href: '/pages/refund-policy' },
+  { label: 'Shipping Policy',      href: '/pages/shipping-policy' },
+  { label: 'Contact-us Policy',    href: '/pages/contact-us-policy' },
+];
+
 const PAYMENT_METHODS = ['Visa', 'Mastercard', 'Rupay', 'UPI', 'Net Banking', 'COD'];
 
 // Headline brands for the "Top brands on Sportsmart" pipe strip — keep ~10
@@ -184,7 +196,7 @@ export function Footer() {
       <div className="container-wide py-14">
         <div className="grid grid-cols-2 md:grid-cols-12 gap-8 lg:gap-12">
           {/* Brand block */}
-          <div className="col-span-2 md:col-span-4 lg:col-span-5">
+          <div className="col-span-2 md:col-span-12 lg:col-span-4">
             <Link href="/" aria-label="Sportsmart home" className="inline-block w-fit">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -204,9 +216,10 @@ export function Footer() {
             </div>
           </div>
 
-          <FooterColumn heading="Shop"  links={SHOP_LINKS}  className="md:col-span-3 lg:col-span-2" />
-          <FooterColumn heading="Help"  links={HELP_LINKS}  className="md:col-span-3 lg:col-span-2" />
-          <FooterColumn heading="About" links={ABOUT_LINKS} className="md:col-span-2 lg:col-span-3" />
+          <FooterColumn heading="Shop"     links={SHOP_LINKS}   className="md:col-span-3 lg:col-span-2" />
+          <FooterColumn heading="Help"     links={HELP_LINKS}   className="md:col-span-3 lg:col-span-2" />
+          <FooterColumn heading="About"    links={ABOUT_LINKS}  className="md:col-span-3 lg:col-span-2" />
+          <FooterColumn heading="Policies" links={POLICY_LINKS} className="md:col-span-3 lg:col-span-2" />
         </div>
       </div>
 

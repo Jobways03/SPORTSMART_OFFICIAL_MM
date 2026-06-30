@@ -7,8 +7,8 @@ const CLASSIC_URL = 'https://classic.sportsmart.com';
 // The scrolling notice. Repeated inside the marquee track so the
 // `translateX(-50%)` keyframe loops seamlessly (same pattern as SportStrip).
 const Message = () => (
-  <span className="inline-flex items-center gap-2 px-10 text-body-lg sm:text-h3 font-medium">
-    <Sparkles className="size-5 shrink-0 text-accent-dark" strokeWidth={1.75} />
+  <span className="inline-flex items-center gap-2 px-9 text-body sm:text-[1.0625rem] font-medium">
+    <Sparkles className="size-[1.15rem] shrink-0 text-accent-dark" strokeWidth={1.75} />
     <span>
       <span className="font-semibold">Sportsmart.com is upgrading to our new web app.</span>{' '}
       To access the previous version, please visit{' '}
@@ -25,7 +25,7 @@ const Message = () => (
 export function UpgradeBanner() {
   return (
     <div className="bg-gold border-y border-gold-dark/40 text-ink-900">
-      <div className="group w-full px-4 sm:px-6 lg:px-10 py-3.5 flex items-center gap-4">
+      <div className="group w-full px-4 sm:px-6 lg:px-10 py-3 flex items-center gap-3">
         {/* Scrolling message — pauses on hover so it can be read in full. */}
         <div className="relative flex-1 overflow-hidden">
           <div className="flex w-max animate-marquee whitespace-nowrap group-hover:[animation-play-state:paused]">
@@ -38,7 +38,7 @@ export function UpgradeBanner() {
 
         <a
           href={CLASSIC_URL}
-          className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-ink-900 px-5 text-body-lg font-semibold text-white transition hover:bg-ink-800 active:bg-ink-700"
+          className="inline-flex h-10 shrink-0 items-center gap-1.5 rounded-full bg-ink-900 px-4 text-body font-semibold text-white transition hover:bg-ink-800 active:bg-ink-700"
         >
           Go to classic site
           <ArrowRight className="size-4" strokeWidth={1.75} />

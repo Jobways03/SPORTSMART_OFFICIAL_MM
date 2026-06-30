@@ -196,6 +196,14 @@ export default function CreateProductPage() {
 
   // UI state
   const [saving, setSaving] = useState(false);
+  // Keeps the action buttons disabled during the post-save redirect so a
+  // second click in the redirect window can't create another product.
+  const [redirecting, setRedirecting] = useState(false);
+  // The id of the draft this form already created. Once set, subsequent saves
+  // PATCH the SAME draft instead of POSTing a new one — so a failed
+  // submit-for-review (e.g. a metafield validation error) + retry can't spawn
+  // duplicate draft products.
+  const [createdProductId, setCreatedProductId] = useState<string | null>(null);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -370,14 +378,34 @@ export default function CreateProductPage() {
       // so the backend stamps provenance + marks the generation ACCEPTED.
       // Allowlisted on SellerCreateProductDto; backend CAS-guards double-accept.
       if (aiGenerationLogId) payload.aiGenerationLogId = aiGenerationLogId;
-      const res = await sellerProductService.createProduct(token, payload);
+
+      // Create on the first save; reuse (PATCH) the same draft on every later
+      // save. Without this, a submit-for-review failure (e.g. the "Weight (oz):
+      // must be an integer" metafield error) left the just-created draft behind
+      // and the retry POSTed a brand-new one — producing duplicate drafts for a
+      // single product. The PATCH path re-sends the corrected metafields, which
+      // the backend update endpoint persists, so the resubmit can succeed.
+      let productId = createdProductId;
+      if (productId) {
+        await sellerProductService.updateProduct(token, productId, payload);
+      } else {
+        const res = await sellerProductService.createProduct(token, payload);
+        productId = res.data?.id ?? null;
+        if (productId) setCreatedProductId(productId);
+      }
       // Consumed — clear so a later save (or resubmit) doesn't re-send it.
       setAiGenerationLogId(null);
 
-      if (submitForReview && res.data?.id) {
+      if (!productId) {
+        showToast('error', 'Failed to create product.');
+        return;
+      }
+
+      if (submitForReview) {
         try {
-          await sellerProductService.submitForReview(token, res.data.id);
+          await sellerProductService.submitForReview(token, productId);
           showToast('success', 'Product submitted for review. Your SKU mapping will go live after admin approval.');
+          setRedirecting(true);
           setTimeout(() => router.push('/dashboard/products'), 800);
         } catch (submitErr) {
           // The product WAS created as a draft, but submit-for-review failed
@@ -386,10 +414,12 @@ export default function CreateProductPage() {
           // the draft's edit page where they can fix it and resubmit.
           const reason = submitErr instanceof ApiError ? submitErr.message : 'Submit for review failed.';
           showToast('error', `Saved as draft, but not submitted: ${reason}`);
-          setTimeout(() => router.push(`/dashboard/products/${res.data!.id}/edit`), 1500);
+          setRedirecting(true);
+          setTimeout(() => router.push(`/dashboard/products/${productId}/edit`), 1500);
         }
       } else {
         showToast('success', 'Product saved as draft.');
+        setRedirecting(true);
         setTimeout(() => router.push('/dashboard/products'), 800);
       }
     } catch (err) {
@@ -896,7 +926,7 @@ export default function CreateProductPage() {
           type="button"
           className="form-btn"
           onClick={() => handleSave(false)}
-          disabled={saving}
+          disabled={saving || redirecting}
         >
           {saving ? 'Saving...' : 'Save as Draft'}
         </button>
@@ -904,7 +934,7 @@ export default function CreateProductPage() {
           type="button"
           className="form-btn primary"
           onClick={() => handleSave(true)}
-          disabled={saving}
+          disabled={saving || redirecting}
         >
           {saving ? 'Saving...' : 'Save & Submit for Review'}
         </button>
