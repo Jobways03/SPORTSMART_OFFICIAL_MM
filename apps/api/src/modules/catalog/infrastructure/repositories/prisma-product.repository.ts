@@ -70,18 +70,36 @@ export class PrismaProductRepository implements IProductRepository {
     if (moderationStatus) where.moderationStatus = moderationStatus;
     if (categoryId) where.categoryId = categoryId;
     if (sellerId) where.sellerId = sellerId;
-    // Seller-type scope (2026-06-24): strict channel isolation. A D2C/RETAIL-
-    // scoped admin sees ONLY products OWNED by a seller of their own channel. A
-    // product owned by another channel's seller — even one a D2C seller merely
-    // offers (maps) — no longer appears in this catalog list. Cross-channel
-    // OFFERS are still surfaced for review/approval by the dedicated
-    // "Pending Seller Approvals" view (/admin/seller-mappings/pending), which
-    // scopes by seller type on its own — so dropping the offer branch here hides
-    // no approval work; it just keeps each channel's product catalog its own.
+    // Seller-type scope (2026-06-24, amended 2026-06-30): channel isolation. A
+    // D2C/RETAIL-scoped admin sees products OWNED by a seller of their own
+    // channel. A product owned by ANOTHER channel's seller — even one a
+    // same-channel seller merely offers (maps) — does NOT appear here; those
+    // cross-channel offers live in "Pending Seller Approvals".
+    //
+    // Exception (2026-06-30 fix): a CENTRAL-catalog product (super-admin-owned,
+    // sellerId=null) that a seller of THIS channel has mapped/offered DOES
+    // appear. Without it, an APPROVED in-channel offer of a master-catalog
+    // product has no surface at all: it isn't owned (so the owner scope drops
+    // it) and it has already left "Pending Seller Approvals" (only PENDING
+    // offers show there). Gated on `hasSellers` (the admin catalog list always
+    // sends it); the non-hasSellers path keeps the strict owner-only scope.
     if (allowedSellerTypes && allowedSellerTypes.length > 0) {
+      const ownedInScope = { seller: { sellerType: { in: allowedSellerTypes } } };
       where.AND = [
         ...(where.AND || []),
-        { seller: { sellerType: { in: allowedSellerTypes } } },
+        hasSellers
+          ? {
+              OR: [
+                ownedInScope,
+                {
+                  sellerId: null,
+                  sellerMappings: {
+                    some: { seller: { sellerType: { in: allowedSellerTypes } } },
+                  },
+                },
+              ],
+            }
+          : ownedInScope,
       ];
     }
     if (hasSellers) {
