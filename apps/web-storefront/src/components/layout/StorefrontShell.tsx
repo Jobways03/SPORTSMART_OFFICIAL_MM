@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { AnnouncementBar } from './AnnouncementBar';
 import { Navbar } from './Navbar';
+import { UpgradeBanner } from './UpgradeBanner';
 import { Footer } from './Footer';
 
 /**
@@ -18,6 +19,7 @@ export function StorefrontShell({
     <div className="flex min-h-screen flex-col">
       <AnnouncementBar />
       <Navbar />
+      <UpgradeBanner />
       <main className="flex-1">{children}</main>
       {withFooter && <Footer />}
     </div>

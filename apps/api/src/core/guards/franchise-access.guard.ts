@@ -50,7 +50,7 @@ export class FranchiseAccessGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const authHeader = request.headers.authorization;
     const bearer =
-      authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : undefined;
+      authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7) || undefined : undefined;
     const token = bearer ?? readAccessCookie(request, 'franchise');
     if (!token) throw new UnauthorizedAppException('Authentication required');
 

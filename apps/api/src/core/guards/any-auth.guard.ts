@@ -41,7 +41,7 @@ export class AnyAuthGuard implements CanActivate {
     const authHeader = request.headers.authorization;
     const bearer =
       authHeader && authHeader.startsWith('Bearer ')
-        ? authHeader.slice(7)
+        ? authHeader.slice(7) || undefined
         : undefined;
 
     type AttemptKey = { type: ActorType; secret: string; token: string };
