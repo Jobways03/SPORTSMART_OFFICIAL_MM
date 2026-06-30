@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { FranchiseListItem, adminFranchisesService } from '@/services/admin-franchises.service';
 import { ApiError } from '@/lib/api-client';
+import { siblingPortalUrl } from '@/lib/portal-url';
 import '../../sellers/components/modal.css';
 
 interface Props {
@@ -21,7 +22,13 @@ export default function ImpersonateModal({ franchise, onClose, onSuccess }: Prop
     try {
       const res = await adminFranchisesService.impersonateFranchise(franchise.id);
       if (res.data) {
-        const franchisePortalUrl = process.env.NEXT_PUBLIC_FRANCHISE_URL || 'http://localhost:3005';
+        // Derived from this admin's own host at runtime (franchise-admin.<domain>
+        // -> franchise.<domain>) so it's correct in prod/staging; the env/localhost
+        // value is only used in local dev.
+        const franchisePortalUrl = siblingPortalUrl(
+          'franchise',
+          process.env.NEXT_PUBLIC_FRANCHISE_URL || 'http://localhost:3005',
+        );
         const franchiseData = btoa(JSON.stringify({
           franchiseId: franchise.id,
           franchiseCode: franchise.franchiseCode,

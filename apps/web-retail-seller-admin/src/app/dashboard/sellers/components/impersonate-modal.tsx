@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { SellerListItem, adminSellersService } from '@/services/admin-sellers.service';
 import { ApiError } from '@/lib/api-client';
+import { siblingPortalUrl } from '@/lib/portal-url';
 import './modal.css';
 
 interface Props {
@@ -21,7 +22,14 @@ export default function ImpersonateModal({ seller, onClose }: Props) {
       const res = await adminSellersService.impersonateSeller(seller.sellerId);
       if (res.data) {
         // Phase 38 — RETAIL admin impersonates into the retail seller portal (4009).
-        const sellerPortalUrl = process.env.NEXT_PUBLIC_SELLER_URL || 'http://localhost:4009';
+        // Retail admin impersonates into the RETAIL seller portal. Derived from
+        // this admin's own host at runtime (retail-admin.<domain> ->
+        // retail-seller.<domain>) so it's correct in prod/staging; the
+        // env/localhost value is only used in local dev.
+        const sellerPortalUrl = siblingPortalUrl(
+          'seller',
+          process.env.NEXT_PUBLIC_SELLER_URL || 'http://localhost:4009',
+        );
         const sellerData = btoa(JSON.stringify({
           sellerId: seller.sellerId,
           sellerName: seller.sellerName,
