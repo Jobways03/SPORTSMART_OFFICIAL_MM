@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import {
@@ -21,6 +21,11 @@ export default function FranchiseTicketDetailPage() {
   const [sending, setSending] = useState(false);
   const [closing, setClosing] = useState(false);
 
+  // While a reply/close POST is in flight, skip the background poll's setDetail
+  // so a late GET can't overwrite the post-mutation thread (mirrors the
+  // customer + admin support pages).
+  const sendingRef = useRef(false);
+
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
@@ -34,7 +39,51 @@ export default function FranchiseTicketDetailPage() {
     }
   }, [id]);
 
+  // Silent live-update: refetch without the spinner, swallowing transient
+  // errors. Skips while a reply/close POST is in flight.
+  const silentRefresh = useCallback(async () => {
+    if (sendingRef.current) return;
+    try {
+      const res = await franchiseSupportService.getTicket(id);
+      if (res.data) setDetail(res.data);
+    } catch {
+      // Keep the last good thread visible; the next tick retries.
+    }
+  }, [id]);
+
   useEffect(() => { refresh(); }, [refresh]);
+
+  // 5s background poll so support replies appear without a manual refresh.
+  // Pauses while the tab is hidden; catches up immediately on return.
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+    const start = () => {
+      if (timer) return;
+      timer = setInterval(() => {
+        if (document.visibilityState === 'visible') void silentRefresh();
+      }, 5000);
+    };
+    const stop = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
+    start();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        void silentRefresh();
+        start();
+      } else {
+        stop();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibility);
+      stop();
+    };
+  }, [silentRefresh]);
 
   const sendReply = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,6 +101,7 @@ export default function FranchiseTicketDetailPage() {
     }
     setError('');
     setSending(true);
+    sendingRef.current = true;
     try {
       const res = await franchiseSupportService.reply(id, reply.trim());
       if (res.data) { setDetail(res.data); setReply(''); }
@@ -59,12 +109,14 @@ export default function FranchiseTicketDetailPage() {
       setError(err instanceof Error ? err.message : 'Could not send reply');
     } finally {
       setSending(false);
+      sendingRef.current = false;
     }
   };
 
   const closeTicket = async () => {
     if (!detail || closing) return;
     setClosing(true);
+    sendingRef.current = true;
     try {
       const res = await franchiseSupportService.closeTicket(id);
       if (res.data) setDetail({ ...detail, ticket: res.data });
@@ -72,6 +124,7 @@ export default function FranchiseTicketDetailPage() {
       setError(err instanceof Error ? err.message : 'Could not close ticket');
     } finally {
       setClosing(false);
+      sendingRef.current = false;
     }
   };
 

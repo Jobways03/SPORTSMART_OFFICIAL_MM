@@ -217,7 +217,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           </nav>
         </aside>
 
-        <main style={{ flex: 1, marginLeft: 240, padding: 28, overflowX: 'auto', background: '#f6f6f7', minHeight: 'calc(100vh - 60px)' }}>
+        <main style={{ flex: 1, minWidth: 0, marginLeft: 240, padding: 28, overflowX: 'auto', background: '#f6f6f7', minHeight: 'calc(100vh - 60px)' }}>
           {children}
         </main>
       </div>

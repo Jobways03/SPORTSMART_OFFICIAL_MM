@@ -80,8 +80,13 @@ export default function DashboardPage() {
     let cancelled = false;
     (async () => {
       const [productsRes, ordersRes, earningsRes] = await Promise.all([
+        // "Products in your catalog" must match the My Products page, i.e. the
+        // seller's mapped catalog (/seller/catalog/my-products), NOT just the
+        // products they created themselves (/seller/products). A seller that
+        // maps central-catalog products would otherwise see an owned-only count
+        // that under-reports the catalog (e.g. showed 1 when 2 were listed).
         apiClient<{ pagination: { total: number } }>(
-          '/seller/products?limit=1',
+          '/seller/catalog/my-products?limit=1',
         ).catch(() => null),
         apiClient<{ pagination: { total: number } }>(
           '/seller/orders?limit=1',
