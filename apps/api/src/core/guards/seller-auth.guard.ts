@@ -34,7 +34,7 @@ export class SellerAuthGuard implements CanActivate {
     const authHeader = request.headers.authorization;
     const bearer =
       authHeader && authHeader.startsWith('Bearer ')
-        ? authHeader.slice(7)
+        ? authHeader.slice(7) || undefined
         : undefined;
     const token = bearer ?? readAccessCookie(request, 'seller');
 

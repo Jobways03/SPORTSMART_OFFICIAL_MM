@@ -101,10 +101,15 @@ class SellerTaxService {
     const res = await fetch(
       `${API_BASE}/api/v1/seller/tax/tcs/certificates/${encodeURIComponent(ledgerId)}.html`,
       {
+        // Only send a Bearer header when we actually have a token — an empty/
+        // null token would send "Bearer null" and 401. credentials:'include'
+        // lets the httpOnly auth cookie authenticate when sessionStorage is
+        // empty (e.g. a fresh tab), mirroring the apiClient pipeline.
         headers: {
-          Authorization: `Bearer ${token}`,
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
           'X-Seller-Type': SELLER_TYPE,
         },
+        credentials: 'include',
       },
     );
     if (!res.ok) {

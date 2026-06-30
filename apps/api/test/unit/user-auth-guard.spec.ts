@@ -201,6 +201,42 @@ describe('UserAuthGuard', () => {
     expect(request.sessionId).toBe('sess1');
   });
 
+  // 2026-06-30 — empty-Bearer must fall through to the httpOnly cookie.
+  // A frontend that stashes its token in tab-scoped sessionStorage sends
+  // `Authorization: Bearer ` (empty) from a fresh tab; the guard must read
+  // the cookie instead of 401-ing. Pre-fix, `'' ?? cookie` kept the empty
+  // string and shadowed a valid cookie → "Authentication required".
+  it('falls through to the httpOnly cookie when the Bearer token is empty', async () => {
+    const token = buildToken();
+    const request: any = {
+      headers: { authorization: 'Bearer ' },
+      cookies: { sm_access_customer: token },
+    };
+    const ctx = {
+      switchToHttp: () => ({ getRequest: () => request }),
+    } as any;
+    const guard = new UserAuthGuard(
+      fakeEnv,
+      buildPrisma({ session: validSession, user: activeUser }),
+    );
+    await expect(guard.canActivate(ctx)).resolves.toBe(true);
+    expect(request.userId).toBe('user1');
+  });
+
+  it('still rejects an empty Bearer when no cookie is present', async () => {
+    const request: any = {
+      headers: { authorization: 'Bearer ' },
+      cookies: {},
+    };
+    const ctx = {
+      switchToHttp: () => ({ getRequest: () => request }),
+    } as any;
+    const guard = new UserAuthGuard(fakeEnv, buildPrisma({}));
+    await expect(guard.canActivate(ctx)).rejects.toThrow(
+      'Authentication required',
+    );
+  });
+
   it('rejects a token without sessionId claim', async () => {
     // Hand-crafted token bypassing the helper (no sessionId field).
     const token = jwt.sign(
