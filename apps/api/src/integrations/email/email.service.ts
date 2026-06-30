@@ -22,6 +22,17 @@ export class EmailService {
   private transporter: nodemailer.Transporter | null = null;
   private readonly from: string;
 
+  // 2026-06-30 — Bounded retry on transient SMTP failure. The very first
+  // email after a quiet period (and the OTP email at registration, which
+  // races the welcome email on a cold, connection-capped shared-hosting
+  // SMTP pool) can fail the cold handshake or hit a 421 "too many
+  // connections". A single retry on a now-warm/uncontended connection
+  // mirrors the manual "Resend" that users already found works, and self-
+  // heals the first send across every persona (customer/seller/franchise).
+  // Permanent failures (auth, bad recipient, 5xx) are NOT retried.
+  private static readonly MAX_SEND_ATTEMPTS = 2;
+  private static readonly RETRY_BACKOFF_MS = 750;
+
   constructor(
     private readonly envService: EnvService,
     private readonly logger: AppLoggerService,
@@ -124,19 +135,80 @@ export class EmailService {
       return false;
     }
 
-    try {
-      const info = await this.transporter.sendMail({
-        from: this.from,
-        to,
-        subject,
-        html,
-        text,
-      });
-      this.logger.log(`Email sent to ${to}: ${info.messageId}`);
-      return true;
-    } catch (err: any) {
-      this.logger.error(`Failed to send email to ${to}: ${err.message}`);
-      return false;
+    const maxAttempts = EmailService.MAX_SEND_ATTEMPTS;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const info = await this.transporter.sendMail({
+          from: this.from,
+          to,
+          subject,
+          html,
+          text,
+        });
+        if (attempt > 1) {
+          this.logger.log(
+            `Email sent to ${to} on attempt ${attempt}/${maxAttempts}: ${info.messageId}`,
+          );
+        } else {
+          this.logger.log(`Email sent to ${to}: ${info.messageId}`);
+        }
+        return true;
+      } catch (err: any) {
+        const transient = this.isTransientSmtpError(err);
+        const willRetry = transient && attempt < maxAttempts;
+        // Keep the "Failed to send email to <to>" prefix so existing log
+        // alerts/greps still match; append attempt + classification.
+        this.logger.error(
+          `Failed to send email to ${to} (attempt ${attempt}/${maxAttempts}, ${
+            transient ? 'transient' : 'permanent'
+          }): ${err?.message}`,
+        );
+        if (!willRetry) {
+          return false;
+        }
+        await this.sleep(EmailService.RETRY_BACKOFF_MS);
+      }
     }
+    return false;
+  }
+
+  /**
+   * A transient SMTP failure is one a retry can plausibly clear: a cold
+   * connection / TLS / greeting timeout, a dropped socket, or a 4xx
+   * "try again later" response — notably 421, which shared-hosting SMTP
+   * returns when the welcome email + OTP email open two pooled
+   * connections at once during registration. Permanent failures (auth,
+   * bad recipient, 5xx) are not retried — a retry would just fail again.
+   */
+  private isTransientSmtpError(err: any): boolean {
+    const code = typeof err?.code === 'string' ? err.code : '';
+    const transientCodes = new Set([
+      'ETIMEDOUT',
+      'ESOCKET',
+      'ECONNECTION',
+      'ECONNRESET',
+      'EDNS',
+      'EGREETING',
+      'ETLS',
+      'EPROTOCOL',
+    ]);
+    if (transientCodes.has(code)) {
+      return true;
+    }
+    const responseCode = Number(err?.responseCode);
+    if (Number.isFinite(responseCode) && responseCode >= 400 && responseCode < 500) {
+      return true;
+    }
+    const msg = String(err?.message ?? '').toLowerCase();
+    return (
+      msg.includes('timeout') ||
+      msg.includes('greeting never received') ||
+      msg.includes('too many') ||
+      msg.includes('connection closed')
+    );
+  }
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }

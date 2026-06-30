@@ -15,12 +15,13 @@ import { EmailService } from './email.service';
  */
 
 const createTransportMock = jest.fn();
+const sendMailMock = jest.fn();
 jest.mock('nodemailer', () => ({
   createTransport: (opts: unknown) => {
     createTransportMock(opts);
     return {
       verify: jest.fn().mockResolvedValue(true),
-      sendMail: jest.fn().mockResolvedValue({ messageId: 'msg-1' }),
+      sendMail: (args: unknown) => sendMailMock(args),
     };
   },
 }));
@@ -127,5 +128,97 @@ describe('EmailService — SMTP timeouts (PR 1.6)', () => {
     expect(opts.connectionTimeout).toBeLessThanOrEqual(30_000);
     expect(opts.greetingTimeout).toBeLessThanOrEqual(30_000);
     expect(opts.socketTimeout).toBeLessThanOrEqual(60_000);
+  });
+});
+
+/**
+ * 2026-06-30 — Transient-failure retry on send().
+ *
+ * Regression cover for the production bug where the first verification
+ * OTP email was never delivered (only a manual "Resend" worked). At
+ * registration the welcome email + OTP email race on a cold,
+ * connection-capped shared-hosting SMTP pool; the first send threw a
+ * transient SMTP error (cold-handshake timeout / 421 too-many-
+ * connections) and EmailService silently returned false. send() now
+ * retries a transient failure once, mirroring the manual resend.
+ *
+ * These tests FAIL on the pre-fix code (single attempt, no retry).
+ */
+describe('EmailService — transient-failure retry on send()', () => {
+  const opts = {
+    to: 'partner@example.com',
+    subject: 'Your SPORTSMART Verification Code',
+    html: '<p>Your code is 123456</p>',
+  };
+
+  beforeEach(() => {
+    createTransportMock.mockClear();
+    sendMailMock.mockReset();
+    sendMailMock.mockResolvedValue({ messageId: 'msg-1' });
+  });
+
+  function buildService() {
+    const svc = new EmailService(buildEnv(), noopLogger);
+    // Skip the real backoff sleep so the suite stays fast.
+    jest.spyOn(svc as any, 'sleep').mockResolvedValue(undefined);
+    return svc;
+  }
+
+  it('sends on the first attempt when SMTP is healthy (no retry)', async () => {
+    const svc = buildService();
+    await expect(svc.send(opts)).resolves.toBe(true);
+    expect(sendMailMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a transient failure and succeeds on the next attempt', async () => {
+    const svc = buildService();
+    const transientErr = Object.assign(new Error('Greeting never received'), {
+      code: 'EGREETING',
+    });
+    sendMailMock
+      .mockRejectedValueOnce(transientErr)
+      .mockResolvedValueOnce({ messageId: 'msg-2' });
+
+    await expect(svc.send(opts)).resolves.toBe(true);
+    expect(sendMailMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a 421 "too many connections" (the registration race)', async () => {
+    const svc = buildService();
+    const err421 = Object.assign(new Error('421 Too many concurrent connections'), {
+      responseCode: 421,
+    });
+    sendMailMock
+      .mockRejectedValueOnce(err421)
+      .mockResolvedValueOnce({ messageId: 'msg-3' });
+
+    await expect(svc.send(opts)).resolves.toBe(true);
+    expect(sendMailMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does NOT retry a permanent failure (auth / 5xx) — fails fast', async () => {
+    const svc = buildService();
+    const sleepSpy = jest.spyOn(svc as any, 'sleep');
+    const permErr = Object.assign(new Error('Invalid login: 535 auth failed'), {
+      code: 'EAUTH',
+      responseCode: 535,
+    });
+    sendMailMock.mockRejectedValue(permErr);
+
+    await expect(svc.send(opts)).resolves.toBe(false);
+    expect(sendMailMock).toHaveBeenCalledTimes(1);
+    expect(sleepSpy).not.toHaveBeenCalled();
+  });
+
+  it('gives up and returns false after the bounded max attempts', async () => {
+    const svc = buildService();
+    const transientErr = Object.assign(new Error('Connection timeout'), {
+      code: 'ETIMEDOUT',
+    });
+    sendMailMock.mockRejectedValue(transientErr);
+
+    await expect(svc.send(opts)).resolves.toBe(false);
+    // MAX_SEND_ATTEMPTS = 2 → original + one retry, then give up.
+    expect(sendMailMock).toHaveBeenCalledTimes(2);
   });
 });
