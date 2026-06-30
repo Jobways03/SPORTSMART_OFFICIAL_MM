@@ -274,8 +274,17 @@
   margin-top: 60px;
   min-height: calc(100vh - 60px);
   flex: 1;
+  /* Allow this flex child to shrink below its content's intrinsic width so a
+     wide data table scrolls inside its card instead of sliding the page. */
+  min-width: 0;
   padding: 24px 20px;
   background: #f6f6f7;
+}
+
+/* Wide data tables scroll within their own card instead of overflowing the
+   page horizontally (covers every *-table-wrap wrapper in one rule). */
+.dashboard-content [class*="table-wrap"] {
+  overflow-x: auto;
 }
 
 /* ===== Mobile Overlay ===== */
