@@ -91,9 +91,9 @@ const POLICY_LINKS = [
 //   local dev   localhost:4005              -> localhost:4009 (per-portal dev port)
 // Each points at that portal's /register (the "become a seller" sign-up CTA).
 const SELLER_PORTALS = [
-  { label: 'Retailer Seller',  sub: 'retail-seller', devPort: 4009 },
-  { label: 'Franchise Seller', sub: 'franchise',     devPort: 4004 },
-  { label: 'D2C Seller',      sub: 'd2c-seller',    devPort: 4003 },
+  { label: 'Become a Retailer Seller',  sub: 'retail-seller', devPort: 4009 },
+  { label: 'Become a Franchise Seller', sub: 'franchise',     devPort: 4004 },
+  { label: 'Become a D2C Seller',      sub: 'd2c-seller',    devPort: 4003 },
 ];
 
 function sellerHref(sub: string, devPort: number, host: string | null): string {
@@ -263,7 +263,7 @@ export function Footer() {
             <FooterColumn heading="Shop"     links={SHOP_LINKS} />
             <FooterColumn heading="Help"     links={HELP_LINKS} />
             <FooterColumn heading="About"    links={ABOUT_LINKS} />
-            <FooterColumn heading="Become a Sellers"  links={sellerLinks} external />
+            <FooterColumn heading="Sellers"  links={sellerLinks} external />
             <FooterColumn heading="Policies" links={POLICY_LINKS} />
           </div>
         </div>
