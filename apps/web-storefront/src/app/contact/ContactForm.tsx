@@ -1,81 +1,86 @@
-'use client';
+"use client";
 
-import { useState, useCallback, FormEvent } from 'react';
-import { Send, ChevronDown, AlertCircle } from 'lucide-react';
-import { Button } from '@/components/ui/Button';
-import { CaptchaWidget } from '@/components/CaptchaWidget';
-import { validateEmail } from '@/lib/validators';
-import { ApiError } from '@/lib/api-client';
-import { contactService } from '@/services/contact.service';
+import { useState, useCallback, FormEvent } from "react";
+import { Send, ChevronDown, AlertCircle } from "lucide-react";
+import { Button } from "@/components/ui/Button";
+import { CaptchaWidget } from "@/components/CaptchaWidget";
+import { validateEmail } from "@/lib/validators";
+import { ApiError } from "@/lib/api-client";
+import { contactService } from "@/services/contact.service";
 
 const CONTACT_METHODS = [
-  { value: 'email', label: 'Email' },
-  { value: 'phone', label: 'Phone' },
-  { value: 'sms', label: 'SMS' },
+  { value: "email", label: "Email" },
+  { value: "phone", label: "Phone" },
+  { value: "sms", label: "SMS" },
 ] as const;
 
-type ContactMethod = (typeof CONTACT_METHODS)[number]['value'];
+type ContactMethod = (typeof CONTACT_METHODS)[number]["value"];
 
 const REASONS = [
-  'Order or delivery issue',
-  'Returns & refunds',
-  'Product question',
-  'Seller / partnership enquiry',
-  'Payment or billing',
-  'Affiliate programme',
-  'Something else',
+  "Order or delivery issue",
+  "Returns & refunds",
+  "Product question",
+  "Seller / partnership enquiry",
+  "Payment or billing",
+  "Affiliate programme",
+  "Something else",
 ];
 
 const labelClass =
-  'block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2';
+  "block text-caption uppercase tracking-wider font-semibold text-ink-700 mb-2";
 
 const inputClass = (hasError: boolean) =>
   `w-full h-12 px-4 border bg-white text-body-lg placeholder:text-ink-400 focus:outline-none transition-colors rounded-full ${
     hasError
-      ? 'border-danger focus:border-danger'
-      : 'border-ink-300 hover:border-ink-500 focus:border-ink-900'
+      ? "border-danger focus:border-danger"
+      : "border-ink-300 hover:border-ink-500 focus:border-ink-900"
   }`;
 
 export function ContactForm() {
-  const [firstName, setFirstName] = useState('');
-  const [lastName, setLastName] = useState('');
-  const [method, setMethod] = useState<ContactMethod>('email');
-  const [reason, setReason] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [message, setMessage] = useState('');
+  const [firstName, setFirstName] = useState("");
+  const [lastName, setLastName] = useState("");
+  const [method, setMethod] = useState<ContactMethod>("email");
+  const [reason, setReason] = useState("");
+  const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [message, setMessage] = useState("");
   const [errors, setErrors] = useState<Record<string, string>>({});
-  const [serverError, setServerError] = useState('');
-  const [captchaToken, setCaptchaToken] = useState('');
+  const [serverError, setServerError] = useState("");
+  const [captchaToken, setCaptchaToken] = useState("");
   const [captchaResetKey, setCaptchaResetKey] = useState(0);
-  const [status, setStatus] = useState<'idle' | 'submitting' | 'success'>('idle');
+  const [status, setStatus] = useState<"idle" | "submitting" | "success">(
+    "idle"
+  );
 
   // Phone/SMS need a number to call/text; Email does not.
-  const needsPhone = method === 'phone' || method === 'sms';
+  const needsPhone = method === "phone" || method === "sms";
 
-  const onCaptchaToken = useCallback((token: string) => setCaptchaToken(token), []);
+  const onCaptchaToken = useCallback(
+    (token: string) => setCaptchaToken(token),
+    []
+  );
 
   const onSubmit = async (e: FormEvent) => {
     e.preventDefault();
-    setServerError('');
+    setServerError("");
 
     const next: Record<string, string> = {};
-    if (!firstName.trim()) next.firstName = 'First name is required.';
-    if (!reason) next.reason = 'Please choose a reason.';
+    if (!firstName.trim()) next.firstName = "First name is required.";
+    if (!reason) next.reason = "Please choose a reason.";
     const emailErr = validateEmail(email);
     if (emailErr) next.email = emailErr;
     if (needsPhone) {
-      const digits = phone.replace(/\D/g, '');
-      if (!phone.trim()) next.phone = 'Phone number is required.';
+      const digits = phone.replace(/\D/g, "");
+      if (!phone.trim()) next.phone = "Phone number is required.";
       else if (digits.length < 7 || digits.length > 15)
-        next.phone = 'Please enter a valid phone number.';
+        next.phone = "Please enter a valid phone number.";
     }
-    if (!message.trim()) next.message = 'Please enter a message.';
+    if (!message.trim()) next.message = "Please enter a message.";
 
     setErrors(next);
     if (Object.keys(next).length > 0) return;
 
-    setStatus('submitting');
+    setStatus("submitting");
     try {
       await contactService.submit({
         firstName: firstName.trim(),
@@ -87,12 +92,12 @@ export function ContactForm() {
         message: message.trim(),
         captchaToken: captchaToken || undefined,
       });
-      setStatus('success');
+      setStatus("success");
     } catch (err) {
       // A failed submit burns the single-use CAPTCHA token — force a fresh one.
       setCaptchaResetKey((k) => k + 1);
-      setCaptchaToken('');
-      setStatus('idle');
+      setCaptchaToken("");
+      setStatus("idle");
 
       if (err instanceof ApiError) {
         if (err.status === 422 && err.body.errors) {
@@ -102,27 +107,38 @@ export function ContactForm() {
           }
           setErrors(fieldErrors);
         } else if (err.status === 429) {
-          setServerError('Too many attempts. Please wait a moment and try again.');
+          setServerError(
+            "Too many attempts. Please wait a moment and try again."
+          );
         } else {
-          setServerError(err.message || 'Something went wrong. Please try again.');
+          setServerError(
+            err.message || "Something went wrong. Please try again."
+          );
         }
       } else {
-        setServerError('Network error. Please check your connection and try again.');
+        setServerError(
+          "Network error. Please check your connection and try again."
+        );
       }
     }
   };
 
-  if (status === 'success') {
-    const methodLabel = CONTACT_METHODS.find((m) => m.value === method)?.label.toLowerCase();
+  if (status === "success") {
+    const methodLabel = CONTACT_METHODS.find(
+      (m) => m.value === method
+    )?.label.toLowerCase();
     return (
       <div
         role="status"
         className="flex items-start gap-3 p-4 border border-success/30 bg-green-50 text-success rounded-2xl"
       >
         <div>
-          <p className="text-body-lg font-semibold">Thanks, {firstName || 'there'}!</p>
+          <p className="text-body-lg font-semibold">
+            Thanks, {firstName || "there"}!
+          </p>
           <p className="mt-1 text-body text-ink-700">
-            Your message has been sent to our team. We will reach out via {methodLabel} soon.
+            Your message has been sent to our team. We will reach out via{" "}
+            {methodLabel} soon.
           </p>
         </div>
       </div>
@@ -176,7 +192,9 @@ export function ContactForm() {
       </div>
 
       <fieldset className="border-0 p-0 m-0">
-        <legend className={labelClass}>How do you want us to contact you?</legend>
+        <legend className={labelClass}>
+          How do you want us to contact you?
+        </legend>
         <div className="flex flex-wrap gap-2">
           {CONTACT_METHODS.map((m) => {
             const active = method === m.value;
@@ -185,8 +203,8 @@ export function ContactForm() {
                 key={m.value}
                 className={`inline-flex items-center gap-2 h-11 px-5 border rounded-full cursor-pointer text-body-lg transition-colors focus-within:ring-2 focus-within:ring-ink-900 focus-within:ring-offset-2 ${
                   active
-                    ? 'border-ink-900 bg-ink-900 text-white'
-                    : 'border-ink-300 text-ink-700 hover:border-ink-500'
+                    ? "border-ink-900 bg-ink-900 text-white"
+                    : "border-ink-300 text-ink-700 hover:border-ink-500"
                 }`}
               >
                 <input
@@ -197,7 +215,7 @@ export function ContactForm() {
                   onChange={() => {
                     setMethod(m.value);
                     // Clear any stale phone error when switching away/into Phone.
-                    setErrors((prev) => ({ ...prev, phone: '' }));
+                    setErrors((prev) => ({ ...prev, phone: "" }));
                   }}
                   className="sr-only"
                 />
@@ -240,8 +258,10 @@ export function ContactForm() {
             id="reason"
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            className={`${inputClass(!!errors.reason)} appearance-none pr-11 cursor-pointer ${
-              reason ? 'text-ink-900' : 'text-ink-400'
+            className={`${inputClass(
+              !!errors.reason
+            )} appearance-none pr-11 cursor-pointer ${
+              reason ? "text-ink-900" : "text-ink-400"
             }`}
           >
             <option value="" disabled>
@@ -298,8 +318,8 @@ export function ContactForm() {
           placeholder="Your message"
           className={`w-full px-4 py-3 border bg-white text-body-lg placeholder:text-ink-400 focus:outline-none transition-colors rounded-2xl resize-y min-h-[140px] ${
             errors.message
-              ? 'border-danger focus:border-danger'
-              : 'border-ink-300 hover:border-ink-500 focus:border-ink-900'
+              ? "border-danger focus:border-danger"
+              : "border-ink-300 hover:border-ink-500 focus:border-ink-900"
           }`}
         />
         {errors.message && (
@@ -317,7 +337,7 @@ export function ContactForm() {
         variant="primary"
         size="lg"
         fullWidth
-        loading={status === 'submitting'}
+        loading={status === "submitting"}
         trailingIcon={<Send className="size-4" />}
       >
         Send message
