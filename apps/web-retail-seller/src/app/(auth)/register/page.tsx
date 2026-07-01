@@ -1,8 +1,7 @@
-'use client';
-import { useCallback, useEffect, useState, FormEvent } from 'react';
+'use client'
+import { useCallback, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { resolveStorefrontUrl, STOREFRONT_LEGAL_PATHS } from '@sportsmart/shared-utils';
 import { sellerAuthService } from '@/services/auth.service';
 import { ApiError } from '@/lib/api-client';
 import {
@@ -52,13 +51,6 @@ export default function SellerRegisterPage() {
   const [serverError, setServerError] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitAttempted, setSubmitAttempted] = useState(false);
-
-  const [legalHost, setLegalHost] = useState<string | null>(null);
-  useEffect(() => {
-    setLegalHost(window.location.hostname);
-  }, []);
-  const termsUrl = resolveStorefrontUrl(STOREFRONT_LEGAL_PATHS.terms, legalHost);
-  const privacyUrl = resolveStorefrontUrl(STOREFRONT_LEGAL_PATHS.privacy, legalHost);
 
   const onCaptchaToken = useCallback((token: string) => {
     setCaptchaToken(token);
@@ -436,7 +428,7 @@ export default function SellerRegisterPage() {
                   />
                   <span>
                     I agree to the{' '}
-                    <Link href={termsUrl} target="_blank" rel="noopener noreferrer">
+                    <Link href="/legal/terms" target="_blank" rel="noopener noreferrer">
                       Terms of Service
                     </Link>
                     {' '}*
@@ -457,7 +449,7 @@ export default function SellerRegisterPage() {
                   />
                   <span>
                     I agree to the{' '}
-                    <Link href={privacyUrl} target="_blank" rel="noopener noreferrer">
+                    <Link href="/legal/privacy" target="_blank" rel="noopener noreferrer">
                       Privacy Policy
                     </Link>
                     {' '}*

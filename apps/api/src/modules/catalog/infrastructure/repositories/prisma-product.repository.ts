@@ -583,9 +583,10 @@ export class PrismaProductRepository implements IProductRepository {
         categoryId: true,
         brandId: true,
         basePrice: true,
+        hasVariants: true,
         taxConfigVerified: true,
         supplyTaxability: true,
-        _count: { select: { images: true } },
+        _count: { select: { images: true, variants: true } },
       },
     });
     if (!readiness) {
@@ -595,7 +596,17 @@ export class PrismaProductRepository implements IProductRepository {
     const missing: string[] = [];
     if (!readiness.categoryId) missing.push('categoryId');
     if (!readiness.brandId) missing.push('brandId');
-    if (readiness.basePrice == null) missing.push('basePrice');
+    // Price requirement depends on product type. A SIMPLE product needs a
+    // basePrice; a VARIANT product carries price per-variant (basePrice stays
+    // null by design — ProductVariant.price is required), so require at least
+    // one variant instead. Mirrors the seller-side submit-for-review guard;
+    // without this, variant products could never be published (basePrice is
+    // always null for them).
+    if (readiness.hasVariants) {
+      if (readiness._count.variants < 1) missing.push('at least one variant');
+    } else if (readiness.basePrice == null) {
+      missing.push('basePrice');
+    }
     if (readiness._count.images < 1) missing.push('at least one image');
     if (
       readiness.supplyTaxability === 'TAXABLE' &&

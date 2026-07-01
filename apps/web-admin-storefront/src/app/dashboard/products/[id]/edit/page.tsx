@@ -603,12 +603,15 @@ const router = useRouter();
   );
 
   const addTag = useCallback(() => {
-    const tag = tagInput.trim();
-    if (tag && !form.tags.includes(tag)) {
-      setForm(prev => ({ ...prev, tags: [...prev.tags, tag] }));
-    }
+    const parts = tagInput.split(',').map(t => t.trim()).filter(Boolean);
+    if (parts.length === 0) return;
+    setForm(prev => {
+      const merged = [...prev.tags];
+      for (const p of parts) if (!merged.includes(p)) merged.push(p);
+      return { ...prev, tags: merged };
+    });
     setTagInput('');
-  }, [tagInput, form.tags]);
+  }, [tagInput]);
 
   const removeTag = useCallback((tag: string) => {
     setForm(prev => ({ ...prev, tags: prev.tags.filter(t => t !== tag) }));
