@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useState, FormEvent } from 'react';
+import { useCallback, useEffect, useState, FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { resolveStorefrontUrl, STOREFRONT_LEGAL_PATHS } from '@sportsmart/shared-utils';
 import { apiFetch, ApiError } from '@/lib/api';
 import {
   filterPersonNameInput,
@@ -54,6 +55,12 @@ export default function RegisterPage() {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [legalHost, setLegalHost] = useState<string | null>(null);
+  useEffect(() => {
+    setLegalHost(window.location.hostname);
+  }, []);
+  const termsUrl = resolveStorefrontUrl(STOREFRONT_LEGAL_PATHS.terms, legalHost);
+  const privacyUrl = resolveStorefrontUrl(STOREFRONT_LEGAL_PATHS.privacy, legalHost);
 
   const update = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((p) => ({ ...p, [k]: e.target.value }));
@@ -367,7 +374,7 @@ export default function RegisterPage() {
             />
             <span>
               I agree to the{' '}
-              <Link href="/legal/terms" target="_blank" style={{ color: '#2563eb' }}>Terms of Service</Link>
+              <Link href={termsUrl} target="_blank" style={{ color: '#2563eb' }}>Terms of Service</Link>
               {' '}*
             </span>
           </label>
@@ -381,7 +388,7 @@ export default function RegisterPage() {
             />
             <span>
               I agree to the{' '}
-              <Link href="/legal/privacy" target="_blank" style={{ color: '#2563eb' }}>Privacy Policy</Link>
+              <Link href={privacyUrl} target="_blank" style={{ color: '#2563eb' }}>Privacy Policy</Link>
               {' '}*
             </span>
           </label>

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, FormEvent } from 'react';
+import { useState, useEffect, FormEvent } from 'react';
 import Link from 'next/link';
 import { Mail, ArrowRight, Truck, RotateCcw, ShieldCheck, MessageCircle } from 'lucide-react';
 import { validateEmail } from '@/lib/validators';
@@ -52,13 +52,12 @@ const HELP_LINKS = [
   { label: 'Returns & refunds',   href: '/returns' },
   { label: 'Shipping info',       href: '/help/shipping' },
   { label: 'Size guide',          href: '/help/size-guide' },
-  { label: 'Contact us',          href: '/help/contact' },
+  { label: 'Contact us',          href: '/contact' },
 ];
 
 const ABOUT_LINKS = [
   { label: 'Our story',         href: '/about' },
-  { label: 'Become a seller',   href: '/sellers' },
-  { label: 'Affiliate program', href: '/affiliate' },
+ // { label: 'Affiliate program', href: '/affiliate' },
   { label: 'Careers',           href: '/careers' },
   { label: 'Press & media',     href: '/press' },
 ];
@@ -82,6 +81,35 @@ const POLICY_LINKS = [
   { label: 'Contact-us Policy',    href: '/pages/contact-us-policy' },
 ];
 
+// Seller onboarding portals — each is a SEPARATE app on its own subdomain
+// (infra service hosts: retail-seller / franchise / d2c-seller). We derive each
+// portal's URL from the STOREFRONT's current host so the links resolve in every
+// environment without a build-time env var:
+//   prod apex   sportsmart.com              -> retail-seller.sportsmart.com
+//   prod shop   shop.sportsmart.com         -> retail-seller.sportsmart.com
+//   staging     shop.staging.sportsmart.com -> retail-seller.staging.sportsmart.com
+//   local dev   localhost:4005              -> localhost:4009 (per-portal dev port)
+// Each points at that portal's /register (the "become a seller" sign-up CTA).
+const SELLER_PORTALS = [
+  { label: 'Retailer Seller',  sub: 'retail-seller', devPort: 4009 },
+  { label: 'Franchise Seller', sub: 'franchise',     devPort: 4004 },
+  { label: 'D2C Seller',      sub: 'd2c-seller',    devPort: 4003 },
+];
+
+function sellerHref(sub: string, devPort: number, host: string | null): string {
+  // SSR / pre-hydration: no window yet — default to the production domain. That
+  // is already correct on a real production render; other envs self-correct once
+  // the host effect runs on mount.
+  if (!host) return `https://${sub}.sportsmart.com/register`;
+  if (host === 'localhost' || host === '127.0.0.1') {
+    return `http://localhost:${devPort}/register`;
+  }
+  // Strip the storefront's own alias subdomain (apex is bare; shop./www. are
+  // aliases) to get the shared base domain, then prefix the portal subdomain.
+  const base = host.replace(/^(shop|www)\./, '');
+  return `https://${sub}.${base}/register`;
+}
+
 const PAYMENT_METHODS = ['Visa', 'Mastercard', 'Rupay', 'UPI', 'Net Banking', 'COD'];
 
 // Headline brands for the "Top brands on Sportsmart" pipe strip — keep ~10
@@ -102,6 +130,19 @@ const TOP_BRANDS = [
 ];
 
 export function Footer() {
+  // Resolve the visitor's host on the client so the seller-portal links point at
+  // the right environment. Starts null → production default during SSR, then
+  // corrects on mount (see sellerHref).
+  const [host, setHost] = useState<string | null>(null);
+  useEffect(() => {
+    setHost(window.location.hostname);
+  }, []);
+
+  const sellerLinks = SELLER_PORTALS.map((p) => ({
+    label: p.label,
+    href: sellerHref(p.sub, p.devPort, host),
+  }));
+
   return (
     <footer className="bg-ink-900 text-white mt-16 border-t-4 border-sale">
       {/* Newsletter band — black with subtle red+gold radial wash */}
@@ -216,10 +257,15 @@ export function Footer() {
             </div>
           </div>
 
-          <FooterColumn heading="Shop"     links={SHOP_LINKS}   className="md:col-span-3 lg:col-span-2" />
-          <FooterColumn heading="Help"     links={HELP_LINKS}   className="md:col-span-3 lg:col-span-2" />
-          <FooterColumn heading="About"    links={ABOUT_LINKS}  className="md:col-span-3 lg:col-span-2" />
-          <FooterColumn heading="Policies" links={POLICY_LINKS} className="md:col-span-3 lg:col-span-2" />
+          {/* Link columns nested so the five sections share the remaining width
+              evenly on desktop instead of overflowing the 12-col grid. */}
+          <div className="col-span-2 md:col-span-12 lg:col-span-8 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-8 lg:gap-10">
+            <FooterColumn heading="Shop"     links={SHOP_LINKS} />
+            <FooterColumn heading="Help"     links={HELP_LINKS} />
+            <FooterColumn heading="About"    links={ABOUT_LINKS} />
+            <FooterColumn heading="Become a Sellers"  links={sellerLinks} external />
+            <FooterColumn heading="Policies" links={POLICY_LINKS} />
+          </div>
         </div>
       </div>
 
@@ -291,12 +337,15 @@ function SocialLink({
 function FooterColumn({
   heading,
   links,
+  external = false,
   className = '',
 }: {
   heading: string;
   links: { label: string; href: string }[];
+  external?: boolean;
   className?: string;
 }) {
+  const linkClass = 'text-body text-white/75 hover:text-white transition-colors';
   return (
     <div className={className}>
       <h4 className="text-caption uppercase tracking-[0.2em] font-semibold text-white mb-4">
@@ -304,13 +353,18 @@ function FooterColumn({
       </h4>
       <ul className="space-y-2.5">
         {links.map((l) => (
-          <li key={l.href}>
-            <Link
-              href={l.href}
-              className="text-body text-white/75 hover:text-white transition-colors"
-            >
-              {l.label}
-            </Link>
+          <li key={l.label}>
+            {external ? (
+              // Cross-app link to a seller portal on another subdomain — a plain
+              // anchor (not next/link) so it does a real navigation across origins.
+              <a href={l.href} className={linkClass}>
+                {l.label}
+              </a>
+            ) : (
+              <Link href={l.href} className={linkClass}>
+                {l.label}
+              </Link>
+            )}
           </li>
         ))}
       </ul>
