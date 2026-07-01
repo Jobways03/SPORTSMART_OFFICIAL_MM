@@ -231,6 +231,10 @@ export const envSchema = z.object({
   MAIL_USER: z.string().optional(),
   MAIL_PASS: z.string().optional(),
   MAIL_FROM: z.string().optional(),
+  // Inbox that customer "Contact us" form submissions are emailed to
+  // (modules/contact ContactService). Defaults to support@sportsmart.com when
+  // unset — read via getString('SUPPORT_EMAIL', 'support@sportsmart.com').
+  SUPPORT_EMAIL: z.string().optional(),
   // 'false' skips TLS hostname verification — needed for cPanel/shared-hosting
   // SMTP (e.g. GoDaddy) whose shared wildcard cert doesn't match mail.<domain>.
   // Connection stays encrypted. Default 'true' (strict) for Gmail/SES/etc.

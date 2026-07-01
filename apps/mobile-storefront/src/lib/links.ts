@@ -5,8 +5,8 @@
 
 export const LINKS = {
   website: 'https://sportsmart.com',
-  privacy: 'https://sportsmart.com/privacy',
-  terms: 'https://sportsmart.com/terms',
+  privacy: 'https://sportsmart.com/pages/privacy-policy',
+  terms: 'https://sportsmart.com/pages/terms-and-conditions',
   openSource: 'https://sportsmart.com/open-source',
   supportEmail: 'support@sportsmart.com',
   social: {

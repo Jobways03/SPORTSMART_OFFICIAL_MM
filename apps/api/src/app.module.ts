@@ -27,6 +27,7 @@ import { WalletModule } from './modules/wallet/module';
 import { LoyaltyModule } from './modules/loyalty/module';
 import { WishlistModule } from './modules/wishlist/wishlist.module';
 import { SupportModule } from './modules/support/module';
+import { ContactModule } from './modules/contact/module';
 import { OwnBrandModule } from './modules/own-brand/module';
 import { PaymentOpsModule } from './modules/payments-ops/module';
 import { DisputesModule } from './modules/disputes/module';
@@ -134,6 +135,7 @@ import { LogisticsPartnerModule } from './modules/logistics-partner/logistics-pa
     LoyaltyModule,
     WishlistModule,
     SupportModule,
+    ContactModule,
     OwnBrandModule,
     PaymentOpsModule,
     DisputesModule,

@@ -3,6 +3,10 @@ export {
   ApiError,
   registerStepUpHandler,
 } from './api-client';
+
+// Cross-app storefront URL resolver — portals link to the storefront's legal
+// pages (Terms/Privacy live only there). See storefront-url.ts.
+export { resolveStorefrontUrl, STOREFRONT_LEGAL_PATHS } from './storefront-url';
 export type {
   ApiResponse,
   ApiClientConfig,
