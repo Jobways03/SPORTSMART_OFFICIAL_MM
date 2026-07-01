@@ -75,6 +75,14 @@ api_extra_environment = {
   PERMISSIONS_GUARD_STRICT     = "true"
   RBAC_ORPHAN_SWEEP_ENABLED    = "true"
   DISCOUNT_ALLOCATION_ENABLED  = "true"
+
+  # Next Day Delivery (Delhivery transport_speed 'F') routing. Books 'F' only
+  # when pickup→drop ≤ NDD_MAX_DISTANCE_KM (50) AND before NDD_CUTOFF_HOUR
+  # (14 IST) AND Delhivery expected_tat(mot='N') confirms ≤1 day. The TAT gate
+  # (NDD_TAT_CHECK_ENABLED) stays ON by default → any failure/ambiguity
+  # fail-closes to 'D'. Needs post_offices seeded (RUN_SEED / seed-pincodes.ts)
+  # + seller pickupPincode populated, else it safely falls back to 'D'.
+  NDD_ENABLED = "true"
 }
 
 # Minimal always-on staging sizing (~$150/mo). Smallest viable instances —
