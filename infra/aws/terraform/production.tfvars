@@ -171,4 +171,15 @@ api_extra_environment = {
   EWAY_BILL_PROVIDER = "disabled"
   EINVOICE_PROVIDER  = "disabled"
   GSTN_PROVIDER      = "disabled"
+
+  # Next Day Delivery (Delhivery transport_speed 'F') routing. Books 'F' only
+  # when pickup→drop ≤ NDD_MAX_DISTANCE_KM (50) AND before NDD_CUTOFF_HOUR
+  # (14 IST) AND Delhivery expected_tat(mot='N') confirms ≤1 day. The TAT gate
+  # (NDD_TAT_CHECK_ENABLED) stays ON → any failure/ambiguity fail-closes to 'D'.
+  # ⚠️ Validate the expected_tat(mot='N') response shape on STAGING first; if it
+  # misbehaves, set NDD_TAT_CHECK_ENABLED = "false" to fall back to
+  # distance+cutoff. Needs post_offices seeded + real DELHIVERY_* creds (already
+  # required by the prod strict schema) + seller pickupPincode populated, else
+  # it safely falls back to 'D'.
+  NDD_ENABLED = "true"
 }
